@@ -46,8 +46,9 @@
       function field(labelText, input) {
         return UI.el("div", { class: "field" }, [UI.el("label", { text: labelText }), input]);
       }
-      function section(title, bodyNodes, actionNodes, region) {
-        const kids = [UI.el("h3", { text: title })].concat(bodyNodes);
+      function section(title, bodyNodes, actionNodes, region, icon) {
+        const head = icon ? UI.el("h3", {}, [UI.el("i", { class: "fa-solid " + icon }), " " + title]) : UI.el("h3", { text: title });
+        const kids = [head].concat(bodyNodes);
         const actions = Array.isArray(actionNodes) ? actionNodes : [actionNodes];
         kids.push(UI.el("div", { class: "row" }, actions));
         kids.push(region);
@@ -81,7 +82,7 @@
         field("翻译目标语言", translateLang),
         field("分离类型", sepType),
         field("TTS 文本", ttsText), field("TTS speaker", ttsSpeaker),
-      ], [voiceUploadBtn, transcribeBtn, translateBtn, summarizeBtn, lyricsBtn, separateBtn, ttsBtn], voiceRegion);
+      ], [voiceUploadBtn, transcribeBtn, translateBtn, summarizeBtn, lyricsBtn, separateBtn, ttsBtn], voiceRegion, "fa-microphone");
 
       const imgPrompt = UI.el("textarea", { placeholder: "提示词" });
       const imgModel = UI.el("input", { type: "text", value: "default", placeholder: "模型" });
@@ -94,7 +95,7 @@
       const imgRegion = UI.el("div");
       const imgCard = section("图像 Image", [
         field("提示词", imgPrompt), field("模型", imgModel), field("比例", imgRatio), field("分辨率", imgRes), field("负向提示", imgNeg), imgFile,
-      ], [imgGenBtn, imgRecBtn], imgRegion);
+      ], [imgGenBtn, imgRecBtn], imgRegion, "fa-image");
 
       const agentTopic = UI.el("input", { type: "text", placeholder: "主题" });
       const agentPlatform = UI.el("select", {}, [opt("xhs"), opt("bilibili"), opt("douyin"), opt("toutiao")]);
@@ -108,20 +109,20 @@
       const agentRegion = UI.el("div");
       const agentCard = section("智能体 Agent", [
         field("主题", agentTopic), field("平台", agentPlatform), field("时长", agentLength), field("风格", agentStyle), field("比例", agentRatio), field("模式", agentMode), field("参考文本", agentRef), field("配音", agentVoice),
-      ], agentBtn, agentRegion);
+      ], agentBtn, agentRegion, "fa-robot");
 
       const subFile = UI.fileInput({ label: "选择视频", accept: "video/*" });
       const subFormat = UI.el("select", {}, [opt("txt"), opt("srt")]);
       const subEngine = UI.el("select", {}, [opt("ocr"), opt("kimi")]);
       const subBtn = UI.el("button", { class: "btn", text: "提取字幕" });
       const subRegion = UI.el("div");
-      const subCard = section("字幕 Subtitle", [subFile, field("格式", subFormat), field("引擎", subEngine)], subBtn, subRegion);
+      const subCard = section("字幕 Subtitle", [subFile, field("格式", subFormat), field("引擎", subEngine)], subBtn, subRegion, "fa-closed-captioning");
 
       const tplKeyword = UI.el("input", { type: "text", placeholder: "关键词" });
       const tplPage = UI.el("input", { type: "number", value: "1" });
       const tplBtn = UI.el("button", { class: "btn", text: "搜索模板" });
       const tplRegion = UI.el("div");
-      const tplCard = section("模板 Template", [field("关键词", tplKeyword), field("页码", tplPage)], tplBtn, tplRegion);
+      const tplCard = section("模板 Template", [field("关键词", tplKeyword), field("页码", tplPage)], tplBtn, tplRegion, "fa-layer-group");
 
       UI.mount(panel, UI.el("div", {}, [
         UI.el("h2", { text: "工具 Tools" }),

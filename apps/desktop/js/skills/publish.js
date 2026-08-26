@@ -20,8 +20,9 @@
         return arr;
       }
       function field(labelText, input) { return UI.el("div", { class: "field" }, [UI.el("label", { text: labelText }), input]); }
-      function section(title, bodyNodes, actionNodes, region) {
-        const kids = [UI.el("h3", { text: title })].concat(bodyNodes);
+      function section(title, bodyNodes, actionNodes, region, icon) {
+        const head = icon ? UI.el("h3", {}, [UI.el("i", { class: "fa-solid " + icon }), " " + title]) : UI.el("h3", { text: title });
+        const kids = [head].concat(bodyNodes);
         const actions = Array.isArray(actionNodes) ? actionNodes : [actionNodes];
         kids.push(UI.el("div", { class: "row" }, actions));
         kids.push(region);
@@ -49,50 +50,50 @@
       const pubCard = section("发布 Submit", [
         field("标题", pubTitle), field("正文", pubContent), field("标签", pubTags), field("媒体URL", pubMedia), field("封面", pubCover), field("分类", pubCategory), field("存草稿", pubIsDraft),
         field("平台", platformRow),
-      ], pubBtn, pubRegion);
+      ], pubBtn, pubRegion, "fa-paper-plane");
 
       const upFile = UI.fileInput({ label: "选择媒体文件", accept: "*/*" });
       const upRegion = UI.el("div");
       const upBtn = UI.el("button", { class: "btn", text: "上传文件" });
-      const upCard = section("上传文件 Upload-file", [upFile], upBtn, upRegion);
+      const upCard = section("上传文件 Upload-file", [upFile], upBtn, upRegion, "fa-cloud-arrow-up");
 
       const compPlatform = UI.el("select", {}, [opt("douyin"), opt("xhs"), opt("bilibili"), opt("toutiao")]);
       const compContent = UI.el("textarea", { placeholder: "待检测内容" });
       const compRegion = UI.el("div");
       const compBtn = UI.el("button", { class: "btn", text: "合规检测" });
-      const compCard = section("合规检测 Check-compliance", [field("平台", compPlatform), field("内容", compContent)], compBtn, compRegion);
+      const compCard = section("合规检测 Check-compliance", [field("平台", compPlatform), field("内容", compContent)], compBtn, compRegion, "fa-shield-halved");
 
       const tagTitle = UI.el("input", { type: "text", placeholder: "标题" });
       const tagContent = UI.el("input", { type: "text", placeholder: "正文" });
       const tagPlatform = UI.el("select", {}, [opt("douyin"), opt("xhs"), opt("bilibili"), opt("toutiao")]);
       const tagRegion = UI.el("div");
       const tagBtn = UI.el("button", { class: "btn", text: "生成标签" });
-      const tagCard = section("生成标签 Generate-tags", [field("标题", tagTitle), field("正文", tagContent), field("平台", tagPlatform)], tagBtn, tagRegion);
+      const tagCard = section("生成标签 Generate-tags", [field("标题", tagTitle), field("正文", tagContent), field("平台", tagPlatform)], tagBtn, tagRegion, "fa-tags");
 
       const genTitle = UI.el("input", { type: "text", placeholder: "标题" });
       const genHint = UI.el("input", { type: "text", placeholder: "媒体提示" });
       const genPlatform = UI.el("select", {}, [opt("douyin"), opt("xhs"), opt("bilibili"), opt("toutiao")]);
       const genRegion = UI.el("div");
       const genBtn = UI.el("button", { class: "btn", text: "生成文案" });
-      const genCard = section("生成文案 Generate-content", [field("标题", genTitle), field("媒体提示", genHint), field("平台", genPlatform)], genBtn, genRegion);
+      const genCard = section("生成文案 Generate-content", [field("标题", genTitle), field("媒体提示", genHint), field("平台", genPlatform)], genBtn, genRegion, "fa-pen-line");
 
       const connRegion = UI.el("div");
       const connBtn = UI.el("button", { class: "btn", text: "检查连接" });
       const queueRegion = UI.el("div");
       const queueBtn = UI.el("button", { class: "btn", text: "队列状态" });
-      const connCard = section("状态 Status", [], [connBtn, queueBtn], UI.el("div", {}, [connRegion, queueRegion]));
+      const connCard = section("状态 Status", [], [connBtn, queueBtn], UI.el("div", {}, [connRegion, queueRegion]), "fa-plug");
 
       const histPage = UI.el("input", { type: "number", value: "1" });
       const histRegion = UI.el("div");
       const histBtn = UI.el("button", { class: "btn", text: "历史" });
-      const histCard = section("历史 History", [field("页码", histPage)], histBtn, histRegion);
+      const histCard = section("历史 History", [field("页码", histPage)], histBtn, histRegion, "fa-clock-rotate-left");
 
       const ckPlatform = UI.el("select", {}, [opt("douyin"), opt("xhs"), opt("bilibili"), opt("toutiao")]);
       const ckCookie = UI.el("textarea", { placeholder: "Cookie 文本" });
       const ckRegion = UI.el("div");
       const ckSaveBtn = UI.el("button", { class: "btn", text: "保存 Cookie" });
       const ckStatusBtn = UI.el("button", { class: "btn secondary", text: "Cookie 状态" });
-      const ckCard = section("Cookie", [field("平台", ckPlatform), field("Cookie", ckCookie)], [ckSaveBtn, ckStatusBtn], ckRegion);
+      const ckCard = section("Cookie", [field("平台", ckPlatform), field("Cookie", ckCookie)], [ckSaveBtn, ckStatusBtn], ckRegion, "fa-cookie");
 
       UI.mount(panel, UI.el("div", {}, [
         UI.el("h2", { text: "发布 Publish" }),

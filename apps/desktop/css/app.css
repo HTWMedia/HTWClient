@@ -34,12 +34,15 @@ body {
 }
 .sidebar h1 { font-size: 16px; padding: 0 16px 12px; margin: 0; }
 .nav-item {
-  display: block; width: 100%; text-align: left;
+  display: flex; align-items: center; width: 100%; text-align: left;
   background: transparent; border: 0; color: var(--muted);
   padding: 10px 16px; cursor: pointer; font-size: 14px;
 }
 .nav-item:hover { background: var(--panel-2); color: var(--text); }
 .nav-item.active { background: var(--panel-2); color: var(--accent); border-left: 3px solid var(--accent); }
+.nav-item i { margin-right: 10px; width: 18px; text-align: center; opacity: .85; }
+.nav-item.active i { opacity: 1; }
+.card h3 i, .section-title i { margin-right: 8px; color: var(--accent); }
 
 .main { padding: 20px 24px; overflow-y: auto; }
 .panel { display: none; }

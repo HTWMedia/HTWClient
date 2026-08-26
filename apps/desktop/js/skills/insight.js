@@ -16,8 +16,9 @@
       function field(labelText, input) {
         return UI.el("div", { class: "field" }, [UI.el("label", { text: labelText }), input]);
       }
-      function section(title, bodyNodes, actionNode, region) {
-        const kids = [UI.el("h3", { text: title })].concat(bodyNodes);
+      function section(title, bodyNodes, actionNode, region, icon) {
+        const head = icon ? UI.el("h3", {}, [UI.el("i", { class: "fa-solid " + icon }), " " + title]) : UI.el("h3", { text: title });
+        const kids = [head].concat(bodyNodes);
         kids.push(UI.el("div", { class: "row" }, [actionNode]));
         kids.push(region);
         return UI.el("div", { class: "card" }, kids);
@@ -37,21 +38,21 @@
       const copyText = UI.el("textarea", { placeholder: "粘贴要分析的文案…" });
       const copyRegion = UI.el("div");
       const copyBtn = UI.el("button", { class: "btn", text: "分析文案" });
-      const copyCard = section("文案分析", [field("文案", copyText)], copyBtn, copyRegion);
+      const copyCard = section("文案分析", [field("文案", copyText)], copyBtn, copyRegion, "fa-file-lines");
 
       const videoUrl = UI.el("input", { type: "text", placeholder: "视频链接 URL（仅支持 B站 / 小红书 / 抖音）" });
       const videoRegion = UI.el("div");
       const videoBtn = UI.el("button", { class: "btn", text: "分析视频" });
-      const videoCard = section("视频分析", [field("视频 URL", videoUrl)], videoBtn, videoRegion);
+      const videoCard = section("视频分析", [field("视频 URL", videoUrl)], videoBtn, videoRegion, "fa-film");
 
       const accountUrl = UI.el("input", { type: "text", placeholder: "账号主页 URL（仅支持 B站 / 小红书 / 抖音）" });
       const accountRegion = UI.el("div");
       const accountBtn = UI.el("button", { class: "btn", text: "分析账号" });
-      const accountCard = section("账号分析", [field("账号 URL", accountUrl)], accountBtn, accountRegion);
+      const accountCard = section("账号分析", [field("账号 URL", accountUrl)], accountBtn, accountRegion, "fa-user");
 
       const hotRegion = UI.el("div");
       const hotBtn = UI.el("button", { class: "btn", text: "获取热榜" });
-      const hotCard = section("热榜", [], hotBtn, hotRegion);
+      const hotCard = section("热榜", [], hotBtn, hotRegion, "fa-fire");
 
       function platformOptions() {
         return [

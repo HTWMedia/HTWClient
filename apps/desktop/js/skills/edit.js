@@ -42,8 +42,9 @@
       function field(labelText, input) {
         return UI.el("div", { class: "field" }, [UI.el("label", { text: labelText }), input]);
       }
-      function section(title, bodyNodes, actionNode, region) {
-        const kids = [UI.el("h3", { text: title })].concat(bodyNodes);
+      function section(title, bodyNodes, actionNode, region, icon) {
+        const head = icon ? UI.el("h3", {}, [UI.el("i", { class: "fa-solid " + icon }), " " + title]) : UI.el("h3", { text: title });
+        const kids = [head].concat(bodyNodes);
         kids.push(UI.el("div", { class: "row" }, [actionNode]));
         kids.push(region);
         return UI.el("div", { class: "card" }, kids);
@@ -56,24 +57,24 @@
       const coarseBlur = UI.el("input", { type: "checkbox" });
       const coarseRegion = UI.el("div");
       const coarseBtn = UI.el("button", { class: "btn", text: "粗剪" });
-      const coarseCard = section("粗剪 Coarse-cut", [coarseFile, field("配音", coarseVoice), field("最短秒", coarseMin), field("最长秒", coarseMax), field("模糊处理", coarseBlur)], coarseBtn, coarseRegion);
+      const coarseCard = section("粗剪 Coarse-cut", [coarseFile, field("配音", coarseVoice), field("最短秒", coarseMin), field("最长秒", coarseMax), field("模糊处理", coarseBlur)], coarseBtn, coarseRegion, "fa-scissors");
 
       const draftFile = UI.fileInput({ label: "选择 CapCut 草稿 ZIP", accept: ".zip" });
       const draftRegion = UI.el("div");
       const draftBtn = UI.el("button", { class: "btn", text: "导出草稿" });
-      const draftCard = section("草稿导出 Draft-export", [draftFile], draftBtn, draftRegion);
+      const draftCard = section("草稿导出 Draft-export", [draftFile], draftBtn, draftRegion, "fa-file-zipper");
 
       const srFile = UI.fileInput({ label: "选择视频", accept: "video/*" });
       const srW = UI.el("input", { type: "number", value: "1920", placeholder: "宽" });
       const srH = UI.el("input", { type: "number", value: "1080", placeholder: "高" });
       const srRegion = UI.el("div");
       const srBtn = UI.el("button", { class: "btn", text: "超分" });
-      const srCard = section("超分 Super-res", [srFile, field("宽", srW), field("高", srH)], srBtn, srRegion);
+      const srCard = section("超分 Super-res", [srFile, field("宽", srW), field("高", srH)], srBtn, srRegion, "fa-expand");
 
       const decFile = UI.fileInput({ label: "选择 .json 草稿", accept: ".json" });
       const decRegion = UI.el("div");
       const decBtn = UI.el("button", { class: "btn", text: "解密" });
-      const decCard = section("解密 Decrypt", [decFile], decBtn, decRegion);
+      const decCard = section("解密 Decrypt", [decFile], decBtn, decRegion, "fa-lock-open");
 
       UI.mount(panel, UI.el("div", {}, [
         UI.el("h2", { text: "剪辑 Edit" }),

@@ -28,7 +28,7 @@
       const setupRegion = UI.el("div");
       const startBtn = UI.el("button", { class: "btn", text: "开始创作" });
       const setupCard = UI.el("div", { class: "card" }, [
-        UI.el("h3", { text: "第 1 步：新建会话" }),
+        UI.el("h3", {}, [UI.el("i", { class: "fa-solid fa-wand-magic-sparkles" }), " 第 1 步：新建会话"]),
         UI.el("div", { class: "field" }, [UI.el("label", { text: "类型" }), typeSelect]),
         UI.el("div", { class: "field" }, [UI.el("label", { text: "主题" }), topicInput]),
         UI.el("div", { class: "field" }, [UI.el("label", { text: "参考视频" }), refInput]),
@@ -46,7 +46,7 @@
       const matFile = UI.fileInput({ label: "上传素材", accept: "*/*" });
       const matBtn = UI.el("button", { class: "btn secondary", text: "上传素材" });
       const sessionCard = UI.el("div", { class: "card" }, [
-        UI.el("h3", { text: "第 2 步：会话" }),
+        UI.el("h3", {}, [UI.el("i", { class: "fa-solid fa-comments" }), " 第 2 步：会话"]),
         UI.el("div", { class: "row" }, [refreshBtn, approveBtn, regenBtn, refineBtn, recBtn, matBtn]),
         matFile,
         statusRegion,
