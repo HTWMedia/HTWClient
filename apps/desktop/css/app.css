@@ -71,7 +71,7 @@ button.btn:hover { background: var(--accent-hover); }
 button.btn:disabled { opacity: 0.6; cursor: default; }
 button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
 
-.file-input { display: inline-flex; flex-direction: column; gap: 4px; }
+.file-input { display: inline-flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
 .file-input-label { color: var(--muted); font-size: 12px; }
 .file-input input { color: var(--muted); }
 
