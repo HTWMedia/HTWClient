@@ -1,5 +1,7 @@
 const { contextBridge, ipcRenderer, net } = require("electron");
 const fs = require("fs");
+const crypto = require("crypto");
+const path = require("path");
 
 const API_BASE = process.env.HTW_API_BASE || "https://htwmedia.dpdns.org";
 
@@ -26,25 +28,26 @@ contextBridge.exposeInMainWorld("htw", {
   // (method, path, filePaths, fields, headers, onProgress)
   upload: (method, path, filePaths, fields, headers, onProgress) => {
     return new Promise((resolve, reject) => {
-      const boundary = "----HTWFormBoundary" + Math.random().toString(16).slice(2);
+      const boundary = crypto.randomBytes(16).toString("hex");
       const enc = (s) => Buffer.from(s, "utf-8");
       const parts = [];
 
       if (fields && typeof fields === "object") {
         for (const [k, v] of Object.entries(fields)) {
+          const val = String(v);
           parts.push(enc(`--${boundary}\r\n`));
           parts.push(enc(`Content-Disposition: form-data; name="${k}"\r\n\r\n`));
-          parts.push(enc(`${v}`));
+          parts.push(enc(val));
           parts.push(enc("\r\n"));
         }
       }
 
       for (const fp of filePaths || []) {
         const content = fs.readFileSync(fp);
-        const filename = fp.split(/[\\/]/).pop();
+        const safeName = path.basename(fp).replace(/["\r\n]/g, "_");
         parts.push(enc(`--${boundary}\r\n`));
         parts.push(
-          enc(`Content-Disposition: form-data; name="file"; filename="${filename}"\r\n`)
+          enc(`Content-Disposition: form-data; name="file"; filename="${safeName}"\r\n`)
         );
         parts.push(enc("Content-Type: application/octet-stream\r\n\r\n"));
         parts.push(content);
@@ -55,9 +58,9 @@ contextBridge.exposeInMainWorld("htw", {
       const bodyBuf = Buffer.concat(parts);
 
       const reqHeaders = {
+        ...(headers || {}),
         "Content-Type": `multipart/form-data; boundary=${boundary}`,
         "Content-Length": bodyBuf.length,
-        ...(headers || {}),
       };
 
       const req = net.request({
