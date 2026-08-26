@@ -18,6 +18,7 @@
       <button class="nav-item" data-skill="settings"><i class="fa-solid fa-gear"></i>设置 Settings</button>
     </aside>
     <main class="main">
+      <div id="key-warning" class="key-warning" hidden></div>
       <section class="panel active" id="panel-insight"></section>
       <section class="panel" id="panel-edit"></section>
       <section class="panel" id="panel-tools"></section>
@@ -33,7 +34,11 @@
           <div class="field">
             <label>AuthKey</label>
             <input type="password" id="api-key" placeholder="粘贴你的 AuthKey" />
-            <span class="hint">密钥仅保存在内存，重启客户端后需重新填写。</span>
+            <div class="inline" style="margin-top:8px;">
+              <button class="btn" type="button" id="get-key-btn">前往 web 端获取 AuthKey</button>
+              <span class="hint" id="key-status"></span>
+            </div>
+            <span class="hint">密钥仅保存在内存，重启客户端后需重新填写。若没有 AuthKey，可在 web 端通过邮箱申请（有效期 30 天）。</span>
           </div>
         </div>
       </section>

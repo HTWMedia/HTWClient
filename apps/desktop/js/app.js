@@ -9,6 +9,34 @@
     const key = getKeyInput().value;
     if (base) window.HTWApi.setBase(base);
     window.HTWApi.setKey(key);
+    refreshKeyUI();
+  }
+
+  function openGetKey() {
+    const base = (getBaseInput().value.trim() || (window.htw && window.htw.apiBase) || "https://htwmedia.dpdns.org").replace(/\/+$/, "");
+    const url = base + "/Home/GetApiKey";
+    if (window.htw && window.htw.openExternal) window.htw.openExternal(url);
+  }
+
+  function refreshKeyUI() {
+    const status = document.getElementById("key-status");
+    if (status) {
+      const has = window.HTWApi && window.HTWApi.hasKey && window.HTWApi.hasKey();
+      status.textContent = has ? "已设置 ✓" : "未设置";
+      status.style.color = has ? "#10b981" : "#ef4444";
+    }
+    const warn = document.getElementById("key-warning");
+    if (warn) {
+      const active = document.querySelector(".panel.active");
+      const isSettings = document.getElementById("panel-settings") && document.getElementById("panel-settings").classList.contains("active");
+      const has = window.HTWApi && window.HTWApi.hasKey && window.HTWApi.hasKey();
+      if (!has && !isSettings) {
+        warn.hidden = false;
+        warn.textContent = "尚未设置 AuthKey，以下功能将无法使用。请到「设置」填写，或点击「前往 web 端获取 AuthKey」。";
+      } else {
+        warn.hidden = true;
+      }
+    }
   }
 
   function showPanel(name) {
@@ -21,6 +49,7 @@
     });
     const settingsPanel = document.getElementById("panel-settings");
     if (settingsPanel) settingsPanel.classList.remove("active");
+    refreshKeyUI();
   }
 
   function showSettings() {
@@ -31,6 +60,7 @@
     document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
     const sp = document.getElementById("panel-settings");
     if (sp) sp.classList.add("active");
+    refreshKeyUI();
   }
 
   function wireNav() {
@@ -42,6 +72,10 @@
         showPanel(name);
       });
     });
+    const gk = document.getElementById("get-key-btn");
+    if (gk) gk.addEventListener("click", openGetKey);
+    const kw = document.getElementById("key-warning");
+    if (kw) kw.addEventListener("click", showSettings);
   }
 
   function mountSkills() {

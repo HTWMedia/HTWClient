@@ -193,6 +193,11 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .scriptbox { margin: 10px 0; border: 1px solid #e8ecf2; border-radius: 8px; padding: 10px 12px; background: #fafbfd; }
 .scriptbox pre { white-space: pre-wrap; word-break: break-word; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; margin: 0; }
 .detail-actions { display: flex; gap: 10px; margin-top: 12px; }
+
+/* 设置模块：未配置 AuthKey 时的提示横幅 + 状态 */
+.key-warning { display: block; background: #fff7ed; border: 1px solid #fed7aa; color: #c2410c; padding: 10px 14px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; cursor: pointer; }
+.key-warning[hidden] { display: none; }
+
 .inline { display: inline-flex; align-items: center; gap: 6px; margin-right: 12px; cursor: pointer; }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
 .dot.gn { background: #10b981; }

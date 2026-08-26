@@ -10,9 +10,17 @@
 
   function setKey(k) { _key = k || ""; }
   function setBase(b) { if (b) _base = b; }
+  function hasKey() { return !!_key; }
   function authHeader() { return { AuthKey: _key }; }
 
+  function keyError() {
+    const e = new Error("未设置 AuthKey：请到左侧「设置」填写，或点击「前往 web 端获取 AuthKey」。所有功能都需要 AuthKey 验证。");
+    e.authMissing = true;
+    return e;
+  }
+
   async function call(method, path, body) {
+    if (!_key) throw keyError();
     const res = await window.htw.call(method, path, body, _key);
     return normalize(res);
   }
@@ -71,6 +79,7 @@
   }
 
   async function upload(method, path, filePaths, fields, onProgress, fileField) {
+    if (!_key) throw keyError();
     fileField = fileField || "file";
     if (
       Array.isArray(filePaths) &&
@@ -122,6 +131,6 @@
     }
   }
 
-  return { setKey: setKey, setBase: setBase, authHeader: authHeader, call: call, upload: upload, normalize: normalize, pollTask: pollTask, get base() { return _base; } };
+  return { setKey: setKey, setBase: setBase, hasKey: hasKey, authHeader: authHeader, call: call, upload: upload, normalize: normalize, pollTask: pollTask, get base() { return _base; } };
 });
 
