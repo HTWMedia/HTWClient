@@ -71,7 +71,7 @@
         return id;
       }
 
-      const transFile = UI.fileInput({ label: "选择音频", accept: "audio/*" });
+      const transFile = UI.fileInput({ label: "选择音频/视频", accept: "audio/*,video/*" });
       const transFmt = UI.el("select", {}, [opt("txt"), opt("doc"), opt("srt")]);
       const transLang = UI.el("input", { type: "text", placeholder: "语言 如 zh" });
       const transTranslate = UI.el("input", { type: "checkbox" });
@@ -84,23 +84,23 @@
         field("转写格式", transFmt), field("语言", transLang), field("翻译", transTranslate), field("角色", transRole), field("对齐文本", transAlign),
       ], transcribeBtn, transcribeRegion, "fa-language");
 
-      const translateFile = UI.fileInput({ label: "选择音频", accept: "audio/*" });
+      const translateFile = UI.fileInput({ label: "选择音频/视频", accept: "audio/*,video/*" });
       const translateLang = UI.el("input", { type: "text", placeholder: "目标语言" });
       const translateRegion = UI.el("div");
       const translateBtn = UI.el("button", { class: "btn", text: "翻译" });
       const translateCard = section("翻译 Translate", [translateFile, field("目标语言", translateLang)], translateBtn, translateRegion, "fa-language");
 
-      const summarizeFile = UI.fileInput({ label: "选择音频", accept: "audio/*" });
+      const summarizeFile = UI.fileInput({ label: "选择音频/视频", accept: "audio/*,video/*" });
       const summarizeRegion = UI.el("div");
       const summarizeBtn = UI.el("button", { class: "btn", text: "总结" });
       const summarizeCard = section("总结 Summarize", [summarizeFile], summarizeBtn, summarizeRegion, "fa-align-left");
 
-      const lyricsFile = UI.fileInput({ label: "选择音频", accept: "audio/*" });
+      const lyricsFile = UI.fileInput({ label: "选择音频/视频", accept: "audio/*,video/*" });
       const lyricsRegion = UI.el("div");
       const lyricsBtn = UI.el("button", { class: "btn", text: "歌词提取" });
       const lyricsCard = section("歌词提取 Lyrics", [lyricsFile], lyricsBtn, lyricsRegion, "fa-music");
 
-      const separateFile = UI.fileInput({ label: "选择音频", accept: "audio/*" });
+      const separateFile = UI.fileInput({ label: "选择音频/视频", accept: "audio/*,video/*" });
       const sepType = UI.el("select", {}, [opt("human"), opt("music")]);
       const separateRegion = UI.el("div");
       const separateBtn = UI.el("button", { class: "btn", text: "人声/伴奏分离" });
