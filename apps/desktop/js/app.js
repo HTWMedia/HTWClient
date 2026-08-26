@@ -19,6 +19,8 @@
     document.querySelectorAll(".nav-item").forEach((b) => {
       b.classList.toggle("active", b.dataset.skill === name);
     });
+    const settingsPanel = document.getElementById("panel-settings");
+    if (settingsPanel) settingsPanel.classList.remove("active");
   }
 
   function showSettings() {
@@ -57,6 +59,7 @@
   document.addEventListener("DOMContentLoaded", () => {
     getBaseInput().addEventListener("change", applyAuth);
     getKeyInput().addEventListener("input", applyAuth);
+    applyAuth();
     wireNav();
     mountSkills();
     showPanel("insight");
