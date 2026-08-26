@@ -91,9 +91,9 @@
               durationMin: coarseMin.value,
               durationMax: coarseMax.value,
               blur: coarseBlur.checked ? "1" : "0",
-            });
+            }, null, "video");
             if (!up.ok) { UI.showError(coarseRegion, formatErr(up)); return; }
-            const taskId = up.data && up.data.taskId;
+            const taskId = up.taskId || (up.data && up.data.taskId);
             if (!taskId) { UI.showError(coarseRegion, "未返回 taskId: " + JSON.stringify(up.data)); return; }
             UI.showResult(coarseRegion, { message: "已提交，taskId=" + taskId + "，处理中…" });
             const res = await pollEdit(taskId);
@@ -112,7 +112,7 @@
             if (!files.length) { UI.showError(draftRegion, "请选择 ZIP 文件"); return; }
             const up = await API.upload("POST", "/api/v2/edit/draft-export", files, {});
             if (!up.ok) { UI.showError(draftRegion, formatErr(up)); return; }
-            const taskId = up.data && up.data.taskId;
+            const taskId = up.taskId || (up.data && up.data.taskId);
             if (!taskId) { UI.showError(draftRegion, "未返回 taskId: " + JSON.stringify(up.data)); return; }
             UI.showResult(draftRegion, { message: "已提交，taskId=" + taskId + "，处理中…", warnings: up.data.warnings });
             const res = await pollEdit(taskId);
@@ -131,7 +131,7 @@
             if (!files.length) { UI.showError(srRegion, "请选择视频文件"); return; }
             const up = await API.upload("POST", "/api/v2/edit/super-res", files, { width: srW.value, height: srH.value });
             if (!up.ok) { UI.showError(srRegion, formatErr(up)); return; }
-            const taskId = up.data && up.data.taskId;
+            const taskId = up.taskId || (up.data && up.data.taskId);
             if (!taskId) { UI.showError(srRegion, "未返回 taskId: " + JSON.stringify(up.data)); return; }
             UI.showResult(srRegion, { message: "已提交，taskId=" + taskId + "，处理中…" });
             const res = await pollEdit(taskId);

@@ -17,7 +17,74 @@
     return normalize(res);
   }
 
-  async function upload(method, path, filePaths, fields, onProgress) {
+  // 单文件且超过该阈值时走分片上传，规避反向代理 / Cloudflare 的 body 大小限制 (413)。
+  // 单片 < 1MB，确保即使默认 nginx client_max_body_size(1m) 也能直传通过。
+  const CHUNK_SIZE = 800 * 1024;
+
+  function genUploadId() {
+    const buf = new Uint8Array(16);
+    (window.crypto || self.crypto).getRandomValues(buf);
+    let s = "";
+    for (let i = 0; i < buf.length; i++) s += buf[i].toString(16).padStart(2, "0");
+    return s;
+  }
+
+  async function chunkedUpload(method, path, file, fields, fileField) {
+    const full = new Uint8Array(file.buffer);
+    const uploadId = genUploadId();
+    const total = Math.max(1, Math.ceil(full.length / CHUNK_SIZE));
+    let failed = null;
+    let next = 0;
+    async function worker() {
+      while (true) {
+        const i = next++;
+        if (i >= total || failed) return;
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(full.length, start + CHUNK_SIZE);
+        const chunkBuf = full.slice(start, end);
+        try {
+          const res = await window.htw.upload(
+            "POST",
+            "/api/v2/files/chunk",
+            [{ name: file.name, buffer: chunkBuf }],
+            { fileId: uploadId, index: String(i), total: String(total), fileName: file.name },
+            authHeader()
+          );
+          const norm = normalize(res);
+          if (!norm.ok) { failed = new Error("分片 " + i + " 上传失败: " + (norm.message || norm.code)); return; }
+        } catch (e) { failed = e; return; }
+      }
+    }
+    const workers = [];
+    const concurrency = 4;
+    for (let w = 0; w < concurrency; w++) workers.push(worker());
+    await Promise.all(workers);
+    if (failed) throw failed;
+    return await call("POST", "/api/v2/files/complete", {
+      fileId: uploadId,
+      fileName: file.name,
+      total: total,
+      target: path,
+      fileField: fileField || "file",
+      fields: fields || {},
+    });
+  }
+
+  async function upload(method, path, filePaths, fields, onProgress, fileField) {
+    fileField = fileField || "file";
+    if (
+      Array.isArray(filePaths) &&
+      filePaths.length === 1 &&
+      filePaths[0] &&
+      filePaths[0].buffer &&
+      filePaths[0].buffer.byteLength > CHUNK_SIZE
+    ) {
+      try {
+        return await chunkedUpload(method, path, filePaths[0], fields || {}, fileField);
+      } catch (e) {
+        console.warn("分片上传失败，回退为整文件上传:", e);
+      }
+    }
     const res = await window.htw.upload(method, path, filePaths, fields, authHeader(), onProgress);
     return normalize(res);
   }
