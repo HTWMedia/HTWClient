@@ -112,18 +112,24 @@
       const separateCard = section("人声/伴奏分离 Separate", [separateFile, field("分离类型", sepType)], separateBtn, separateRegion, "fa-scissors");
 
       const ttsText = UI.el("textarea", { placeholder: "要合成的文本" });
-      const ttsSpeakers = [
-        opt("zh_female_qinglengnv", "清冷女声"), opt("ICL_zh_female_jilupianxq2", "纪录片女声"),
-        opt("ICL_zh_male_jilupianjmh", "纪录片男声"), opt("zh_female_aoyunliuyuxi", "奥运刘雨熙"),
-        opt("ICL_zh_female_basidigua2", "活泼女声"), opt("ICL_zh_male_momodianying", "电影男声"),
-        opt("zh_female_luoliwm_emo_v2_mars_bigtts", "萝莉女声"), opt("zh_male_yourougongzi_emo_v2_mars_bigtts", "温柔男声"),
-        opt("BV009_DPE_streaming", "标准男声"), opt("BV104_streaming", "标准女声"),
-        opt("ICL_zh_female_szrlili2_jianying", "活力女声(剪映)"), opt("ICL_zh_female_szrliuwan2_jianying", "温柔女声(剪映)"),
-        opt("ICL_zh_female_szrtangtang_jianying", "糖糖女声(剪映)"), opt("ICL_zh_female_szryanyan_jianying", "妍妍女声(剪映)"),
-        opt("ICL_zh_male_szrlimu_jianying", "立木男声(剪映)"), opt("ICL_zh_male_szryaohang_jianying", "耀航男声(剪映)"),
-        opt("zh_female_luolizy_emo_v2_mars_bigtts", "萝莉女声(zy)"),
+      const TTS_SPEAKERS = [
+        ["zh_female_qinglengnv", "清冷女声"], ["ICL_zh_female_jilupianxq2", "纪录片女声"],
+        ["ICL_zh_male_jilupianjmh", "纪录片男声"], ["zh_female_aoyunliuyuxi", "奥运刘雨熙"],
+        ["ICL_zh_female_basidigua2", "活泼女声"], ["ICL_zh_male_momodianying", "电影男声"],
+        ["zh_female_luoliwm_emo_v2_mars_bigtts", "萝莉女声"], ["zh_male_yourougongzi_emo_v2_mars_bigtts", "温柔男声"],
+        ["BV009_DPE_streaming", "标准男声"], ["BV104_streaming", "标准女声"],
+        ["ICL_zh_female_szrlili2_jianying", "活力女声(剪映)"], ["ICL_zh_female_szrliuwan2_jianying", "温柔女声(剪映)"],
+        ["ICL_zh_female_szrtangtang_jianying", "糖糖女声(剪映)"], ["ICL_zh_female_szryanyan_jianying", "妍妍女声(剪映)"],
+        ["ICL_zh_male_szrlimu_jianying", "立木男声(剪映)"], ["ICL_zh_male_szryaohang_jianying", "耀航男声(剪映)"],
+        ["zh_female_luolizy_emo_v2_mars_bigtts", "萝莉女声(zy)"],
       ];
-      const ttsSpeaker = UI.el("select", {}, ttsSpeakers);
+      function speakerOptions(extra) {
+        const arr = [];
+        (extra || []).forEach(function (e) { arr.push(opt(e[0], e[1])); });
+        TTS_SPEAKERS.forEach(function (s) { arr.push(opt(s[0], s[1])); });
+        return arr;
+      }
+      const ttsSpeaker = UI.el("select", {}, speakerOptions());
       const ttsRegion = UI.el("div");
       const ttsBtn = UI.el("button", { class: "btn", text: "语音合成" });
       const ttsCard = section("语音合成 TTS", [field("TTS 文本", ttsText), field("发音人", ttsSpeaker)], ttsBtn, ttsRegion, "fa-comment-dots");
@@ -150,7 +156,7 @@
       const agentRatio = UI.el("select", {}, [opt("16:9", "16:9 横屏"), opt("9:16", "9:16 竖屏"), opt("1:1", "1:1 正方形"), opt("4:3", "4:3")]);
       const agentMode = UI.el("select", {}, [opt("Quick", "快速"), opt("Full", "完整")]);
       const agentRef = UI.el("textarea", { placeholder: "参考文本" });
-      const agentVoice = UI.el("select", {}, [opt("", "默认配音")].concat(ttsSpeakers));
+      const agentVoice = UI.el("select", {}, speakerOptions([["", "默认配音"]]));
       const agentBtn = UI.el("button", { class: "btn", text: "一键成片" });
       const agentRegion = UI.el("div");
       const agentCard = section("智能体 Agent", [
