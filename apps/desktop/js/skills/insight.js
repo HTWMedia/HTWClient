@@ -24,9 +24,13 @@
       }
       function run(btn, region, fn) {
         UI.withLoading(btn, async function () {
-          const r = await fn();
-          if (!r.ok) { UI.showError(region, formatErr(r)); return; }
-          UI.showResult(region, r.data);
+          try {
+            const r = await fn();
+            if (!r.ok) { UI.showError(region, formatErr(r)); return; }
+            UI.showResult(region, r.data);
+          } catch (e) {
+            UI.showError(region, "请求异常: " + (e && e.message ? e.message : String(e)));
+          }
         });
       }
 
@@ -49,15 +53,22 @@
       const hotBtn = UI.el("button", { class: "btn", text: "获取热榜" });
       const hotCard = section("热榜", [], hotBtn, hotRegion);
 
-      const platformOpts = [UI.el("option", { value: "xhs", text: "小红书" }), UI.el("option", { value: "bilibili", text: "B站" }), UI.el("option", { value: "douyin", text: "抖音" }), UI.el("option", { value: "toutiao", text: "头条" })];
-      const searchPlatform = UI.el("select", {}, platformOpts);
+      function platformOptions() {
+        return [
+          UI.el("option", { value: "xhs", text: "小红书" }),
+          UI.el("option", { value: "bilibili", text: "B站" }),
+          UI.el("option", { value: "douyin", text: "抖音" }),
+          UI.el("option", { value: "toutiao", text: "头条" }),
+        ];
+      }
+      const searchPlatform = UI.el("select", {}, platformOptions());
       const searchKeyword = UI.el("input", { type: "text", placeholder: "关键词" });
       const searchCount = UI.el("input", { type: "number", value: "10" });
       const searchRegion = UI.el("div");
       const searchBtn = UI.el("button", { class: "btn", text: "搜索" });
       const searchCard = section("搜索", [field("平台", searchPlatform), field("关键词", searchKeyword), field("数量", searchCount)], searchBtn, searchRegion);
 
-      const cookiePlatform = UI.el("select", {}, platformOpts);
+      const cookiePlatform = UI.el("select", {}, platformOptions());
       const cookieText = UI.el("textarea", { placeholder: "粘贴 Cookie 文本…" });
       const cookieRegion = UI.el("div");
       const cookieBtn = UI.el("button", { class: "btn", text: "保存 Cookie" });
