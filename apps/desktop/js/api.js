@@ -103,10 +103,19 @@
 
   function normalize(res) {
     const d = res.data !== undefined ? res.data : res.body;
-    if (res.ok && d && d.ok === true) return { ok: true, data: d.data, taskId: d.taskId || null };
-    if (res.ok && d && d.ok === false) return { ok: false, code: d.errCode, message: d.errMsg, raw: d };
-    if (!res.ok) return { ok: false, code: (d && d.errCode) || res.status, message: (d && d.errMsg) || ("HTTP " + res.status), raw: d };
-    return { ok: true, data: d, taskId: (d && d.taskId) || null };
+    if (!d || typeof d !== "object") {
+      return { ok: !!res.ok, data: d, taskId: null, code: res.status, message: res.ok ? "" : ("HTTP " + res.status) };
+    }
+    // 服务端信封字段大小写不固定：Ok/Ok、Data/data、ErrCode/errCode、ErrMsg/errMsg、TaskId/taskId 都兼容。
+    const ok = d.ok !== undefined ? d.ok : d.Ok;
+    const data = d.data !== undefined ? d.data : d.Data;
+    const code = d.errCode !== undefined ? d.errCode : d.ErrCode;
+    const msg = d.errMsg !== undefined ? d.errMsg : d.ErrMsg;
+    const taskId = d.taskId !== undefined ? d.taskId : d.TaskId;
+    if (res.ok && ok === true) return { ok: true, data: data, taskId: taskId || null };
+    if (res.ok && ok === false) return { ok: false, code: code, message: msg, raw: d };
+    if (!res.ok) return { ok: false, code: code || res.status, message: msg || ("HTTP " + res.status), raw: d };
+    return { ok: true, data: data !== undefined ? data : d, taskId: taskId || null };
   }
 
   async function pollTask(taskId, opts) {

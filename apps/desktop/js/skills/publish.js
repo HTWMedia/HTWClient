@@ -5,17 +5,18 @@
     if (r.code) return "[" + r.code + "] " + (r.message || "");
     return r.message || "请求失败";
   }
-  // 兼容服务端把列表包成数组 / {data:[]} / {list:[]} / 平台为 key 的对象 等多种形态。
+  // 兼容服务端把列表包成数组 / {data:[]} / {list:[]} / 平台为 key 的对象 等多种形态，并丢弃 null 项。
   function asList(raw) {
-    if (Array.isArray(raw)) return raw;
-    if (raw && typeof raw === "object") {
-      if (Array.isArray(raw.data)) return raw.data;
-      if (Array.isArray(raw.list)) return raw.list;
-      if (Array.isArray(raw.items)) return raw.items;
-      if (Array.isArray(raw.platforms)) return raw.platforms;
-      return Object.values(raw);
-    }
-    return [];
+    let arr;
+    if (Array.isArray(raw)) arr = raw;
+    else if (raw && typeof raw === "object") {
+      if (Array.isArray(raw.data)) arr = raw.data;
+      else if (Array.isArray(raw.list)) arr = raw.list;
+      else if (Array.isArray(raw.items)) arr = raw.items;
+      else if (Array.isArray(raw.platforms)) arr = raw.platforms;
+      else arr = Object.values(raw);
+    } else arr = [];
+    return arr.filter(function (x) { return x && typeof x === "object"; });
   }
   function opt(v, t) { return window.UI.el("option", { value: v, text: t || v }); }
 
@@ -300,13 +301,17 @@
       function refreshQueue() {
         API.call("GET", "/api/v2/publish/queue-status").then(function (r) {
           if (!r.ok) { UI.showError(queueRegion, formatErr(r)); return; }
-          UI.showResult(queueRegion, r.data);
+          const d = r.data || {};
+          if (d.items && !d.items.length) { UI.clear(queueRegion); queueRegion.appendChild(UI.el("div", { class: "hintline", text: "暂无任务" })); return; }
+          UI.showResult(queueRegion, d);
         }).catch(function (e) { UI.showError(queueRegion, "请求异常: " + (e && e.message ? e.message : String(e))); });
       }
       function refreshHistory() {
         API.call("GET", "/api/v2/publish/history?page=1&pageSize=20").then(function (r) {
           if (!r.ok) { UI.showError(histRegion, formatErr(r)); return; }
-          UI.showResult(histRegion, r.data);
+          const d = r.data || {};
+          if (d.items && !d.items.length) { UI.clear(histRegion); histRegion.appendChild(UI.el("div", { class: "hintline", text: "暂无记录" })); return; }
+          UI.showResult(histRegion, d);
         }).catch(function (e) { UI.showError(histRegion, "请求异常: " + (e && e.message ? e.message : String(e))); });
       }
 
