@@ -149,3 +149,20 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 /* 工具模块：每项独立卡片，像 web 端一样网格排列 */
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; align-items: start; }
 .card-grid .card { margin-bottom: 0; }
+
+/* 发布模块：标签页 + 集成表单（参照 web 端） */
+.tabbar { display: flex; gap: 8px; margin: 8px 0 16px; flex-wrap: wrap; }
+.tab { padding: 8px 18px; border: 1px solid #d1d5db; border-radius: 8px; background: #fff; cursor: pointer; font-size: 14px; }
+.tab.on { border-color: var(--accent); background: #eff6ff; color: var(--accent); font-weight: 600; }
+.inline { display: inline-flex; align-items: center; gap: 6px; margin-right: 12px; cursor: pointer; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
+.dot.gn { background: #10b981; }
+.dot.rd { background: #f59e0b; }
+.tagbox { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.tagchip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; background: #eff6ff; color: var(--accent); border-radius: 20px; font-size: 12px; }
+.tagx { cursor: pointer; font-weight: 700; }
+.subcfg { border: 1px solid #e8ecf2; border-radius: 10px; padding: 14px 16px; margin: 10px 0; background: #fafbfd; }
+.subcfg h4 { margin: 0 0 8px; font-size: 14px; }
+.hintline { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.hintline.ok { color: #10b981; }
+.hintline.bad { color: #ef4444; }

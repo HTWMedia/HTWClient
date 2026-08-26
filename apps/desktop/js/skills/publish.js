@@ -13,6 +13,15 @@
       const API = window.HTWApi;
       UI.clear(panel);
 
+      const PLATFORMS = ["douyin", "xhs", "bilibili", "toutiao"];
+      const PLAT_NAME = { douyin: "抖音", xhs: "小红书", bilibili: "B站", toutiao: "今日头条" };
+      const COOKIE_HINTS = {
+        bilibili: "从 bilibili.com 登录后，DevTools → Network → 任意请求 → Cookie 头复制完整字符串（需包含 SESSDATA 和 bili_jct）",
+        toutiao: "从 toutiao.com 登录后，DevTools → Application → Cookies 复制完整 Cookie（需包含 ttwid）",
+        douyin: "从 douyin.com 登录后，DevTools → Application → Cookies 复制完整 Cookie（需包含 ttwid 和 odin_ttid）",
+        xhs: "从小红书 web 端登录后，DevTools → Application → Cookies 复制完整 Cookie（需包含 web_session 和 webId）",
+      };
+
       async function readFiles(wrap) {
         const arr = [];
         const list = wrap.input.files;
@@ -29,115 +38,197 @@
         return UI.el("div", { class: "card" }, kids);
       }
 
-      const PUBLISH_PLATFORMS = ["douyin", "xhs", "bilibili", "toutiao"];
-      const platformEls = {};
-      const platformRow = UI.el("div", { class: "row" }, PUBLISH_PLATFORMS.map(function (p) {
-        const c = UI.el("input", { type: "checkbox", value: p });
-        platformEls[p] = c;
-        return UI.el("label", { class: "inline" }, [c, " " + p]);
-      }));
-      function selectedPlatforms() { return PUBLISH_PLATFORMS.filter(function (p) { return platformEls[p].checked; }).map(function (p) { return { platformId: p }; }); }
+      // ===== 状态 =====
+      const tags = [];
+      let mediaUrl = "", coverUrl = "";
+      let platformCfg = {};
+      const platformEls = {};       // checkbox
+      const platformDotEls = {};     // 状态点（cookie 是否有效）
+      const selPlats = [];
 
-      const pubTitle = UI.el("input", { type: "text", placeholder: "标题" });
-      const pubContent = UI.el("textarea", { placeholder: "正文内容" });
-      const pubTags = UI.el("input", { type: "text", placeholder: "标签，逗号分隔" });
-      const pubMedia = UI.el("input", { type: "text", placeholder: "媒体 URL，逗号分隔" });
-      const pubCover = UI.el("input", { type: "text", placeholder: "封面图 URL" });
-      const pubCategory = UI.el("input", { type: "text", placeholder: "分类" });
-      const pubIsDraft = UI.el("input", { type: "checkbox" });
+      // ===== 发布编辑面板 =====
+      const pubTitle = UI.el("input", { type: "text", placeholder: "标题", maxlength: "100" });
+      const pubContent = UI.el("textarea", { placeholder: "正文内容（可选）" });
+      const tagInput = UI.el("input", { type: "text", placeholder: "输入标签，回车添加" });
+      const tagBox = UI.el("div", { class: "tagbox" });
+      const tagGenBtn = UI.el("button", { class: "btn secondary", text: "AI 生成" });
+      const mediaFile = UI.fileInput({ label: "选择视频/图片", accept: "video/*,image/*" });
+      const mediaUploadBtn = UI.el("button", { class: "btn secondary", text: "上传媒体" });
+      const mediaPrev = UI.el("div", { class: "hintline" });
+      const coverFile = UI.fileInput({ label: "选择封面图", accept: "image/*" });
+      const coverUploadBtn = UI.el("button", { class: "btn secondary", text: "上传封面" });
+      const coverPrev = UI.el("div", { class: "hintline" });
+      const platformRow = UI.el("div", { class: "row" }, PLATFORMS.map(function (p) {
+        const c = UI.el("input", { type: "checkbox", value: p });
+        const dot = UI.el("span", { class: "dot rd" });
+        platformEls[p] = c; platformDotEls[p] = dot;
+        c.addEventListener("change", function () { togglePlat(p); });
+        return UI.el("label", { class: "inline" }, [c, dot, " " + (PLAT_NAME[p] || p)]);
+      }));
+      const platConfigBox = UI.el("div", {});
+      const genContentBtn = UI.el("button", { class: "btn secondary", text: "AI 生成文案" });
+      const compPlatform = UI.el("select", {}, PLATFORMS.map(function (p) { return opt(p, PLAT_NAME[p]); }));
+      const compRegion = UI.el("div", { class: "hintline" });
+      const compBtn = UI.el("button", { class: "btn secondary", text: "合规检测" });
       const pubRegion = UI.el("div");
-      const pubBtn = UI.el("button", { class: "btn", text: "发布" });
-      const pubCard = section("发布 Submit", [
-        field("标题", pubTitle), field("正文", pubContent), field("标签", pubTags), field("媒体URL", pubMedia), field("封面", pubCover), field("分类", pubCategory), field("存草稿", pubIsDraft),
-        field("平台", platformRow),
+      const pubBtn = UI.el("button", { class: "btn", text: "提交发布" });
+
+      function togglePlat(p) {
+        const i = selPlats.indexOf(p);
+        if (i >= 0) selPlats.splice(i, 1); else selPlats.push(p);
+        renderPlatConfig();
+      }
+      function addTag(v) {
+        v = (v || "").trim(); if (!v || tags.indexOf(v) >= 0) return;
+        tags.push(v); renderTags(); tagInput.value = "";
+      }
+      function renderTags() {
+        UI.clear(tagBox);
+        tags.forEach(function (t, i) {
+          const x = UI.el("span", { class: "tagx", text: "×" });
+          x.addEventListener("click", function () { tags.splice(i, 1); renderTags(); });
+          tagBox.appendChild(UI.el("span", { class: "tagchip" }, [UI.el("span", { text: t }), x]));
+        });
+      }
+      function renderPlatConfig() {
+        UI.clear(platConfigBox);
+        selPlats.forEach(function (p) {
+          const cfg = platformCfg[p]; if (!cfg) return;
+          const kids = [UI.el("strong", { text: (PLAT_NAME[p] || p) + " 配置" })];
+          if (cfg.CreativeStatements && cfg.CreativeStatements.length) {
+            const sel = UI.el("select", {}, cfg.CreativeStatements.map(function (c) { return opt(c.Value, c.Label); }));
+            sel.id = "cs-" + p;
+            kids.push(field("创作声明", sel));
+          }
+          if (cfg.HasCategory && cfg.Categories && cfg.Categories.length) {
+            const sel = UI.el("select", {}, cfg.Categories.map(function (c) { return opt(c); }));
+            sel.id = "cat-" + p;
+            kids.push(field("分类", sel));
+          }
+          if (cfg.HasSavePermission) {
+            const sel = UI.el("select", {}, [opt("deny", "不允许保存"), opt("allow", "允许保存")]);
+            sel.id = "sp-" + p;
+            kids.push(field("保存权限", sel));
+          }
+          platConfigBox.appendChild(UI.el("div", { class: "subcfg" }, kids));
+        });
+      }
+
+      const editCard = section("发布编辑 Publish", [
+        field("标题", pubTitle),
+        field("正文", pubContent),
+        UI.el("div", { class: "field" }, [UI.el("label", { text: "标签" }), UI.el("div", {}, [UI.el("div", { class: "row" }, [tagInput, tagGenBtn]), tagBox])]),
+        UI.el("div", { class: "field" }, [UI.el("label", { text: "媒体文件" }), UI.el("div", {}, [mediaFile, UI.el("div", { class: "row" }, [mediaUploadBtn]), mediaPrev])]),
+        UI.el("div", { class: "field" }, [UI.el("label", { text: "封面" }), UI.el("div", {}, [coverFile, UI.el("div", { class: "row" }, [coverUploadBtn]), coverPrev])]),
+        field("发布平台", platformRow),
+        platConfigBox,
+        UI.el("div", { class: "row" }, [genContentBtn, compBtn]),
+        compRegion,
       ], pubBtn, pubRegion, "fa-paper-plane");
 
-      const upFile = UI.fileInput({ label: "选择媒体文件", accept: "*/*" });
-      const upRegion = UI.el("div");
-      const upBtn = UI.el("button", { class: "btn", text: "上传文件" });
-      const upCard = section("上传文件 Upload-file", [upFile], upBtn, upRegion, "fa-cloud-arrow-up");
-
-      const compPlatform = UI.el("select", {}, [opt("douyin"), opt("xhs"), opt("bilibili"), opt("toutiao")]);
-      const compContent = UI.el("textarea", { placeholder: "待检测内容" });
-      const compRegion = UI.el("div");
-      const compBtn = UI.el("button", { class: "btn", text: "合规检测" });
-      const compCard = section("合规检测 Check-compliance", [field("平台", compPlatform), field("内容", compContent)], compBtn, compRegion, "fa-shield-halved");
-
-      const tagTitle = UI.el("input", { type: "text", placeholder: "标题" });
-      const tagContent = UI.el("input", { type: "text", placeholder: "正文" });
-      const tagPlatform = UI.el("select", {}, [opt("douyin"), opt("xhs"), opt("bilibili"), opt("toutiao")]);
-      const tagRegion = UI.el("div");
-      const tagBtn = UI.el("button", { class: "btn", text: "生成标签" });
-      const tagCard = section("生成标签 Generate-tags", [field("标题", tagTitle), field("正文", tagContent), field("平台", tagPlatform)], tagBtn, tagRegion, "fa-tags");
-
-      const genTitle = UI.el("input", { type: "text", placeholder: "标题" });
-      const genHint = UI.el("input", { type: "text", placeholder: "媒体提示" });
-      const genPlatform = UI.el("select", {}, [opt("douyin"), opt("xhs"), opt("bilibili"), opt("toutiao")]);
-      const genRegion = UI.el("div");
-      const genBtn = UI.el("button", { class: "btn", text: "生成文案" });
-      const genCard = section("生成文案 Generate-content", [field("标题", genTitle), field("媒体提示", genHint), field("平台", genPlatform)], genBtn, genRegion, "fa-pen-line");
-
-      const connRegion = UI.el("div");
-      const connBtn = UI.el("button", { class: "btn", text: "检查连接" });
+      // ===== 任务队列 =====
       const queueRegion = UI.el("div");
-      const queueBtn = UI.el("button", { class: "btn", text: "队列状态" });
-      const connCard = section("状态 Status", [], [connBtn, queueBtn], UI.el("div", {}, [connRegion, queueRegion]), "fa-plug");
+      const queueCard = section("任务队列 Queue", [], UI.el("div", {}, [queueRegion]), null, "fa-list-check");
 
-      const histPage = UI.el("input", { type: "number", value: "1" });
+      // ===== 历史记录 =====
       const histRegion = UI.el("div");
-      const histBtn = UI.el("button", { class: "btn", text: "历史" });
-      const histCard = section("历史 History", [field("页码", histPage)], histBtn, histRegion, "fa-clock-rotate-left");
+      const histCard = section("历史记录 History", [], UI.el("div", {}, [histRegion]), null, "fa-clock-rotate-left");
 
-      const ckPlatform = UI.el("select", {}, [opt("douyin"), opt("xhs"), opt("bilibili"), opt("toutiao")]);
-      const ckCookie = UI.el("textarea", { placeholder: "Cookie 文本" });
-      const ckRegion = UI.el("div");
-      const ckSaveBtn = UI.el("button", { class: "btn", text: "保存 Cookie" });
-      const ckStatusBtn = UI.el("button", { class: "btn secondary", text: "Cookie 状态" });
-      const ckCard = section("Cookie", [field("平台", ckPlatform), field("Cookie", ckCookie)], [ckSaveBtn, ckStatusBtn], ckRegion, "fa-cookie");
+      // ===== Cookie 配置 =====
+      const cookieRegion = UI.el("div");
+      const cookieCard = section("Cookie 配置", [UI.el("div", { class: "hintline", text: "每个账号的 Cookie 相互隔离，仅当前登录账号可用。粘贴对应平台浏览器中的完整 Cookie 字符串保存。" })], UI.el("div", {}, [cookieRegion]), null, "fa-cookie");
+
+      // ===== 标签页 =====
+      const TABS = [
+        { id: "edit", label: "发布编辑", node: editCard },
+        { id: "queue", label: "任务队列", node: queueCard },
+        { id: "history", label: "历史记录", node: histCard },
+        { id: "cookie", label: "Cookie 配置", node: cookieCard },
+      ];
+      const tabBar = UI.el("div", { class: "tabbar" });
+      const tabBtns = {};
+      TABS.forEach(function (t) {
+        const b = UI.el("button", { class: "tab", text: t.label });
+        tabBtns[t.id] = b;
+        b.addEventListener("click", function () { switchTab(t.id); });
+        tabBar.appendChild(b);
+      });
+      function switchTab(id) {
+        TABS.forEach(function (t) {
+          const on = t.id === id;
+          tabBtns[t.id].classList.toggle("on", on);
+          t.node.style.display = on ? "" : "none";
+        });
+        if (id === "queue") refreshQueue();
+        if (id === "history") refreshHistory();
+        if (id === "cookie") refreshCookie();
+      }
 
       UI.mount(panel, UI.el("div", {}, [
         UI.el("h2", { text: "发布 Publish" }),
-        pubCard, upCard, compCard, tagCard, genCard, connCard, histCard, ckCard,
+        tabBar,
+        editCard, queueCard, histCard, cookieCard,
       ]));
+      switchTab("edit");
 
-      pubBtn.addEventListener("click", function () {
-        const title = pubTitle.value.trim();
-        if (!title) { UI.showError(pubRegion, "请输入标题"); return; }
-        const plats = selectedPlatforms();
-        if (!plats.length) { UI.showError(pubRegion, "请选择至少一个平台"); return; }
-        UI.withLoading(pubBtn, async function () {
+      // 加载平台配置 + cookie 状态
+      API.call("GET", "/api/v2/publish/platform-config").then(function (r) {
+        if (r.ok && r.data) { platformCfg = r.data; renderPlatConfig(); }
+      }).catch(function () {});
+      refreshCookieStatus();
+
+      // ===== 事件 =====
+      tagInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === "," || e.key === " ") { e.preventDefault(); addTag(tagInput.value); }
+      });
+      tagGenBtn.addEventListener("click", function () {
+        UI.withLoading(tagGenBtn, async function () {
           try {
-            const up = await API.call("POST", "/api/v2/publish/submit", {
-              title: title,
-              content: pubContent.value,
-              tags: pubTags.value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
-              mediaUrls: pubMedia.value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
-              coverImage: pubCover.value.trim(),
-              category: pubCategory.value.trim(),
-              isDraft: pubIsDraft.checked,
-              platforms: plats,
-            });
+            const up = await API.call("POST", "/api/v2/publish/generate-tags", { title: pubTitle.value, content: pubContent.value, platform: selPlats[0] || "all" });
+            if (!up.ok) { UI.showError(tagBox, formatErr(up)); return; }
+            const arr = (up.data && up.data.tags) || [];
+            arr.forEach(addTag);
+          } catch (e) { UI.showError(tagBox, "请求异常: " + (e && e.message ? e.message : String(e))); }
+        });
+      });
+      mediaUploadBtn.addEventListener("click", function () {
+        UI.withLoading(mediaUploadBtn, async function () {
+          try {
+            const files = await readFiles(mediaFile);
+            if (!files.length) { UI.showError(mediaPrev, "请选择媒体文件"); return; }
+            const up = await API.upload("POST", "/api/v2/publish/upload-file", files, {});
+            if (!up.ok) { UI.showError(mediaPrev, formatErr(up)); return; }
+            mediaUrl = (up.data && up.data.url) || "";
+            UI.showResult(mediaPrev, { message: "已上传: " + mediaUrl });
+          } catch (e) { UI.showError(mediaPrev, "请求异常: " + (e && e.message ? e.message : String(e))); }
+        });
+      });
+      coverUploadBtn.addEventListener("click", function () {
+        UI.withLoading(coverUploadBtn, async function () {
+          try {
+            const files = await readFiles(coverFile);
+            if (!files.length) { UI.showError(coverPrev, "请选择封面图"); return; }
+            const up = await API.upload("POST", "/api/v2/publish/upload-file", files, {});
+            if (!up.ok) { UI.showError(coverPrev, formatErr(up)); return; }
+            coverUrl = (up.data && up.data.url) || "";
+            UI.showResult(coverPrev, { message: "已上传: " + coverUrl });
+          } catch (e) { UI.showError(coverPrev, "请求异常: " + (e && e.message ? e.message : String(e))); }
+        });
+      });
+      genContentBtn.addEventListener("click", function () {
+        UI.withLoading(genContentBtn, async function () {
+          try {
+            const up = await API.call("POST", "/api/v2/publish/generate-content", { title: pubTitle.value, mediaHint: mediaUrl, platform: selPlats[0] || "all" });
             if (!up.ok) { UI.showError(pubRegion, formatErr(up)); return; }
+            const txt = (up.data && (up.data.content || up.data.text)) || "";
+            if (txt) pubContent.value = txt;
             UI.showResult(pubRegion, up.data);
           } catch (e) { UI.showError(pubRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
-
-      upBtn.addEventListener("click", function () {
-        UI.withLoading(upBtn, async function () {
-          try {
-            const files = await readFiles(upFile);
-            if (!files.length) { UI.showError(upRegion, "请选择文件"); return; }
-            const up = await API.upload("POST", "/api/v2/publish/upload-file", files, {});
-            if (!up.ok) { UI.showError(upRegion, formatErr(up)); return; }
-            UI.showResult(upRegion, up.data);
-          } catch (e) { UI.showError(upRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
-
       compBtn.addEventListener("click", function () {
-        const c = compContent.value.trim();
-        if (!c) { UI.showError(compRegion, "请输入内容"); return; }
+        const c = pubContent.value.trim();
+        if (!c) { UI.showError(compRegion, "请先填写正文内容"); return; }
         UI.withLoading(compBtn, async function () {
           try {
             const up = await API.call("POST", "/api/v2/publish/check-compliance", { content: c, platform: compPlatform.value });
@@ -146,55 +237,109 @@
           } catch (e) { UI.showError(compRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
-
-      tagBtn.addEventListener("click", function () {
-        UI.withLoading(tagBtn, async function () {
+      pubBtn.addEventListener("click", function () {
+        const title = pubTitle.value.trim();
+        if (!title) { UI.showError(pubRegion, "请输入标题"); return; }
+        if (!selPlats.length) { UI.showError(pubRegion, "请选择至少一个平台"); return; }
+        const platforms = selPlats.map(function (p) {
+          return {
+            platformId: p,
+            creativeStatement: (document.getElementById("cs-" + p) && document.getElementById("cs-" + p).value) || "none",
+            savePermission: (document.getElementById("sp-" + p) && document.getElementById("sp-" + p).value) || "deny",
+          };
+        });
+        UI.withLoading(pubBtn, async function () {
           try {
-            const up = await API.call("POST", "/api/v2/publish/generate-tags", { title: tagTitle.value, content: tagContent.value, platform: tagPlatform.value });
-            if (!up.ok) { UI.showError(tagRegion, formatErr(up)); return; }
-            UI.showResult(tagRegion, up.data);
-          } catch (e) { UI.showError(tagRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
+            const up = await API.call("POST", "/api/v2/publish/submit", {
+              title: title,
+              content: pubContent.value,
+              tags: tags.slice(),
+              mediaUrls: mediaUrl ? [mediaUrl] : [],
+              coverImage: coverUrl,
+              isDraft: false,
+              platforms: platforms,
+            });
+            if (!up.ok) { UI.showError(pubRegion, formatErr(up)); return; }
+            UI.showResult(pubRegion, { message: "已提交发布 taskId=" + (up.data && up.data.taskId), taskId: up.data && up.data.taskId });
+            switchTab("queue");
+          } catch (e) { UI.showError(pubRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
 
-      genBtn.addEventListener("click", function () {
-        UI.withLoading(genBtn, async function () {
-          try {
-            const up = await API.call("POST", "/api/v2/publish/generate-content", { title: genTitle.value, mediaHint: genHint.value, platform: genPlatform.value });
-            if (!up.ok) { UI.showError(genRegion, formatErr(up)); return; }
-            UI.showResult(genRegion, up.data);
-          } catch (e) { UI.showError(genRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
+      function refreshQueue() {
+        API.call("GET", "/api/v2/publish/queue-status").then(function (r) {
+          if (!r.ok) { UI.showError(queueRegion, formatErr(r)); return; }
+          UI.showResult(queueRegion, r.data);
+        }).catch(function (e) { UI.showError(queueRegion, "请求异常: " + (e && e.message ? e.message : String(e))); });
+      }
+      function refreshHistory() {
+        API.call("GET", "/api/v2/publish/history?page=1&pageSize=20").then(function (r) {
+          if (!r.ok) { UI.showError(histRegion, formatErr(r)); return; }
+          UI.showResult(histRegion, r.data);
+        }).catch(function (e) { UI.showError(histRegion, "请求异常: " + (e && e.message ? e.message : String(e))); });
+      }
 
-      connBtn.addEventListener("click", function () {
-        UI.withLoading(connBtn, async function () {
-          try { const up = await API.call("GET", "/api/v2/publish/check-connections"); if (!up.ok) { UI.showError(connRegion, formatErr(up)); return; } UI.showResult(connRegion, up.data); } catch (e) { UI.showError(connRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
-      queueBtn.addEventListener("click", function () {
-        UI.withLoading(queueBtn, async function () {
-          try { const up = await API.call("GET", "/api/v2/publish/queue-status"); if (!up.ok) { UI.showError(queueRegion, formatErr(up)); return; } UI.showResult(queueRegion, up.data); } catch (e) { UI.showError(queueRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
-      histBtn.addEventListener("click", function () {
-        UI.withLoading(histBtn, async function () {
-          try { const up = await API.call("GET", "/api/v2/publish/history?page=" + (histPage.value || 1) + "&pageSize=20"); if (!up.ok) { UI.showError(histRegion, formatErr(up)); return; } UI.showResult(histRegion, up.data); } catch (e) { UI.showError(histRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
-
-      ckSaveBtn.addEventListener("click", function () {
-        const c = ckCookie.value.trim();
-        if (!c) { UI.showError(ckRegion, "请输入 Cookie"); return; }
-        UI.withLoading(ckSaveBtn, async function () {
-          try { const up = await API.call("POST", "/api/v2/publish/save-cookie", { platform: ckPlatform.value, cookieText: c }); if (!up.ok) { UI.showError(ckRegion, formatErr(up)); return; } UI.showResult(ckRegion, up.data); } catch (e) { UI.showError(ckRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
-      ckStatusBtn.addEventListener("click", function () {
-        UI.withLoading(ckStatusBtn, async function () {
-          try { const up = await API.call("GET", "/api/v2/publish/cookie-status"); if (!up.ok) { UI.showError(ckRegion, formatErr(up)); return; } UI.showResult(ckRegion, up.data); } catch (e) { UI.showError(ckRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
+      // ===== Cookie（注意保存后校验有效性）=====
+      function refreshCookieStatus() {
+        API.call("GET", "/api/v2/publish/cookie-status").then(function (r) {
+          if (!r.ok) return;
+          const list = (r.data || []);
+          list.forEach(function (p) {
+            const dot = platformDotEls[p.platform];
+            if (dot) dot.className = "dot " + (p.hasCookie ? "gn" : "rd");
+          });
+        }).catch(function () {});
+      }
+      function refreshCookie() {
+        UI.clear(cookieRegion);
+        API.call("GET", "/api/v2/publish/cookie-status").then(function (r) {
+          if (!r.ok) { UI.showError(cookieRegion, formatErr(r)); return; }
+          const list = (r.data || []);
+          list.forEach(function (p) {
+            const hint = COOKIE_HINTS[p.platform] || "从对应平台登录态获取 Cookie";
+            const ta = UI.el("textarea", { placeholder: "在此粘贴 Cookie 字符串..." });
+            const resLine = UI.el("div", { class: "hintline" });
+            const saveBtn = UI.el("button", { class: "btn", text: "保存 Cookie" });
+            const testBtn = UI.el("button", { class: "btn secondary", text: "测试连接" });
+            const clearBtn = UI.el("button", { class: "btn secondary", text: "清空" });
+            saveBtn.addEventListener("click", function () {
+              const v = ta.value.trim();
+              if (!v) { resLine.textContent = "请先粘贴 Cookie"; resLine.className = "hintline bad"; return; }
+              UI.withLoading(saveBtn, async function () {
+                try {
+                  const up = await API.call("POST", "/api/v2/publish/save-cookie", { platform: p.platform, cookieText: v });
+                  if (!up.ok) { resLine.textContent = "✗ " + formatErr(up); resLine.className = "hintline bad"; return; }
+                  const st = (up.data && up.data.cookieStatus) || {};
+                  if (st.valid) { resLine.textContent = "✓ 已保存，Cookie 有效"; resLine.className = "hintline ok"; ta.value = ""; }
+                  else { resLine.textContent = "⚠ 已保存，但 Cookie 已失效: " + (st.message || ""); resLine.className = "hintline bad"; }
+                  refreshCookieStatus(); refreshCookie();
+                } catch (e) { resLine.textContent = "✗ 请求异常: " + (e && e.message ? e.message : String(e)); resLine.className = "hintline bad"; }
+              });
+            });
+            testBtn.addEventListener("click", function () {
+              UI.withLoading(testBtn, async function () {
+                try {
+                  const up = await API.call("POST", "/api/v2/publish/check-cookie", { platform: p.platform });
+                  if (!up.ok) { resLine.textContent = "✗ " + formatErr(up); resLine.className = "hintline bad"; return; }
+                  if (up.data && up.data.hasCookie && up.data.valid) { resLine.textContent = "✓ " + (up.data.message || "有效"); resLine.className = "hintline ok"; }
+                  else if (up.data && up.data.hasCookie && !up.data.valid) { resLine.textContent = "✗ " + (up.data.message || "Cookie 已过期"); resLine.className = "hintline bad"; }
+                  else { resLine.textContent = "✗ 未配置 Cookie"; resLine.className = "hintline bad"; }
+                  refreshCookieStatus(); refreshCookie();
+                } catch (e) { resLine.textContent = "✗ 请求异常: " + (e && e.message ? e.message : String(e)); resLine.className = "hintline bad"; }
+              });
+            });
+            clearBtn.addEventListener("click", function () { ta.value = ""; resLine.textContent = "已清空输入框"; resLine.className = "hintline"; });
+            cookieRegion.appendChild(UI.el("div", { class: "subcfg" }, [
+              UI.el("h4", {}, [(p.hasCookie ? "🟢 " : "🔴 ") + (PLAT_NAME[p.platform] || p.platform) + (p.hasCookie ? "（已配置）" : "（未配置）")]),
+              UI.el("div", { class: "hintline", text: hint }),
+              ta,
+              UI.el("div", { class: "row" }, [saveBtn, testBtn, clearBtn]),
+              resLine,
+            ]));
+          });
+          if (!list.length) cookieRegion.appendChild(UI.el("div", { class: "hintline", text: "暂无平台信息" }));
+        }).catch(function (e) { UI.showError(cookieRegion, "请求异常: " + (e && e.message ? e.message : String(e))); });
+      }
     },
   };
 })();
