@@ -18,8 +18,8 @@
   }
 
   // 单文件且超过该阈值时走分片上传，规避反向代理 / Cloudflare 的 body 大小限制 (413)。
-  // 单片 < 1MB，确保即使默认 nginx client_max_body_size(1m) 也能直传通过。
-  const CHUNK_SIZE = 800 * 1024;
+  // 单片 10MB；需确保反向代理 client_max_body_size >= 单片大小（建议 16m），Cloudflare 免费版单请求 100MB 上限内。
+  const CHUNK_SIZE = 10 * 1024 * 1024;
 
   function genUploadId() {
     const buf = new Uint8Array(16);
