@@ -56,6 +56,7 @@
       let platformCfg = {};
       const platformEls = {};       // checkbox
       const platformDotEls = {};     // 状态点（cookie 是否有效）
+      const cookieHas = {};         // 各平台是否已配置 Cookie
       const selPlats = [];
 
       // ===== 发布编辑面板 =====
@@ -75,7 +76,9 @@
         const dot = UI.el("span", { class: "dot rd" });
         platformEls[p] = c; platformDotEls[p] = dot;
         c.addEventListener("change", function () { togglePlat(p); });
-        return UI.el("label", { class: "inline" }, [c, dot, " " + (PLAT_NAME[p] || p)]);
+        const cfgLink = UI.el("button", { class: "linkbtn", text: "配置 Cookie", title: "配置 " + (PLAT_NAME[p] || p) + " 的 Cookie" });
+        cfgLink.addEventListener("click", function (e) { e.preventDefault(); switchTab("cookie"); });
+        return UI.el("label", { class: "inline plat-item" }, [c, dot, " " + (PLAT_NAME[p] || p) + " ", cfgLink]);
       }));
       const platConfigBox = UI.el("div", {});
       const genContentBtn = UI.el("button", { class: "btn secondary", text: "AI 生成文案" });
@@ -107,6 +110,12 @@
         selPlats.forEach(function (p) {
           const cfg = platformCfg[p]; if (!cfg) return;
           const kids = [UI.el("strong", { text: (PLAT_NAME[p] || p) + " 配置" })];
+          if (!cookieHas[p]) {
+            const go = UI.el("button", { class: "linkbtn", text: "去配置 Cookie" });
+            go.addEventListener("click", function () { switchTab("cookie"); });
+            kids.push(UI.el("div", { class: "hintline bad", text: "⚠ 该平台尚未配置 Cookie，发布将失败。" }));
+            kids.push(go);
+          }
           if (cfg.CreativeStatements && cfg.CreativeStatements.length) {
             const sel = UI.el("select", {}, cfg.CreativeStatements.map(function (c) { return opt(c.Value, c.Label); }));
             sel.id = "cs-" + p;
@@ -253,6 +262,16 @@
         const title = pubTitle.value.trim();
         if (!title) { UI.showError(pubRegion, "请输入标题"); return; }
         if (!selPlats.length) { UI.showError(pubRegion, "请选择至少一个平台"); return; }
+        const missing = selPlats.filter(function (p) { return !cookieHas[p]; });
+        if (missing.length) {
+          const names = missing.map(function (p) { return PLAT_NAME[p] || p; }).join("、");
+          UI.clear(pubRegion);
+          const go = UI.el("button", { class: "linkbtn", text: "去配置 Cookie" });
+          go.addEventListener("click", function () { switchTab("cookie"); });
+          pubRegion.appendChild(UI.el("div", { class: "hintline bad", text: "以下平台尚未配置 Cookie，无法发布：" + names }));
+          pubRegion.appendChild(go);
+          return;
+        }
         const platforms = selPlats.map(function (p) {
           return {
             platformId: p,
@@ -297,9 +316,11 @@
           if (!r.ok) return;
           const list = asList(r.data);
           list.forEach(function (p) {
+            cookieHas[p.platform] = !!p.hasCookie;
             const dot = platformDotEls[p.platform];
             if (dot) dot.className = "dot " + (p.hasCookie ? "gn" : "rd");
           });
+          renderPlatConfig();
         }).catch(function () {});
       }
       function refreshCookie() {

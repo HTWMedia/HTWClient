@@ -194,6 +194,11 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .scriptbox pre { white-space: pre-wrap; word-break: break-word; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; margin: 0; }
 .detail-actions { display: flex; gap: 10px; margin-top: 12px; }
 
+/* 发布模块：平台行内「配置 Cookie」小按钮 */
+.linkbtn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0 4px; text-decoration: underline; }
+.linkbtn:hover { color: #1d4ed8; }
+.plat-item { gap: 2px; }
+
 /* 设置模块：未配置 AuthKey 时的提示横幅 + 状态 */
 .key-warning { display: block; background: #fff7ed; border: 1px solid #fed7aa; color: #c2410c; padding: 10px 14px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; cursor: pointer; }
 .key-warning[hidden] { display: none; }
