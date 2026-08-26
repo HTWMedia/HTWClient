@@ -51,7 +51,7 @@
             authHeader()
           );
           const norm = normalize(res);
-          if (!norm.ok) { failed = new Error("分片 " + i + " 上传失败: " + (norm.message || norm.code)); return; }
+          if (!norm.ok) { const e = new Error("分片 " + i + " 上传失败: " + (norm.message || norm.code)); e.httpError = true; failed = e; return; }
         } catch (e) { failed = e; return; }
       }
     }
@@ -82,6 +82,9 @@
       try {
         return await chunkedUpload(method, path, filePaths[0], fields || {}, fileField);
       } catch (e) {
+        // 服务端明确拒绝分片（如缺少 /api/v2/files/chunk 端点）时，不要再回退为整文件上传：
+        // 大文件直传必然被反向代理以 413 / 连接重置（"socket hang up"）拒绝，回退只会掩盖真正原因。
+        if (e && e.httpError) throw e;
         console.warn("分片上传失败，回退为整文件上传:", e);
       }
     }
