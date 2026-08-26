@@ -37,7 +37,12 @@
     const fetcher = opts.fetcher || ((id) => call("GET", "/api/v2/task/" + id));
     const start = Date.now();
     while (true) {
-      const r = await fetcher(taskId);
+      let r;
+      try {
+        r = await fetcher(taskId);
+      } catch (e) {
+        return { ok: false, code: "NETWORK", message: e && e.message ? e.message : String(e), raw: e };
+      }
       if (!r.ok) return { ok: false, code: r.code, message: r.message, raw: r.raw };
       const data = r.data || {};
       if (data.status === "failed") return { ok: false, code: data.errCode || "TASK_FAILED", message: data.errMsg || "task failed", raw: data };
