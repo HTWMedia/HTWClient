@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, net } = require("electron");
+const { contextBridge, ipcRenderer, net, shell } = require("electron");
 const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
@@ -9,6 +9,10 @@ const API_BASE = process.env.HTW_API_BASE || "https://htwmedia.dpdns.org";
 // (AuthKey header) is done by the renderer; the key never leaves the client.
 contextBridge.exposeInMainWorld("htw", {
   apiBase: API_BASE,
+  // 在系统默认浏览器中打开外部链接（结果里的 URL 点击时用）。
+  openExternal: (url) => {
+    try { if (url) shell.openExternal(url); } catch (e) { /* ignore */ }
+  },
   // Generic V2 caller. `body` is optional (omitted => GET).
   call: async (method, path, body, apiKey) => {
     const headers = { AuthKey: apiKey || "" };
@@ -88,7 +92,9 @@ contextBridge.exposeInMainWorld("htw", {
         });
       }
 
-      req.on("error", (err) => reject(err));
+      req.on("error", (err) =>
+        resolve({ status: 0, ok: false, data: { errCode: 0, errMsg: err.message } })
+      );
 
       req.on("response", (response) => {
         const chunks = [];
@@ -97,16 +103,8 @@ contextBridge.exposeInMainWorld("htw", {
           const text = Buffer.concat(chunks).toString("utf-8");
           let body;
           try { body = JSON.parse(text); } catch { body = text; }
-          if (response.statusCode >= 200 && response.statusCode < 300) {
-            resolve({ status: response.statusCode, body });
-          } else {
-            const err = new Error(
-              `Upload failed with status ${response.statusCode}`
-            );
-            err.status = response.statusCode;
-            err.body = body;
-            reject(err);
-          }
+          const ok = response.statusCode >= 200 && response.statusCode < 300;
+          resolve({ status: response.statusCode, ok, data: body });
         });
       });
 

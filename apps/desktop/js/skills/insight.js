@@ -27,7 +27,7 @@
           try {
             const r = await fn();
             if (!r.ok) { UI.showError(region, formatErr(r)); return; }
-            UI.showResult(region, r.data);
+            UI.renderResult(region, r.data);
           } catch (e) {
             UI.showError(region, "请求异常: " + (e && e.message ? e.message : String(e)));
           }
@@ -39,12 +39,12 @@
       const copyBtn = UI.el("button", { class: "btn", text: "分析文案" });
       const copyCard = section("文案分析", [field("文案", copyText)], copyBtn, copyRegion);
 
-      const videoUrl = UI.el("input", { type: "text", placeholder: "视频链接 URL" });
+      const videoUrl = UI.el("input", { type: "text", placeholder: "视频链接 URL（仅支持 B站 / 小红书 / 抖音）" });
       const videoRegion = UI.el("div");
       const videoBtn = UI.el("button", { class: "btn", text: "分析视频" });
       const videoCard = section("视频分析", [field("视频 URL", videoUrl)], videoBtn, videoRegion);
 
-      const accountUrl = UI.el("input", { type: "text", placeholder: "账号主页 URL" });
+      const accountUrl = UI.el("input", { type: "text", placeholder: "账号主页 URL（仅支持 B站 / 小红书 / 抖音）" });
       const accountRegion = UI.el("div");
       const accountBtn = UI.el("button", { class: "btn", text: "分析账号" });
       const accountCard = section("账号分析", [field("账号 URL", accountUrl)], accountBtn, accountRegion);
@@ -68,16 +68,9 @@
       const searchBtn = UI.el("button", { class: "btn", text: "搜索" });
       const searchCard = section("搜索", [field("平台", searchPlatform), field("关键词", searchKeyword), field("数量", searchCount)], searchBtn, searchRegion);
 
-      const cookiePlatform = UI.el("select", {}, platformOptions());
-      const cookieText = UI.el("textarea", { placeholder: "粘贴 Cookie 文本…" });
-      const cookieRegion = UI.el("div");
-      const cookieBtn = UI.el("button", { class: "btn", text: "保存 Cookie" });
-      const cookieStatusBtn = UI.el("button", { class: "btn secondary", text: "刷新状态" });
-      const cookieCard = section("Cookie", [field("平台", cookiePlatform), field("Cookie", cookieText)], UI.el("div", { class: "row" }, [cookieBtn, cookieStatusBtn]), cookieRegion);
-
       UI.mount(panel, UI.el("div", {}, [
         UI.el("h2", { text: "洞察 Insight" }),
-        copyCard, videoCard, accountCard, hotCard, searchCard, cookieCard,
+        copyCard, videoCard, accountCard, hotCard, searchCard,
       ]));
 
       copyBtn.addEventListener("click", function () {
@@ -102,14 +95,6 @@
         const kw = searchKeyword.value.trim();
         if (!kw) { UI.showError(searchRegion, "请输入关键词"); return; }
         run(searchBtn, searchRegion, function () { return API.call("POST", "/api/v2/insight/search", { platform: searchPlatform.value, keyword: kw, count: Number(searchCount.value) || 10 }); });
-      });
-      cookieBtn.addEventListener("click", function () {
-        const c = cookieText.value.trim();
-        if (!c) { UI.showError(cookieRegion, "请输入 Cookie"); return; }
-        run(cookieBtn, cookieRegion, function () { return API.call("POST", "/api/v2/insight/save-cookie", { platform: cookiePlatform.value, cookieText: c }); });
-      });
-      cookieStatusBtn.addEventListener("click", function () {
-        run(cookieStatusBtn, cookieRegion, function () { return API.call("GET", "/api/v2/insight/cookie-status"); });
       });
     },
   };
