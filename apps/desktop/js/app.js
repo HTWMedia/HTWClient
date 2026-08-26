@@ -7,10 +7,16 @@
   function applyAuth() {
     const base = getBaseInput().value.trim();
     const key = getKeyInput().value;
+    if (window.htw && window.htw.saveConfig) window.htw.saveConfig({ apiBase: base, apiKey: key });
     if (base) window.HTWApi.setBase(base);
     window.HTWApi.setKey(key);
-    if (window.htw && window.htw.saveConfig) window.htw.saveConfig({ apiBase: base, apiKey: key });
     refreshKeyUI();
+  }
+
+  function persistAuth() {
+    if (window.htw && window.htw.saveConfig) {
+      window.htw.saveConfig({ apiBase: getBaseInput().value.trim(), apiKey: getKeyInput().value });
+    }
   }
 
   function openGetKey() {
@@ -102,6 +108,8 @@
     wireNav();
     mountSkills();
     showPanel("tools");
+    window.addEventListener("beforeunload", persistAuth);
+    document.addEventListener("visibilitychange", function () { if (document.visibilityState === "hidden") persistAuth(); });
   });
 
   window.App = {
