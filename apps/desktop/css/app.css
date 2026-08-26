@@ -145,3 +145,7 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .status-badge.ing { color: #f59e0b; background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.4); }
 .status-badge.neutral { color: var(--muted); background: var(--panel-2); }
 .copy-btn { margin-top: 10px; font-size: 12px; padding: 4px 12px; }
+
+/* 工具模块：每项独立卡片，像 web 端一样网格排列 */
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; align-items: start; }
+.card-grid .card { margin-bottom: 0; }

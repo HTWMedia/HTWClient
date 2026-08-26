@@ -56,7 +56,7 @@
       }
 
       const voiceFile = UI.fileInput({ label: "选择音频", accept: "audio/*" });
-      const voiceRegion = UI.el("div");
+      const uploadRegion = UI.el("div");
       const voiceUploadBtn = UI.el("button", { class: "btn", text: "上传音频" });
       let voiceFileId = null;
 
@@ -65,37 +65,50 @@
       const transTranslate = UI.el("input", { type: "checkbox" });
       const transRole = UI.el("input", { type: "text", placeholder: "角色" });
       const transAlign = UI.el("input", { type: "checkbox" });
+      const transcribeRegion = UI.el("div");
       const transcribeBtn = UI.el("button", { class: "btn", text: "转写" });
+
       const translateLang = UI.el("input", { type: "text", placeholder: "目标语言" });
+      const translateRegion = UI.el("div");
       const translateBtn = UI.el("button", { class: "btn", text: "翻译" });
+
+      const summarizeRegion = UI.el("div");
       const summarizeBtn = UI.el("button", { class: "btn", text: "总结" });
-      const lyricsBtn = UI.el("button", { class: "btn", text: "歌词" });
+
+      const lyricsRegion = UI.el("div");
+      const lyricsBtn = UI.el("button", { class: "btn", text: "歌词提取" });
+
       const sepType = UI.el("select", {}, [opt("human"), opt("music")]);
+      const separateRegion = UI.el("div");
       const separateBtn = UI.el("button", { class: "btn", text: "人声/伴奏分离" });
+
       const ttsText = UI.el("textarea", { placeholder: "要合成的文本" });
       const ttsSpeaker = UI.el("input", { type: "text", placeholder: "speaker" });
+      const ttsRegion = UI.el("div");
       const ttsBtn = UI.el("button", { class: "btn", text: "语音合成" });
 
-      const voiceCard = section("语音 Voice", [
-        voiceFile,
+      const voiceUploadCard = section("音频上传 Upload", [voiceFile], voiceUploadBtn, uploadRegion, "fa-upload");
+      const transcribeCard = section("语音转写 Transcribe", [
         field("转写格式", transFmt), field("语言", transLang), field("翻译", transTranslate), field("角色", transRole), field("对齐文本", transAlign),
-        field("翻译目标语言", translateLang),
-        field("分离类型", sepType),
-        field("TTS 文本", ttsText), field("TTS speaker", ttsSpeaker),
-      ], [voiceUploadBtn, transcribeBtn, translateBtn, summarizeBtn, lyricsBtn, separateBtn, ttsBtn], voiceRegion, "fa-microphone");
+      ], transcribeBtn, transcribeRegion, "fa-language");
+      const translateCard = section("翻译 Translate", [field("目标语言", translateLang)], translateBtn, translateRegion, "fa-language");
+      const summarizeCard = section("总结 Summarize", [], summarizeBtn, summarizeRegion, "fa-align-left");
+      const lyricsCard = section("歌词提取 Lyrics", [], lyricsBtn, lyricsRegion, "fa-music");
+      const separateCard = section("人声/伴奏分离 Separate", [field("分离类型", sepType)], separateBtn, separateRegion, "fa-scissors");
+      const ttsCard = section("语音合成 TTS", [field("TTS 文本", ttsText), field("TTS speaker", ttsSpeaker)], ttsBtn, ttsRegion, "fa-comment-dots");
 
       const imgPrompt = UI.el("textarea", { placeholder: "提示词" });
       const imgModel = UI.el("input", { type: "text", value: "default", placeholder: "模型" });
       const imgRatio = UI.el("input", { type: "text", placeholder: "比例 如 16:9" });
       const imgRes = UI.el("input", { type: "text", placeholder: "分辨率" });
       const imgNeg = UI.el("textarea", { placeholder: "负向提示词" });
+      const imgGenRegion = UI.el("div");
       const imgGenBtn = UI.el("button", { class: "btn", text: "生成图片" });
       const imgFile = UI.fileInput({ label: "选择图片", accept: "image/*" });
+      const imgRecRegion = UI.el("div");
       const imgRecBtn = UI.el("button", { class: "btn", text: "识别图片" });
-      const imgRegion = UI.el("div");
-      const imgCard = section("图像 Image", [
-        field("提示词", imgPrompt), field("模型", imgModel), field("比例", imgRatio), field("分辨率", imgRes), field("负向提示", imgNeg), imgFile,
-      ], [imgGenBtn, imgRecBtn], imgRegion, "fa-image");
+      const imgGenCard = section("图像生成 Generate", [field("提示词", imgPrompt), field("模型", imgModel), field("比例", imgRatio), field("分辨率", imgRes), field("负向提示词", imgNeg)], imgGenBtn, imgGenRegion, "fa-wand-magic-sparkles");
+      const imgRecCard = section("图像识别 Recognize", [imgFile], imgRecBtn, imgRecRegion, "fa-image");
 
       const agentTopic = UI.el("input", { type: "text", placeholder: "主题" });
       const agentPlatform = UI.el("select", {}, [opt("xhs"), opt("bilibili"), opt("douyin"), opt("toutiao")]);
@@ -116,29 +129,32 @@
       const subEngine = UI.el("select", {}, [opt("ocr"), opt("kimi")]);
       const subBtn = UI.el("button", { class: "btn", text: "提取字幕" });
       const subRegion = UI.el("div");
-      const subCard = section("字幕 Subtitle", [subFile, field("格式", subFormat), field("引擎", subEngine)], subBtn, subRegion, "fa-closed-captioning");
+      const subCard = section("字幕提取 Subtitle", [subFile, field("格式", subFormat), field("引擎", subEngine)], subBtn, subRegion, "fa-closed-captioning");
 
       const tplKeyword = UI.el("input", { type: "text", placeholder: "关键词" });
       const tplPage = UI.el("input", { type: "number", value: "1" });
       const tplBtn = UI.el("button", { class: "btn", text: "搜索模板" });
       const tplRegion = UI.el("div");
-      const tplCard = section("模板 Template", [field("关键词", tplKeyword), field("页码", tplPage)], tplBtn, tplRegion, "fa-layer-group");
+      const tplCard = section("模板搜索 Template", [field("关键词", tplKeyword), field("页码", tplPage)], tplBtn, tplRegion, "fa-layer-group");
 
       UI.mount(panel, UI.el("div", {}, [
         UI.el("h2", { text: "工具 Tools" }),
-        voiceCard, imgCard, agentCard, subCard, tplCard,
+        UI.el("div", { class: "card-grid" }, [
+          voiceUploadCard, transcribeCard, translateCard, summarizeCard, lyricsCard, separateCard, ttsCard,
+          imgGenCard, imgRecCard, agentCard, subCard, tplCard,
+        ]),
       ]));
 
       voiceUploadBtn.addEventListener("click", function () {
         UI.withLoading(voiceUploadBtn, async function () {
           try {
             const files = await readFiles(voiceFile);
-            if (!files.length) { UI.showError(voiceRegion, "请选择音频"); return; }
+            if (!files.length) { UI.showError(uploadRegion, "请选择音频"); return; }
             const up = await API.upload("POST", "/api/v2/voice/upload", files, {});
-            if (!up.ok) { UI.showError(voiceRegion, formatErr(up)); return; }
+            if (!up.ok) { UI.showError(uploadRegion, formatErr(up)); return; }
             voiceFileId = up.data && up.data.fileId;
-            UI.showResult(voiceRegion, { fileId: voiceFileId });
-          } catch (e) { UI.showError(voiceRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
+            UI.showResult(uploadRegion, { fileId: voiceFileId });
+          } catch (e) { UI.showError(uploadRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
       function needVoice(region) { if (!voiceFileId) { UI.showError(region, "请先上传音频"); return false; } return true; }
@@ -150,88 +166,88 @@
       }
 
       transcribeBtn.addEventListener("click", function () {
-        if (!needVoice(voiceRegion)) return;
+        if (!needVoice(transcribeRegion)) return;
         UI.withLoading(transcribeBtn, async function () {
           try {
             const up = await API.call("POST", "/api/v2/voice/transcribe", { fileId: voiceFileId, format: transFmt.value, language: transLang.value, translate: transTranslate.checked, role: transRole.value, alignText: transAlign.checked });
-            if (!up.ok) { UI.showError(voiceRegion, formatErr(up)); return; }
-            UI.showResult(voiceRegion, { message: "已提交 taskId=" + (up.data && up.data.taskId) });
-            await pollVoiceTask(voiceRegion, up.data && up.data.taskId);
-          } catch (e) { UI.showError(voiceRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
+            if (!up.ok) { UI.showError(transcribeRegion, formatErr(up)); return; }
+            UI.showResult(transcribeRegion, { message: "已提交 taskId=" + (up.data && up.data.taskId) });
+            await pollVoiceTask(transcribeRegion, up.data && up.data.taskId);
+          } catch (e) { UI.showError(transcribeRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
       translateBtn.addEventListener("click", function () {
-        if (!needVoice(voiceRegion)) return;
+        if (!needVoice(translateRegion)) return;
         UI.withLoading(translateBtn, async function () {
           try {
             const up = await API.call("POST", "/api/v2/voice/translate", { fileId: voiceFileId, language: translateLang.value });
-            if (!up.ok) { UI.showError(voiceRegion, formatErr(up)); return; }
-            await pollVoiceTask(voiceRegion, up.data && up.data.taskId);
-          } catch (e) { UI.showError(voiceRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
+            if (!up.ok) { UI.showError(translateRegion, formatErr(up)); return; }
+            await pollVoiceTask(translateRegion, up.data && up.data.taskId);
+          } catch (e) { UI.showError(translateRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
       summarizeBtn.addEventListener("click", function () {
-        if (!needVoice(voiceRegion)) return;
+        if (!needVoice(summarizeRegion)) return;
         UI.withLoading(summarizeBtn, async function () {
           try {
             const up = await API.call("POST", "/api/v2/voice/summarize", { fileId: voiceFileId });
-            if (!up.ok) { UI.showError(voiceRegion, formatErr(up)); return; }
-            await pollVoiceTask(voiceRegion, up.data && up.data.taskId);
-          } catch (e) { UI.showError(voiceRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
+            if (!up.ok) { UI.showError(summarizeRegion, formatErr(up)); return; }
+            await pollVoiceTask(summarizeRegion, up.data && up.data.taskId);
+          } catch (e) { UI.showError(summarizeRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
       lyricsBtn.addEventListener("click", function () {
-        if (!needVoice(voiceRegion)) return;
+        if (!needVoice(lyricsRegion)) return;
         UI.withLoading(lyricsBtn, async function () {
           try {
             const up = await API.call("POST", "/api/v2/voice/lyrics", { fileId: voiceFileId });
-            if (!up.ok) { UI.showError(voiceRegion, formatErr(up)); return; }
-            await pollVoiceTask(voiceRegion, up.data && up.data.taskId);
-          } catch (e) { UI.showError(voiceRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
+            if (!up.ok) { UI.showError(lyricsRegion, formatErr(up)); return; }
+            await pollVoiceTask(lyricsRegion, up.data && up.data.taskId);
+          } catch (e) { UI.showError(lyricsRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
       separateBtn.addEventListener("click", function () {
-        if (!needVoice(voiceRegion)) return;
+        if (!needVoice(separateRegion)) return;
         UI.withLoading(separateBtn, async function () {
           try {
             const up = await API.call("POST", "/api/v2/voice/separate", { fileId: voiceFileId, type: sepType.value });
-            if (!up.ok) { UI.showError(voiceRegion, formatErr(up)); return; }
-            await pollVoiceTask(voiceRegion, up.data && up.data.taskId);
-          } catch (e) { UI.showError(voiceRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
+            if (!up.ok) { UI.showError(separateRegion, formatErr(up)); return; }
+            await pollVoiceTask(separateRegion, up.data && up.data.taskId);
+          } catch (e) { UI.showError(separateRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
       ttsBtn.addEventListener("click", function () {
         const t = ttsText.value.trim();
-        if (!t) { UI.showError(voiceRegion, "请输入文本"); return; }
+        if (!t) { UI.showError(ttsRegion, "请输入文本"); return; }
         UI.withLoading(ttsBtn, async function () {
           try {
             const up = await API.call("POST", "/api/v2/voice/tts", { text: t, speaker: ttsSpeaker.value });
-            if (!up.ok) { UI.showError(voiceRegion, formatErr(up)); return; }
-            await pollVoiceTask(voiceRegion, up.data && up.data.taskId);
-          } catch (e) { UI.showError(voiceRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
+            if (!up.ok) { UI.showError(ttsRegion, formatErr(up)); return; }
+            await pollVoiceTask(ttsRegion, up.data && up.data.taskId);
+          } catch (e) { UI.showError(ttsRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
 
       imgGenBtn.addEventListener("click", function () {
         const p = imgPrompt.value.trim();
-        if (!p) { UI.showError(imgRegion, "请输入提示词"); return; }
+        if (!p) { UI.showError(imgGenRegion, "请输入提示词"); return; }
         UI.withLoading(imgGenBtn, async function () {
           try {
             const up = await API.call("POST", "/api/v2/image/generate", { prompt: p, model: imgModel.value, ratio: imgRatio.value, resolution: imgRes.value, negativePrompt: imgNeg.value });
-            if (!up.ok) { UI.showError(imgRegion, formatErr(up)); return; }
-            await pollImage(up.data && up.data.taskId).then(function (res) { if (!res.ok) { UI.showError(imgRegion, formatErr(res)); return; } UI.showResult(imgRegion, res.data); });
-          } catch (e) { UI.showError(imgRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
+            if (!up.ok) { UI.showError(imgGenRegion, formatErr(up)); return; }
+            await pollImage(up.data && up.data.taskId).then(function (res) { if (!res.ok) { UI.showError(imgGenRegion, formatErr(res)); return; } UI.showResult(imgGenRegion, res.data); });
+          } catch (e) { UI.showError(imgGenRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
       imgRecBtn.addEventListener("click", function () {
         UI.withLoading(imgRecBtn, async function () {
           try {
             const files = await readFiles(imgFile);
-            if (!files.length) { UI.showError(imgRegion, "请选择图片"); return; }
+            if (!files.length) { UI.showError(imgRecRegion, "请选择图片"); return; }
             const up = await API.upload("POST", "/api/v2/image/recognize", files, {});
-            if (!up.ok) { UI.showError(imgRegion, formatErr(up)); return; }
-            UI.showResult(imgRegion, up.data);
-          } catch (e) { UI.showError(imgRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
+            if (!up.ok) { UI.showError(imgRecRegion, formatErr(up)); return; }
+            UI.showResult(imgRecRegion, up.data);
+          } catch (e) { UI.showError(imgRecRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
 
