@@ -35,7 +35,7 @@
         });
       }
 
-      const copyText = UI.el("textarea", { placeholder: "粘贴要分析的文案…" });
+      const copyText = UI.el("textarea", { placeholder: "输入文案或今日头条文章链接" });
       const copyRegion = UI.el("div");
       const copyBtn = UI.el("button", { class: "btn", text: "分析文案" });
       const copyCard = section("文案分析", [field("文案", copyText)], copyBtn, copyRegion, "fa-file-lines");
