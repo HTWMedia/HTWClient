@@ -107,32 +107,45 @@
       const separateCard = section("人声/伴奏分离 Separate", [separateFile, field("分离类型", sepType)], separateBtn, separateRegion, "fa-scissors");
 
       const ttsText = UI.el("textarea", { placeholder: "要合成的文本" });
-      const ttsSpeaker = UI.el("input", { type: "text", placeholder: "speaker" });
+      const ttsSpeakers = [
+        opt("zh_female_qinglengnv", "清冷女声"), opt("ICL_zh_female_jilupianxq2", "纪录片女声"),
+        opt("ICL_zh_male_jilupianjmh", "纪录片男声"), opt("zh_female_aoyunliuyuxi", "奥运刘雨熙"),
+        opt("ICL_zh_female_basidigua2", "活泼女声"), opt("ICL_zh_male_momodianying", "电影男声"),
+        opt("zh_female_luoliwm_emo_v2_mars_bigtts", "萝莉女声"), opt("zh_male_yourougongzi_emo_v2_mars_bigtts", "温柔男声"),
+        opt("BV009_DPE_streaming", "标准男声"), opt("BV104_streaming", "标准女声"),
+        opt("ICL_zh_female_szrlili2_jianying", "活力女声(剪映)"), opt("ICL_zh_female_szrliuwan2_jianying", "温柔女声(剪映)"),
+        opt("ICL_zh_female_szrtangtang_jianying", "糖糖女声(剪映)"), opt("ICL_zh_female_szryanyan_jianying", "妍妍女声(剪映)"),
+        opt("ICL_zh_male_szrlimu_jianying", "立木男声(剪映)"), opt("ICL_zh_male_szryaohang_jianying", "耀航男声(剪映)"),
+        opt("zh_female_luolizy_emo_v2_mars_bigtts", "萝莉女声(zy)"),
+      ];
+      const ttsSpeaker = UI.el("select", {}, ttsSpeakers);
       const ttsRegion = UI.el("div");
       const ttsBtn = UI.el("button", { class: "btn", text: "语音合成" });
-      const ttsCard = section("语音合成 TTS", [field("TTS 文本", ttsText), field("TTS speaker", ttsSpeaker)], ttsBtn, ttsRegion, "fa-comment-dots");
+      const ttsCard = section("语音合成 TTS", [field("TTS 文本", ttsText), field("发音人", ttsSpeaker)], ttsBtn, ttsRegion, "fa-comment-dots");
 
       const imgPrompt = UI.el("textarea", { placeholder: "提示词" });
-      const imgModel = UI.el("input", { type: "text", value: "default", placeholder: "模型" });
-      const imgRatio = UI.el("input", { type: "text", placeholder: "比例 如 16:9" });
-      const imgRes = UI.el("input", { type: "text", placeholder: "分辨率" });
+      const imgRatio = UI.el("select", {}, [opt("16:9", "16:9 横屏"), opt("9:16", "9:16 竖屏"), opt("1:1", "1:1 正方形"), opt("4:3", "4:3"), opt("3:4", "3:4"), opt("3:2", "3:2"), opt("2:3", "2:3"), opt("21:9", "21:9 超宽屏")]);
+      const imgRes = UI.el("select", {}, [opt("1k", "1K (标准)"), opt("2k", "2K (高清)"), opt("4k", "4K (超清)")]);
       const imgNeg = UI.el("textarea", { placeholder: "负向提示词" });
       const imgGenRegion = UI.el("div");
       const imgGenBtn = UI.el("button", { class: "btn", text: "生成图片" });
       const imgFile = UI.fileInput({ label: "选择图片", accept: "image/*" });
       const imgRecRegion = UI.el("div");
       const imgRecBtn = UI.el("button", { class: "btn", text: "识别图片" });
-      const imgGenCard = section("图像生成 Generate", [field("提示词", imgPrompt), field("模型", imgModel), field("比例", imgRatio), field("分辨率", imgRes), field("负向提示词", imgNeg)], imgGenBtn, imgGenRegion, "fa-wand-magic-sparkles");
+      const imgGenCard = section("图像生成 Generate", [field("提示词", imgPrompt), field("比例", imgRatio), field("分辨率", imgRes), field("负向提示词", imgNeg)], imgGenBtn, imgGenRegion, "fa-wand-magic-sparkles");
       const imgRecCard = section("图像识别 Recognize", [imgFile], imgRecBtn, imgRecRegion, "fa-image");
 
       const agentTopic = UI.el("input", { type: "text", placeholder: "主题" });
       const agentPlatform = UI.el("select", {}, [opt("xhs"), opt("bilibili"), opt("douyin"), opt("toutiao")]);
-      const agentLength = UI.el("input", { type: "number", value: "60" });
-      const agentStyle = UI.el("input", { type: "text", placeholder: "风格" });
-      const agentRatio = UI.el("input", { type: "text", placeholder: "比例" });
-      const agentMode = UI.el("input", { type: "text", placeholder: "模式" });
+      const agentLength = UI.el("select", {}, [opt("Short", "短"), opt("Medium", "中"), opt("Long", "长")]);
+      const agentStyle = UI.el("select", {}, [
+        opt("Default", "默认"), opt("HistoricalDocumentary", "历史纪录片"), opt("TechExplainer", "科技解说"),
+        opt("AnimeGhibli", "吉卜力动漫"), opt("Cinematic", "电影感"), opt("Educational", "教学"), opt("Marketing", "电商带货"),
+      ]);
+      const agentRatio = UI.el("select", {}, [opt("16:9", "16:9 横屏"), opt("9:16", "9:16 竖屏"), opt("1:1", "1:1 正方形"), opt("4:3", "4:3")]);
+      const agentMode = UI.el("select", {}, [opt("Quick", "快速"), opt("Full", "完整")]);
       const agentRef = UI.el("textarea", { placeholder: "参考文本" });
-      const agentVoice = UI.el("input", { type: "text", placeholder: "配音" });
+      const agentVoice = UI.el("select", {}, [opt("", "默认配音")].concat(ttsSpeakers));
       const agentBtn = UI.el("button", { class: "btn", text: "一键成片" });
       const agentRegion = UI.el("div");
       const agentCard = section("智能体 Agent", [
@@ -141,10 +154,9 @@
 
       const subFile = UI.fileInput({ label: "选择视频", accept: "video/*" });
       const subFormat = UI.el("select", {}, [opt("txt"), opt("srt")]);
-      const subEngine = UI.el("select", {}, [opt("ocr"), opt("kimi")]);
       const subBtn = UI.el("button", { class: "btn", text: "提取字幕" });
       const subRegion = UI.el("div");
-      const subCard = section("字幕提取 Subtitle", [subFile, field("格式", subFormat), field("引擎", subEngine)], subBtn, subRegion, "fa-closed-captioning");
+      const subCard = section("字幕提取 Subtitle", [subFile, field("格式", subFormat)], subBtn, subRegion, "fa-closed-captioning");
 
       const tplKeyword = UI.el("input", { type: "text", placeholder: "关键词" });
       const tplPage = UI.el("input", { type: "number", value: "1" });
@@ -240,7 +252,7 @@
         if (!p) { UI.showError(imgGenRegion, "请输入提示词"); return; }
         UI.withLoading(imgGenBtn, async function () {
           try {
-            const up = await API.call("POST", "/api/v2/image/generate", { prompt: p, model: imgModel.value, ratio: imgRatio.value, resolution: imgRes.value, negativePrompt: imgNeg.value });
+            const up = await API.call("POST", "/api/v2/image/generate", { prompt: p, model: "v4.5", ratio: imgRatio.value, resolution: imgRes.value, negativePrompt: imgNeg.value });
             if (!up.ok) { UI.showError(imgGenRegion, formatErr(up)); return; }
             await pollImage(up.data && up.data.taskId).then(function (res) { if (!res.ok) { UI.showError(imgGenRegion, formatErr(res)); return; } UI.showResult(imgGenRegion, res.data); });
           } catch (e) { UI.showError(imgGenRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
@@ -277,7 +289,7 @@
           try {
             const files = await readFiles(subFile);
             if (!files.length) { UI.showError(subRegion, "请选择视频"); return; }
-            const up = await API.upload("POST", "/api/v2/subtitle/extract", files, { format: subFormat.value, engine: subEngine.value });
+            const up = await API.upload("POST", "/api/v2/subtitle/extract", files, { format: subFormat.value, engine: "kimi" });
             if (!up.ok) { UI.showError(subRegion, formatErr(up)); return; }
             await pollSub(up.data && up.data.taskId).then(function (res) { if (!res.ok) { UI.showError(subRegion, formatErr(res)); return; } UI.showResult(subRegion, res.data); });
           } catch (e) { UI.showError(subRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
