@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld("htw", {
   },
   // Multipart/form-data uploader. Mirrors `call` but streams a generated
   // multipart body via `net` (fetch cannot send multipart streams here).
+  // `filePaths` is an array of absolute path strings OR `{name, buffer}`
+  // objects (where `buffer` is an ArrayBuffer from a renderer file input).
   // (method, path, filePaths, fields, headers, onProgress)
   upload: (method, path, filePaths, fields, headers, onProgress) => {
     return new Promise((resolve, reject) => {
@@ -42,9 +44,16 @@ contextBridge.exposeInMainWorld("htw", {
         }
       }
 
-      for (const fp of filePaths || []) {
-        const content = fs.readFileSync(fp);
-        const safeName = path.basename(fp).replace(/["\r\n]/g, "_");
+      for (const f of filePaths || []) {
+        let content;
+        let safeName;
+        if (typeof f === "string") {
+          content = fs.readFileSync(f);
+          safeName = path.basename(f).replace(/["\r\n]/g, "_");
+        } else {
+          content = Buffer.from(f.buffer);
+          safeName = String(f.name || "file").replace(/["\r\n]/g, "_");
+        }
         parts.push(enc(`--${boundary}\r\n`));
         parts.push(
           enc(`Content-Disposition: form-data; name="file"; filename="${safeName}"\r\n`)
