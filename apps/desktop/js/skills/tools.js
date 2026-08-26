@@ -75,13 +75,18 @@
       const transFmt = UI.el("select", {}, [opt("txt"), opt("doc"), opt("srt")]);
       const transLang = UI.el("input", { type: "text", placeholder: "语言 如 zh" });
       const transTranslate = UI.el("input", { type: "checkbox" });
-      const transRole = UI.el("input", { type: "text", placeholder: "角色" });
-      const transAlign = UI.el("input", { type: "checkbox" });
+      const transRoleChk = UI.el("input", { type: "checkbox" });
+      const transAlignChk = UI.el("input", { type: "checkbox" });
+      const transAlignText = UI.el("textarea", { placeholder: "对齐参考文本：粘贴参考文本，用于把音频对齐到该文本（仅勾选「对齐文本」时生效）" });
+      const transAlignField = UI.el("div", { class: "field" }, [UI.el("label", { text: "对齐参考文本" }), transAlignText]);
+      function syncAlign() { transAlignField.style.display = transAlignChk.checked ? "" : "none"; }
+      transAlignChk.addEventListener("change", syncAlign);
+      syncAlign();
       const transcribeRegion = UI.el("div");
       const transcribeBtn = UI.el("button", { class: "btn", text: "转写" });
       const transcribeCard = section("语音转写 Transcribe", [
         transFile,
-        field("转写格式", transFmt), field("语言", transLang), field("翻译", transTranslate), field("角色", transRole), field("对齐文本", transAlign),
+        field("转写格式", transFmt), field("语言", transLang), field("翻译", transTranslate), field("区分角色", transRoleChk), field("对齐文本", transAlignChk), transAlignField,
       ], transcribeBtn, transcribeRegion, "fa-language");
 
       const translateFile = UI.fileInput({ label: "选择音频/视频", accept: "audio/*,video/*" });
@@ -184,7 +189,7 @@
           try {
             const fid = await uploadAudio(transcribeFile, transcribeRegion);
             if (!fid) return;
-            const up = await API.call("POST", "/api/v2/voice/transcribe", { fileId: fid, format: transFmt.value, language: transLang.value, translate: transTranslate.checked, role: transRole.value, alignText: transAlign.checked });
+            const up = await API.call("POST", "/api/v2/voice/transcribe", { fileId: fid, format: transFmt.value, language: transLang.value, translate: transTranslate.checked, role: transRoleChk.checked, alignText: transAlignChk.checked ? transAlignText.value.trim() : "" });
             if (!up.ok) { UI.showError(transcribeRegion, formatErr(up)); return; }
             UI.showResult(transcribeRegion, { message: "已提交 taskId=" + (up.data && up.data.taskId) });
             await pollVoiceTask(transcribeRegion, up.data && up.data.taskId);
