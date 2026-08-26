@@ -5,6 +5,18 @@
     if (r.code) return "[" + r.code + "] " + (r.message || "");
     return r.message || "请求失败";
   }
+  // 兼容服务端把列表包成数组 / {data:[]} / {list:[]} / 平台为 key 的对象 等多种形态。
+  function asList(raw) {
+    if (Array.isArray(raw)) return raw;
+    if (raw && typeof raw === "object") {
+      if (Array.isArray(raw.data)) return raw.data;
+      if (Array.isArray(raw.list)) return raw.list;
+      if (Array.isArray(raw.items)) return raw.items;
+      if (Array.isArray(raw.platforms)) return raw.platforms;
+      return Object.values(raw);
+    }
+    return [];
+  }
   function opt(v, t) { return window.UI.el("option", { value: v, text: t || v }); }
 
   Skills.publish = {
@@ -283,7 +295,7 @@
       function refreshCookieStatus() {
         API.call("GET", "/api/v2/publish/cookie-status").then(function (r) {
           if (!r.ok) return;
-          const list = (r.data || []);
+          const list = asList(r.data);
           list.forEach(function (p) {
             const dot = platformDotEls[p.platform];
             if (dot) dot.className = "dot " + (p.hasCookie ? "gn" : "rd");
@@ -294,7 +306,7 @@
         UI.clear(cookieRegion);
         API.call("GET", "/api/v2/publish/cookie-status").then(function (r) {
           if (!r.ok) { UI.showError(cookieRegion, formatErr(r)); return; }
-          const list = (r.data || []);
+          const list = asList(r.data);
           list.forEach(function (p) {
             const hint = COOKIE_HINTS[p.platform] || "从对应平台登录态获取 Cookie";
             const ta = UI.el("textarea", { placeholder: "在此粘贴 Cookie 字符串..." });
