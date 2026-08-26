@@ -9,6 +9,7 @@
     const key = getKeyInput().value;
     if (base) window.HTWApi.setBase(base);
     window.HTWApi.setKey(key);
+    if (window.htw && window.htw.saveConfig) window.htw.saveConfig({ apiBase: base, apiKey: key });
     refreshKeyUI();
   }
 
@@ -91,6 +92,9 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
+    const saved = (window.htw && window.htw.loadConfig) ? window.htw.loadConfig() : {};
+    if (saved.apiBase) getBaseInput().value = saved.apiBase;
+    if (saved.apiKey) getKeyInput().value = saved.apiKey;
     getBaseInput().addEventListener("change", applyAuth);
     getKeyInput().addEventListener("input", applyAuth);
     applyAuth();

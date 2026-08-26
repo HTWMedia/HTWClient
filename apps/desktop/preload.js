@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, shell } = require("electron");
+const { contextBridge, ipcRenderer, shell, app } = require("electron");
 const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
@@ -8,10 +8,35 @@ const { URL } = require("url");
 
 const API_BASE = process.env.HTW_API_BASE || "https://htwmedia.dpdns.org";
 
+function configPath() {
+  const dir = app.getPath("userData");
+  return path.join(dir, "htw-config.json");
+}
+// 读取持久化的 API 地址 / AuthKey（保存于应用数据目录，明文存储）。
+function loadConfig() {
+  try {
+    const p = configPath();
+    if (fs.existsSync(p)) {
+      const j = JSON.parse(fs.readFileSync(p, "utf-8"));
+      return { apiBase: j.apiBase || "", apiKey: j.apiKey || "" };
+    }
+  } catch (e) { /* ignore */ }
+  return { apiBase: "", apiKey: "" };
+}
+function saveConfig(cfg) {
+  try {
+    const p = configPath();
+    fs.writeFileSync(p, JSON.stringify({ apiBase: cfg.apiBase || "", apiKey: cfg.apiKey || "" }), "utf-8");
+    return true;
+  } catch (e) { return false; }
+}
+
 // Expose a minimal, safe API to the renderer. The actual request signing
 // (AuthKey header) is done by the renderer; the key never leaves the client.
 contextBridge.exposeInMainWorld("htw", {
   apiBase: API_BASE,
+  loadConfig: loadConfig,
+  saveConfig: saveConfig,
   // 在系统默认浏览器中打开外部链接（结果里的 URL 点击时用）。
   openExternal: (url) => {
     try { if (url) shell.openExternal(url); } catch (e) { /* ignore */ }
