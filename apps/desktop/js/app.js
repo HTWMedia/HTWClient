@@ -1,5 +1,5 @@
 (function () {
-  const SKILLS = ["insight", "edit", "tools", "publish", "create"];
+  const SKILLS = ["insight", "edit", "tools", "publish", "assistant", "create"];
 
   function getBaseInput() { return document.getElementById("api-base"); }
   function getKeyInput() { return document.getElementById("api-key"); }
@@ -30,8 +30,9 @@
     if (warn) {
       const active = document.querySelector(".panel.active");
       const isSettings = document.getElementById("panel-settings") && document.getElementById("panel-settings").classList.contains("active");
+    const isAssistant = document.getElementById("panel-assistant") && document.getElementById("panel-assistant").classList.contains("active");
       const has = window.HTWApi && window.HTWApi.hasKey && window.HTWApi.hasKey();
-      if (!has && !isSettings) {
+      if (!has && !isSettings && !isAssistant) {
         warn.hidden = false;
         warn.textContent = "尚未设置 AuthKey，以下功能将无法使用。请到「设置」填写，或点击「前往 web 端获取 AuthKey」。";
       } else {

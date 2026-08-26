@@ -31,12 +31,33 @@ function saveConfig(cfg) {
   } catch (e) { return false; }
 }
 
+// 通用 JSON 存储（如聊天历史），写入 userData 下独立文件，避免与配置互相覆盖。
+function jsonPath(name) {
+  const dir = app.getPath("userData");
+  return path.join(dir, "htw-" + name + ".json");
+}
+function saveJson(name, data) {
+  try {
+    fs.writeFileSync(jsonPath(name), JSON.stringify(data), "utf-8");
+    return true;
+  } catch (e) { return false; }
+}
+function loadJson(name) {
+  try {
+    const p = jsonPath(name);
+    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf-8"));
+  } catch (e) { /* ignore */ }
+  return null;
+}
+
 // Expose a minimal, safe API to the renderer. The actual request signing
 // (AuthKey header) is done by the renderer; the key never leaves the client.
 contextBridge.exposeInMainWorld("htw", {
   apiBase: API_BASE,
   loadConfig: loadConfig,
   saveConfig: saveConfig,
+  saveJson: saveJson,
+  loadJson: loadJson,
   // 在系统默认浏览器中打开外部链接（结果里的 URL 点击时用）。
   openExternal: (url) => {
     try { if (url) shell.openExternal(url); } catch (e) { /* ignore */ }
