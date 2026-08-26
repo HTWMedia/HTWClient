@@ -433,5 +433,5 @@
     });
   }
 
-  return { el: el, clear: clear, mount: mount, showError: showError, showResult: showResult, renderResult: renderResult, spinner: spinner, fileInput: fileInput, withLoading: withLoading };
+  return { el: el, clear: clear, mount: mount, showError: showError, showResult: showResult, renderResult: renderResult, spinner: spinner, fileInput: fileInput, withLoading: withLoading, esc: escapeHtml };
 });

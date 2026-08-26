@@ -1,174 +1,276 @@
-(function () {
-  const Skills = (window.Skills = window.Skills || {});
-  function formatErr(r) {
-    if (!r) return "未知错误";
-    if (r.code) return "[" + r.code + "] " + (r.message || "");
-    return r.message || "请求失败";
+'use strict';
+
+const api = require('../api');
+const UI = require('../ui');
+
+let recommendationsCache = null;
+
+function loadRecommendations() {
+  if (recommendationsCache) return Promise.resolve(recommendationsCache);
+  return api.get('/api/v2/creation/recommendations').then(r => {
+    recommendationsCache = r.data || {};
+    return recommendationsCache;
+  }).catch(() => ({ video: [], image: [], article: [], news: null }));
+}
+
+function loadVideoTypes() {
+  return api.get('/api/v2/creation/types').then(r => r.data || []).catch(() => []);
+}
+
+function recSection(tab) {
+  return loadRecommendations().then(rec => {
+    const ideas = rec[tab] || [];
+    const news = rec.news || [];
+    let html = '';
+    if (news.length) {
+      html += '<div class="recgroup"><div class="recgroup-title">实时热点</div><div class="idearow">';
+      news.forEach(t => {
+        html += `<div class="ideacard news" data-topic="${UI.esc(t)}"><div class="ideacard-title">${UI.esc(t)}</div></div>`;
+      });
+      html += '</div></div>';
+    }
+    if (ideas.length) {
+      html += '<div class="recgroup"><div class="recgroup-title">创作建议</div><div class="idearow">';
+      ideas.forEach(it => {
+        const title = it.title || '';
+        const desc = it.desc || it.description || '';
+        html += `<div class="ideacard" data-topic="${UI.esc(title)}"><div class="ideacard-title">${UI.esc(title)}</div>${desc ? `<div class="ideacard-desc">${UI.esc(desc)}</div>` : ''}</div>`;
+      });
+      html += '</div></div>';
+    }
+    return html;
+  });
+}
+
+function stepToggle(tab, id, label, on) {
+  return `<label class="stepchk"><input type="checkbox" data-step="${id}" ${on ? 'checked' : ''}><span>${UI.esc(label)}</span></label>`;
+}
+
+function renderInputCard(tab, state, root) {
+  const card = root.querySelector('#creation-input-card');
+  let inner = '';
+  inner += `<div class="field"><textarea id="ctopic" class="ta" rows="3" placeholder="输入创作主题 / 创意描述…">${UI.esc(state.topic)}</textarea></div>`;
+
+  if (tab === 'video') {
+    inner += `<div class="field"><div class="field-label">视频类型</div><div class="vtyperow" id="vtyperow"><span class="muted">加载中…</span></div></div>`;
+    inner += `<div class="field"><div class="field-label">参考视频链接（每行一个）</div><textarea id="cref" class="ta" rows="2" placeholder="https://...">${UI.esc(state.refurls)}</textarea></div>`;
+    inner += `<div class="field"><div class="field-label">可选步骤</div><div class="steprow">${stepToggle('video','research','调研',state.steps.research)}${stepToggle('video','keypoint','关键点提取',state.steps.keypoint)}${stepToggle('video','material','素材搜索',state.steps.material)}${stepToggle('video','publish','自动发布',state.steps.publish)}</div></div>`;
+  } else {
+    inner += `<div class="field"><div class="field-label">可选步骤</div><div class="steprow">${stepToggle(tab,'optimize','优化精修',state.steps.optimize)}</div></div>`;
   }
-  function opt(v, t) { return window.UI.el("option", { value: v, text: t || v }); }
 
-  Skills.create = {
-    mount: function (panel) {
-      const UI = window.UI;
-      const API = window.HTWApi;
-      UI.clear(panel);
+  inner += `<div class="field"><div class="recbox" id="crecbox"><span class="muted">加载创作建议…</span></div></div>`;
+  inner += `<div class="field inline"><button class="btn primary" id="cstart">开始创作</button><span class="muted" id="cstatus"></span></div>`;
 
-      async function readFiles(wrap) {
-        const arr = [];
-        const list = wrap.input.files;
-        for (let i = 0; i < list.length; i++) { const f = list[i]; arr.push({ name: f.name, buffer: await f.arrayBuffer() }); }
-        return arr;
+  card.innerHTML = inner;
+
+  recSection(tab).then(html => {
+    const box = card.querySelector('#crecbox');
+    if (box) box.innerHTML = html || '<span class="muted">暂无建议</span>';
+    box.querySelectorAll('.ideacard').forEach(el => {
+      el.addEventListener('click', () => {
+        const t = el.getAttribute('data-topic');
+        const ta = card.querySelector('#ctopic');
+        if (ta && t) ta.value = t;
+      });
+    });
+  });
+
+  if (tab === 'video') {
+    loadVideoTypes().then(types => {
+      const row = card.querySelector('#vtyperow');
+      if (!row) return;
+      if (!types.length) { row.innerHTML = '<span class="muted">无</span>'; return; }
+      row.innerHTML = types.map(t =>
+        `<div class="vtypecard ${state.vtype === t.id ? 'sel' : ''}" data-id="${UI.esc(t.id)}"><div class="vtypecard-name">${UI.esc(t.name)}</div>${t.description ? `<div class="vtypecard-desc">${UI.esc(t.description)}</div>` : ''}</div>`
+      ).join('');
+      row.querySelectorAll('.vtypecard').forEach(el => {
+        el.addEventListener('click', () => {
+          state.vtype = el.getAttribute('data-id');
+          row.querySelectorAll('.vtypecard').forEach(x => x.classList.remove('sel'));
+          el.classList.add('sel');
+        });
+      });
+    });
+  }
+
+  card.querySelector('#cstart').addEventListener('click', () => startCreation(tab, state, root));
+}
+
+function buildSteps(tab, state) {
+  const set = [];
+  if (tab === 'video') {
+    ['research','keypoint','material','publish'].forEach(k => { if (state.steps[k]) set.push(k); });
+  } else {
+    if (state.steps.optimize) set.push('optimize');
+  }
+  return set;
+}
+
+function startCreation(tab, state, root) {
+  const card = root.querySelector('#creation-input-card');
+  const topic = (card.querySelector('#ctopic').value || '').trim();
+  if (!topic) { card.querySelector('#cstatus').textContent = '请输入主题'; return; }
+
+  card.querySelectorAll('.stepchk input').forEach(c => { state.steps[c.getAttribute('data-step')] = c.checked; });
+  state.topic = topic;
+  state.refurls = (card.querySelector('#cref') ? card.querySelector('#cref').value : '').trim();
+  card.querySelector('#cstatus').textContent = '启动中…';
+
+  const body = { type: tab, topic: topic, optionalSteps: buildSteps(tab, state) };
+  if (tab === 'video') {
+    body.referenceVideoUrls = state.refurls ? state.refurls.split('\n').map(s => s.trim()).filter(Boolean) : [];
+    if (state.vtype) body.videoTypeId = state.vtype;
+  }
+
+  api.post('/api/v2/creation/start', body).then(r => {
+    const id = r.data && r.data.sessionId;
+    if (!id) { card.querySelector('#cstatus').textContent = '未返回会话'; return; }
+    state.sessionId = id;
+    state.polling = true;
+    card.querySelector('#cstatus').textContent = '进行中';
+    poll(tab, state, root);
+  }).catch(e => {
+    card.querySelector('#cstatus').textContent = '启动失败：' + (e.message || e);
+  });
+}
+
+function poll(tab, state, root) {
+  if (!state.polling || !state.sessionId) return;
+  api.get(`/api/v2/creation/status?sessionId=${encodeURIComponent(state.sessionId)}&type=${tab}`).then(r => {
+    renderDetail(tab, state, root, r.data);
+    if (state.polling && r.data && r.data.status === 'running') {
+      setTimeout(() => poll(tab, state, root), 2000);
+    } else if (r.data && r.data.status === 'waiting_approval') {
+      state.polling = false;
+    } else {
+      state.polling = false;
+      const card = root.querySelector('#creation-input-card');
+      if (card && card.querySelector('#cstatus')) card.querySelector('#cstatus').textContent = (r.data && r.data.status === 'completed') ? '已完成' : (r.data ? r.data.status : '');
+    }
+  }).catch(e => {
+    state.polling = false;
+    const card = root.querySelector('#creation-input-card');
+    if (card && card.querySelector('#cstatus')) card.querySelector('#cstatus').textContent = '状态错误：' + (e.message || e);
+  });
+}
+
+function renderDetail(tab, state, root, data) {
+  const det = root.querySelector('#creation-detail');
+  if (!det || !data) return;
+  let html = '';
+  const label = data.currentStepLabel || data.currentStepId || '';
+  html += `<div class="detail-head"><div class="detail-step">${UI.esc(label || '创作')} <span class="badge ${UI.esc(data.status)}">${UI.esc(data.status)}</span></div></div>`;
+
+  if (data.progressLogs && data.progressLogs.length) {
+    html += '<div class="progresslog">' + data.progressLogs.map(l => `<div>${UI.esc(l)}</div>`).join('') + '</div>';
+  }
+
+  det.innerHTML = html;
+
+  UI.showResult(det, data);
+
+  if (data.artifact) {
+    try {
+      const art = typeof data.artifact === 'string' ? JSON.parse(data.artifact) : data.artifact;
+      if (art && art.type === 'video_script' && art.scriptText) {
+        det.insertAdjacentHTML('beforeend', `<div class="scriptbox"><pre>${UI.esc(art.scriptText)}</pre></div>`);
       }
-      let sessionId = null;
-      let creType = "video";
+    } catch (e) {}
+  }
 
-      const typeSelect = UI.el("select", {}, [opt("video"), opt("image"), opt("article")]);
-      const topicInput = UI.el("textarea", { placeholder: "创作主题" });
-      const refInput = UI.el("input", { type: "text", placeholder: "参考视频 URL，逗号分隔（可选）" });
-      const setupRegion = UI.el("div");
-      const startBtn = UI.el("button", { class: "btn", text: "开始创作" });
-      const setupCard = UI.el("div", { class: "card" }, [
-        UI.el("h3", {}, [UI.el("i", { class: "fa-solid fa-wand-magic-sparkles" }), " 第 1 步：新建会话"]),
-        UI.el("div", { class: "field" }, [UI.el("label", { text: "类型" }), typeSelect]),
-        UI.el("div", { class: "field" }, [UI.el("label", { text: "主题" }), topicInput]),
-        UI.el("div", { class: "field" }, [UI.el("label", { text: "参考视频" }), refInput]),
-        UI.el("div", { class: "row" }, [startBtn]),
-        setupRegion,
-      ]);
+  if (tab === 'video') {
+    det.insertAdjacentHTML('beforeend', `<div class="field inline uprow"><span class="muted">上传素材（图片/视频，≤20MB）：</span><input type="file" id="cmaterial" multiple accept="image/*,video/*"></div>`);
+    const up = det.querySelector('#cmaterial');
+    if (up) up.addEventListener('change', () => uploadMaterial(state, up, root));
+  }
 
-      const sessionRegion = UI.el("div");
-      const statusRegion = UI.el("div");
-      const refreshBtn = UI.el("button", { class: "btn", text: "刷新状态" });
-      const approveBtn = UI.el("button", { class: "btn", text: "通过并继续" });
-      const regenBtn = UI.el("button", { class: "btn secondary", text: "重新生成" });
-      const refineBtn = UI.el("button", { class: "btn secondary", text: "细化" });
-      const recBtn = UI.el("button", { class: "btn secondary", text: "创作建议" });
-      const matFile = UI.fileInput({ label: "上传素材", accept: "*/*" });
-      const matBtn = UI.el("button", { class: "btn secondary", text: "上传素材" });
-      const sessionCard = UI.el("div", { class: "card" }, [
-        UI.el("h3", {}, [UI.el("i", { class: "fa-solid fa-comments" }), " 第 2 步：会话"]),
-        UI.el("div", { class: "row" }, [refreshBtn, approveBtn, regenBtn, refineBtn, recBtn, matBtn]),
-        matFile,
-        statusRegion,
-        sessionRegion,
-      ]);
+  if (data.status === 'waiting_approval') {
+    const bar = document.createElement('div');
+    bar.className = 'detail-actions';
+    bar.innerHTML = `<button class="btn primary" id="capprove">确认</button><button class="btn" id="cregen">重新生成</button><button class="btn" id="crefine">精修</button>`;
+    det.appendChild(bar);
+    bar.querySelector('#capprove').addEventListener('click', () => act(tab, state, root, 'approve'));
+    bar.querySelector('#cregen').addEventListener('click', () => {
+      const ins = prompt('重新生成指令（可留空）：');
+      act(tab, state, root, 'regenerate', ins);
+    });
+    bar.querySelector('#crefine').addEventListener('click', () => {
+      const msg = prompt('精修意见：');
+      if (msg) act(tab, state, root, 'refine', msg);
+    });
+  }
+}
 
-      UI.mount(panel, UI.el("div", {}, [
-        UI.el("h2", { text: "创作 Create（向导）" }),
-        setupCard, sessionCard,
-      ]));
+function uploadMaterial(state, input, root) {
+  const files = input.files;
+  if (!files || !files.length) return;
+  if (!state.sessionId) { alert('请先开始创作'); return; }
+  input.disabled = true;
+  let pending = files.length;
+  Array.from(files).forEach(f => {
+    api.upload(`/api/v2/creation/upload-material?sessionId=${encodeURIComponent(state.sessionId)}`, f).then(() => {
+      pending--;
+      if (pending === 0) { input.disabled = false; input.value = ''; }
+    }).catch(e => {
+      pending--;
+      alert('上传失败：' + (e.message || e));
+      if (pending === 0) { input.disabled = false; input.value = ''; }
+    });
+  });
+}
 
-      function loadTypes() {
-        UI.withLoading(typeSelect, async function () {
-          try {
-            const r = await API.call("GET", "/api/v2/creation/types");
-            if (!r.ok) { UI.showError(setupRegion, formatErr(r)); return; }
-            const list = (r.data && r.data.data) || r.data || [];
-            if (Array.isArray(list) && list.length) {
-              UI.clear(typeSelect);
-              for (const t of list) {
-                const v = typeof t === "string" ? t : (t.id || t.type || JSON.stringify(t));
-                const txt = typeof t === "string" ? t : (t.name || v);
-                typeSelect.appendChild(opt(v, txt));
-              }
-            }
-          } catch (e) { UI.showError(setupRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      }
-      loadTypes();
+function act(tab, state, root, kind, instruction) {
+  const det = root.querySelector('#creation-detail');
+  const body = { sessionId: state.sessionId, type: tab };
+  if (kind === 'regenerate') body.instruction = instruction || '';
+  if (kind === 'refine') body.message = instruction || '';
+  const url = kind === 'approve' ? '/api/v2/creation/approve' : (kind === 'regenerate' ? '/api/v2/creation/regenerate' : '/api/v2/creation/refine');
+  if (det) det.insertAdjacentHTML('beforeend', '<div class="progresslog"><div>处理中…</div></div>');
+  api.post(url, body).then(() => {
+    state.polling = true;
+    const card = root.querySelector('#creation-input-card');
+    if (card && card.querySelector('#cstatus')) card.querySelector('#cstatus').textContent = '进行中';
+    poll(tab, state, root);
+  }).catch(e => {
+    if (det) det.insertAdjacentHTML('beforeend', `<div class="progresslog"><div>操作失败：${UI.esc(e.message || e)}</div></div>`);
+  });
+}
 
-      startBtn.addEventListener("click", function () {
-        const topic = topicInput.value.trim();
-        if (!topic) { UI.showError(setupRegion, "请输入主题"); return; }
-        creType = typeSelect.value;
-        UI.withLoading(startBtn, async function () {
-          try {
-            const up = await API.call("POST", "/api/v2/creation/start", {
-              type: creType,
-              topic: topic,
-              referenceVideoUrls: refInput.value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
-            });
-            if (!up.ok) { UI.showError(setupRegion, formatErr(up)); return; }
-            sessionId = up.data && up.data.sessionId;
-            UI.showResult(setupRegion, { sessionId: sessionId, step: up.data && up.data.step });
-            refreshStatus();
-          } catch (e) { UI.showError(setupRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
-
-      function refreshStatus() {
-        if (!sessionId) { UI.showError(statusRegion, "尚无会话"); return; }
-        UI.withLoading(refreshBtn, async function () {
-          try {
-            const r = await API.call("GET", "/api/v2/creation/status?sessionId=" + encodeURIComponent(sessionId) + "&type=" + encodeURIComponent(creType));
-            if (!r.ok) { UI.showError(statusRegion, formatErr(r)); return; }
-            UI.showResult(statusRegion, r.data);
-          } catch (e) { UI.showError(statusRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      }
-      refreshBtn.addEventListener("click", refreshStatus);
-
-      approveBtn.addEventListener("click", function () {
-        if (!sessionId) { UI.showError(sessionRegion, "尚无会话"); return; }
-        UI.withLoading(approveBtn, async function () {
-          try {
-            const r = await API.call("POST", "/api/v2/creation/approve", { sessionId: sessionId, type: creType });
-            if (!r.ok) { UI.showError(sessionRegion, formatErr(r)); return; }
-            UI.showResult(sessionRegion, r.data);
-            refreshStatus();
-          } catch (e) { UI.showError(sessionRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
-
-      regenBtn.addEventListener("click", function () {
-        if (!sessionId) { UI.showError(sessionRegion, "尚无会话"); return; }
-        const instruction = window.prompt ? window.prompt("重新生成指令（可选）") : "";
-        UI.withLoading(regenBtn, async function () {
-          try {
-            const r = await API.call("POST", "/api/v2/creation/regenerate", { sessionId: sessionId, instruction: instruction || "", type: creType });
-            if (!r.ok) { UI.showError(sessionRegion, formatErr(r)); return; }
-            UI.showResult(sessionRegion, r.data);
-            refreshStatus();
-          } catch (e) { UI.showError(sessionRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
-
-      refineBtn.addEventListener("click", function () {
-        if (!sessionId) { UI.showError(sessionRegion, "尚无会话"); return; }
-        const message = window.prompt ? window.prompt("细化要求") : "";
-        if (!message) return;
-        UI.withLoading(refineBtn, async function () {
-          try {
-            const r = await API.call("POST", "/api/v2/creation/refine", { sessionId: sessionId, message: message, type: creType });
-            if (!r.ok) { UI.showError(sessionRegion, formatErr(r)); return; }
-            UI.showResult(sessionRegion, r.data);
-            refreshStatus();
-          } catch (e) { UI.showError(sessionRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
-
-      recBtn.addEventListener("click", function () {
-        UI.withLoading(recBtn, async function () {
-          try {
-            const r = await API.call("GET", "/api/v2/creation/recommendations");
-            if (!r.ok) { UI.showError(sessionRegion, formatErr(r)); return; }
-            UI.showResult(sessionRegion, r.data);
-          } catch (e) { UI.showError(sessionRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
-
-      matBtn.addEventListener("click", function () {
-        if (!sessionId) { UI.showError(sessionRegion, "尚无会话"); return; }
-        UI.withLoading(matBtn, async function () {
-          try {
-            const files = await readFiles(matFile);
-            if (!files.length) { UI.showError(sessionRegion, "请选择素材文件"); return; }
-            const r = await API.upload("POST", "/api/v2/creation/upload-material?sessionId=" + encodeURIComponent(sessionId), files, {});
-            if (!r.ok) { UI.showError(sessionRegion, formatErr(r)); return; }
-            UI.showResult(sessionRegion, r.data);
-          } catch (e) { UI.showError(sessionRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
-    },
+exports.render = function (root) {
+  const states = {
+    video: { sessionId: null, topic: '', refurls: '', vtype: null, steps: { research: false, keypoint: true, material: false, publish: false }, polling: false },
+    image: { sessionId: null, topic: '', steps: { optimize: true }, polling: false },
+    article: { sessionId: null, topic: '', steps: { optimize: true }, polling: false }
   };
-})();
+  let current = 'video';
+
+  root.innerHTML = `
+    <div class="creation">
+      <div class="tabbar" id="creation-tabs">
+        <div class="tab active" data-tab="video">视频创作</div>
+        <div class="tab" data-tab="image">图片创作</div>
+        <div class="tab" data-tab="article">文章创作</div>
+      </div>
+      <div class="creation-body">
+        <div class="creation-input-card" id="creation-input-card"></div>
+        <div class="creation-detail" id="creation-detail"></div>
+      </div>
+    </div>`;
+
+  const tabs = root.querySelector('#creation-tabs');
+  tabs.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => {
+      const tab = t.getAttribute('data-tab');
+      if (tab === current) return;
+      tabs.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      states[current].polling = false;
+      current = tab;
+      root.querySelector('#creation-detail').innerHTML = '';
+      renderInputCard(tab, states[tab], root);
+    });
+  });
+
+  renderInputCard(current, states[current], root);
+};
