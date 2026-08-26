@@ -55,11 +55,23 @@
         return UI.el("div", { class: "card" }, kids);
       }
 
-      const voiceFile = UI.fileInput({ label: "选择音频", accept: "audio/*" });
-      const uploadRegion = UI.el("div");
-      const voiceUploadBtn = UI.el("button", { class: "btn", text: "上传音频" });
-      let voiceFileId = null;
+      // 音频选择合入每个语音工具卡片内；点击操作时自动上传（按文件名+大小缓存，避免重复上传）
+      const uploadCache = {};
+      async function uploadAudio(fileInput, region) {
+        const files = await readFiles(fileInput);
+        if (!files.length) { UI.showError(region, "请选择音频"); return null; }
+        const f = files[0];
+        const key = f.name + ":" + f.buffer.byteLength;
+        if (uploadCache[key]) return uploadCache[key];
+        const up = await API.upload("POST", "/api/v2/voice/upload", files, {});
+        if (!up.ok) { UI.showError(region, formatErr(up)); return null; }
+        const id = up.data && up.data.fileId;
+        if (!id) { UI.showError(region, formatErr(up)); return null; }
+        uploadCache[key] = id;
+        return id;
+      }
 
+      const transFile = UI.fileInput({ label: "选择音频", accept: "audio/*" });
       const transFmt = UI.el("select", {}, [opt("txt"), opt("doc"), opt("srt")]);
       const transLang = UI.el("input", { type: "text", placeholder: "语言 如 zh" });
       const transTranslate = UI.el("input", { type: "checkbox" });
@@ -67,34 +79,37 @@
       const transAlign = UI.el("input", { type: "checkbox" });
       const transcribeRegion = UI.el("div");
       const transcribeBtn = UI.el("button", { class: "btn", text: "转写" });
+      const transcribeCard = section("语音转写 Transcribe", [
+        transFile,
+        field("转写格式", transFmt), field("语言", transLang), field("翻译", transTranslate), field("角色", transRole), field("对齐文本", transAlign),
+      ], transcribeBtn, transcribeRegion, "fa-language");
 
+      const translateFile = UI.fileInput({ label: "选择音频", accept: "audio/*" });
       const translateLang = UI.el("input", { type: "text", placeholder: "目标语言" });
       const translateRegion = UI.el("div");
       const translateBtn = UI.el("button", { class: "btn", text: "翻译" });
+      const translateCard = section("翻译 Translate", [translateFile, field("目标语言", translateLang)], translateBtn, translateRegion, "fa-language");
 
+      const summarizeFile = UI.fileInput({ label: "选择音频", accept: "audio/*" });
       const summarizeRegion = UI.el("div");
       const summarizeBtn = UI.el("button", { class: "btn", text: "总结" });
+      const summarizeCard = section("总结 Summarize", [summarizeFile], summarizeBtn, summarizeRegion, "fa-align-left");
 
+      const lyricsFile = UI.fileInput({ label: "选择音频", accept: "audio/*" });
       const lyricsRegion = UI.el("div");
       const lyricsBtn = UI.el("button", { class: "btn", text: "歌词提取" });
+      const lyricsCard = section("歌词提取 Lyrics", [lyricsFile], lyricsBtn, lyricsRegion, "fa-music");
 
+      const separateFile = UI.fileInput({ label: "选择音频", accept: "audio/*" });
       const sepType = UI.el("select", {}, [opt("human"), opt("music")]);
       const separateRegion = UI.el("div");
       const separateBtn = UI.el("button", { class: "btn", text: "人声/伴奏分离" });
+      const separateCard = section("人声/伴奏分离 Separate", [separateFile, field("分离类型", sepType)], separateBtn, separateRegion, "fa-scissors");
 
       const ttsText = UI.el("textarea", { placeholder: "要合成的文本" });
       const ttsSpeaker = UI.el("input", { type: "text", placeholder: "speaker" });
       const ttsRegion = UI.el("div");
       const ttsBtn = UI.el("button", { class: "btn", text: "语音合成" });
-
-      const voiceUploadCard = section("音频上传 Upload", [voiceFile], voiceUploadBtn, uploadRegion, "fa-upload");
-      const transcribeCard = section("语音转写 Transcribe", [
-        field("转写格式", transFmt), field("语言", transLang), field("翻译", transTranslate), field("角色", transRole), field("对齐文本", transAlign),
-      ], transcribeBtn, transcribeRegion, "fa-language");
-      const translateCard = section("翻译 Translate", [field("目标语言", translateLang)], translateBtn, translateRegion, "fa-language");
-      const summarizeCard = section("总结 Summarize", [], summarizeBtn, summarizeRegion, "fa-align-left");
-      const lyricsCard = section("歌词提取 Lyrics", [], lyricsBtn, lyricsRegion, "fa-music");
-      const separateCard = section("人声/伴奏分离 Separate", [field("分离类型", sepType)], separateBtn, separateRegion, "fa-scissors");
       const ttsCard = section("语音合成 TTS", [field("TTS 文本", ttsText), field("TTS speaker", ttsSpeaker)], ttsBtn, ttsRegion, "fa-comment-dots");
 
       const imgPrompt = UI.el("textarea", { placeholder: "提示词" });
@@ -140,24 +155,11 @@
       UI.mount(panel, UI.el("div", {}, [
         UI.el("h2", { text: "工具 Tools" }),
         UI.el("div", { class: "card-grid" }, [
-          voiceUploadCard, transcribeCard, translateCard, summarizeCard, lyricsCard, separateCard, ttsCard,
+           transcribeCard, translateCard, summarizeCard, lyricsCard, separateCard, ttsCard,
           imgGenCard, imgRecCard, agentCard, subCard, tplCard,
         ]),
       ]));
 
-      voiceUploadBtn.addEventListener("click", function () {
-        UI.withLoading(voiceUploadBtn, async function () {
-          try {
-            const files = await readFiles(voiceFile);
-            if (!files.length) { UI.showError(uploadRegion, "请选择音频"); return; }
-            const up = await API.upload("POST", "/api/v2/voice/upload", files, {});
-            if (!up.ok) { UI.showError(uploadRegion, formatErr(up)); return; }
-            voiceFileId = up.data && up.data.fileId;
-            UI.showResult(uploadRegion, { fileId: voiceFileId });
-          } catch (e) { UI.showError(uploadRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
-        });
-      });
-      function needVoice(region) { if (!voiceFileId) { UI.showError(region, "请先上传音频"); return false; } return true; }
       function pollVoiceTask(region, taskId) {
         return pollVoice(taskId).then(function (res) {
           if (!res.ok) { UI.showError(region, formatErr(res)); return; }
@@ -166,10 +168,11 @@
       }
 
       transcribeBtn.addEventListener("click", function () {
-        if (!needVoice(transcribeRegion)) return;
         UI.withLoading(transcribeBtn, async function () {
           try {
-            const up = await API.call("POST", "/api/v2/voice/transcribe", { fileId: voiceFileId, format: transFmt.value, language: transLang.value, translate: transTranslate.checked, role: transRole.value, alignText: transAlign.checked });
+            const fid = await uploadAudio(transcribeFile, transcribeRegion);
+            if (!fid) return;
+            const up = await API.call("POST", "/api/v2/voice/transcribe", { fileId: fid, format: transFmt.value, language: transLang.value, translate: transTranslate.checked, role: transRole.value, alignText: transAlign.checked });
             if (!up.ok) { UI.showError(transcribeRegion, formatErr(up)); return; }
             UI.showResult(transcribeRegion, { message: "已提交 taskId=" + (up.data && up.data.taskId) });
             await pollVoiceTask(transcribeRegion, up.data && up.data.taskId);
@@ -177,40 +180,44 @@
         });
       });
       translateBtn.addEventListener("click", function () {
-        if (!needVoice(translateRegion)) return;
         UI.withLoading(translateBtn, async function () {
           try {
-            const up = await API.call("POST", "/api/v2/voice/translate", { fileId: voiceFileId, language: translateLang.value });
+            const fid = await uploadAudio(translateFile, translateRegion);
+            if (!fid) return;
+            const up = await API.call("POST", "/api/v2/voice/translate", { fileId: fid, language: translateLang.value });
             if (!up.ok) { UI.showError(translateRegion, formatErr(up)); return; }
             await pollVoiceTask(translateRegion, up.data && up.data.taskId);
           } catch (e) { UI.showError(translateRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
       summarizeBtn.addEventListener("click", function () {
-        if (!needVoice(summarizeRegion)) return;
         UI.withLoading(summarizeBtn, async function () {
           try {
-            const up = await API.call("POST", "/api/v2/voice/summarize", { fileId: voiceFileId });
+            const fid = await uploadAudio(summarizeFile, summarizeRegion);
+            if (!fid) return;
+            const up = await API.call("POST", "/api/v2/voice/summarize", { fileId: fid });
             if (!up.ok) { UI.showError(summarizeRegion, formatErr(up)); return; }
             await pollVoiceTask(summarizeRegion, up.data && up.data.taskId);
           } catch (e) { UI.showError(summarizeRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
       lyricsBtn.addEventListener("click", function () {
-        if (!needVoice(lyricsRegion)) return;
         UI.withLoading(lyricsBtn, async function () {
           try {
-            const up = await API.call("POST", "/api/v2/voice/lyrics", { fileId: voiceFileId });
+            const fid = await uploadAudio(lyricsFile, lyricsRegion);
+            if (!fid) return;
+            const up = await API.call("POST", "/api/v2/voice/lyrics", { fileId: fid });
             if (!up.ok) { UI.showError(lyricsRegion, formatErr(up)); return; }
             await pollVoiceTask(lyricsRegion, up.data && up.data.taskId);
           } catch (e) { UI.showError(lyricsRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
       separateBtn.addEventListener("click", function () {
-        if (!needVoice(separateRegion)) return;
         UI.withLoading(separateBtn, async function () {
           try {
-            const up = await API.call("POST", "/api/v2/voice/separate", { fileId: voiceFileId, type: sepType.value });
+            const fid = await uploadAudio(separateFile, separateRegion);
+            if (!fid) return;
+            const up = await API.call("POST", "/api/v2/voice/separate", { fileId: fid, type: sepType.value });
             if (!up.ok) { UI.showError(separateRegion, formatErr(up)); return; }
             await pollVoiceTask(separateRegion, up.data && up.data.taskId);
           } catch (e) { UI.showError(separateRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
