@@ -237,7 +237,7 @@ function act(tab, state, root, kind, instruction) {
   });
 }
 
-exports.render = function (root) {
+exports.mount = function (root) {
   const states = {
     video: { sessionId: null, topic: '', refurls: '', vtype: null, steps: { research: false, keypoint: true, material: false, publish: false }, polling: false },
     image: { sessionId: null, topic: '', steps: { optimize: true }, polling: false },
