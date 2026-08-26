@@ -1,7 +1,10 @@
-const { contextBridge, ipcRenderer, net, shell } = require("electron");
+const { contextBridge, ipcRenderer, shell } = require("electron");
 const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
+const http = require("http");
+const https = require("https");
+const { URL } = require("url");
 
 const API_BASE = process.env.HTW_API_BASE || "https://htwmedia.dpdns.org";
 
@@ -28,7 +31,8 @@ contextBridge.exposeInMainWorld("htw", {
     return { status: res.status, ok: res.ok, data };
   },
   // Multipart/form-data uploader. Mirrors `call` but streams a generated
-  // multipart body via `net` (fetch cannot send multipart streams here).
+  // multipart body via Node's http/https (Electron's net.request is fragile
+  // from a preload context and throws "reading 'request'").
   // `filePaths` is an array of absolute path strings OR `{name, buffer}`
   // objects (where `buffer` is an ArrayBuffer from a renderer file input).
   // (method, path, filePaths, fields, headers, onProgress)
@@ -70,43 +74,46 @@ contextBridge.exposeInMainWorld("htw", {
       parts.push(enc(`--${boundary}--\r\n`));
       const bodyBuf = Buffer.concat(parts);
 
+      let target;
+      try {
+        target = new URL(`${API_BASE}${path}`);
+      } catch (e) {
+        resolve({ status: 0, ok: false, data: { errCode: 0, errMsg: "invalid url: " + e.message } });
+        return;
+      }
+
+      const transport = target.protocol === "http:" ? http : https;
       const reqHeaders = {
         ...(headers || {}),
         "Content-Type": `multipart/form-data; boundary=${boundary}`,
         "Content-Length": bodyBuf.length,
       };
 
-      const req = net.request({
-        method,
-        url: `${API_BASE}${path}`,
-        headers: reqHeaders,
-      });
-
-      if (typeof onProgress === "function") {
-        req.on("uploadProgress", ({ position, total }) => {
-          onProgress({
-            loaded: position,
-            total,
-            percent: total ? position / total : 0,
+      const req = transport.request(
+        {
+          method,
+          protocol: target.protocol,
+          hostname: target.hostname,
+          port: target.port || (target.protocol === "https:" ? 443 : 80),
+          path: target.pathname + target.search,
+          headers: reqHeaders,
+        },
+        (response) => {
+          const chunks = [];
+          response.on("data", (chunk) => chunks.push(chunk));
+          response.on("end", () => {
+            const text = Buffer.concat(chunks).toString("utf-8");
+            let body;
+            try { body = JSON.parse(text); } catch { body = text; }
+            const ok = response.statusCode >= 200 && response.statusCode < 300;
+            resolve({ status: response.statusCode, ok, data: body });
           });
-        });
-      }
+        }
+      );
 
       req.on("error", (err) =>
         resolve({ status: 0, ok: false, data: { errCode: 0, errMsg: err.message } })
       );
-
-      req.on("response", (response) => {
-        const chunks = [];
-        response.on("data", (chunk) => chunks.push(chunk));
-        response.on("end", () => {
-          const text = Buffer.concat(chunks).toString("utf-8");
-          let body;
-          try { body = JSON.parse(text); } catch { body = text; }
-          const ok = response.statusCode >= 200 && response.statusCode < 300;
-          resolve({ status: response.statusCode, ok, data: body });
-        });
-      });
 
       req.write(bodyBuf);
       req.end();
