@@ -96,7 +96,7 @@
     applyAuth();
     wireNav();
     mountSkills();
-    showPanel("insight");
+    showPanel("tools");
   });
 
   window.App = {
