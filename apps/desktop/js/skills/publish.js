@@ -58,6 +58,7 @@
       const platformEls = {};       // checkbox
       const platformDotEls = {};     // 状态点（cookie 是否有效）
       const cookieHas = {};         // 各平台是否已配置 Cookie
+      const cookieMsgs = {};        // 各平台最近一次操作结果（刷新后保留提示）
       const selPlats = [];
 
       // ===== 发布编辑面板 =====
@@ -337,33 +338,39 @@
             const hint = COOKIE_HINTS[p.platform] || "从对应平台登录态获取 Cookie";
             const ta = UI.el("textarea", { placeholder: "在此粘贴 Cookie 字符串..." });
             const resLine = UI.el("div", { class: "hintline" });
+            if (cookieMsgs[p.platform]) { resLine.textContent = cookieMsgs[p.platform].text; resLine.className = cookieMsgs[p.platform].cls; }
             const saveBtn = UI.el("button", { class: "btn", text: "保存 Cookie" });
             const testBtn = UI.el("button", { class: "btn secondary", text: "测试连接" });
             const clearBtn = UI.el("button", { class: "btn secondary", text: "清空" });
             saveBtn.addEventListener("click", function () {
               const v = ta.value.trim();
-              if (!v) { resLine.textContent = "请先粘贴 Cookie"; resLine.className = "hintline bad"; return; }
+              if (!v) { cookieMsgs[p.platform] = { text: "请先粘贴 Cookie", cls: "hintline bad" }; refreshCookie(); return; }
               UI.withLoading(saveBtn, async function () {
                 try {
                   const up = await API.call("POST", "/api/v2/publish/save-cookie", { platform: p.platform, cookieText: v });
-                  if (!up.ok) { resLine.textContent = "✗ " + formatErr(up); resLine.className = "hintline bad"; return; }
+                  if (!up.ok) { cookieMsgs[p.platform] = { text: "✗ " + formatErr(up), cls: "hintline bad" }; refreshCookie(); return; }
                   const st = (up.data && up.data.cookieStatus) || {};
-                  if (st.valid) { resLine.textContent = "✓ 已保存，Cookie 有效"; resLine.className = "hintline ok"; ta.value = ""; }
-                  else { resLine.textContent = "⚠ 已保存，但 Cookie 已失效: " + (st.message || ""); resLine.className = "hintline bad"; }
+                  let msg, cls;
+                  if (st.valid) { msg = "✓ 已保存，Cookie 有效"; cls = "hintline ok"; ta.value = ""; }
+                  else { msg = "⚠ 已保存，但 Cookie 已失效: " + (st.message || ""); cls = "hintline bad"; }
+                  cookieMsgs[p.platform] = { text: msg, cls: cls };
                   refreshCookieStatus(); refreshCookie();
-                } catch (e) { resLine.textContent = "✗ 请求异常: " + (e && e.message ? e.message : String(e)); resLine.className = "hintline bad"; }
+                } catch (e) { cookieMsgs[p.platform] = { text: "✗ 请求异常: " + (e && e.message ? e.message : String(e)), cls: "hintline bad" }; refreshCookie(); }
               });
             });
             testBtn.addEventListener("click", function () {
               UI.withLoading(testBtn, async function () {
                 try {
                   const up = await API.call("POST", "/api/v2/publish/check-cookie", { platform: p.platform });
-                  if (!up.ok) { resLine.textContent = "✗ " + formatErr(up); resLine.className = "hintline bad"; return; }
-                  if (up.data && up.data.hasCookie && up.data.valid) { resLine.textContent = "✓ " + (up.data.message || "有效"); resLine.className = "hintline ok"; }
-                  else if (up.data && up.data.hasCookie && !up.data.valid) { resLine.textContent = "✗ " + (up.data.message || "Cookie 已过期"); resLine.className = "hintline bad"; }
-                  else { resLine.textContent = "✗ 未配置 Cookie"; resLine.className = "hintline bad"; }
-                  refreshCookieStatus(); refreshCookie();
-                } catch (e) { resLine.textContent = "✗ 请求异常: " + (e && e.message ? e.message : String(e)); resLine.className = "hintline bad"; }
+                  let msg, cls;
+                  if (!up.ok) { msg = "✗ " + formatErr(up); cls = "hintline bad"; }
+                  else if (up.data && up.data.hasCookie && up.data.valid) { msg = "✓ 连接成功，Cookie 有效" + (up.data.message ? "（" + up.data.message + "）" : ""); cls = "hintline ok"; }
+                  else if (up.data && up.data.hasCookie && !up.data.valid) { msg = "✗ 连接失败：Cookie 已失效" + (up.data.message ? "（" + up.data.message + "）" : ""); cls = "hintline bad"; }
+                  else { msg = "✗ 未配置 Cookie，无法连接"; cls = "hintline bad"; }
+                  cookieMsgs[p.platform] = { text: msg, cls: cls };
+                  resLine.textContent = msg; resLine.className = cls;
+                  refreshCookieStatus();
+                } catch (e) { cookieMsgs[p.platform] = { text: "✗ 请求异常: " + (e && e.message ? e.message : String(e)), cls: "hintline bad" }; resLine.textContent = cookieMsgs[p.platform].text; resLine.className = "hintline bad"; }
               });
             });
             clearBtn.addEventListener("click", function () { ta.value = ""; resLine.textContent = "已清空输入框"; resLine.className = "hintline"; });
