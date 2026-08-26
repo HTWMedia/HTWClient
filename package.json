@@ -1,0 +1,14 @@
+{
+  "name": "htwsuite",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HTW Media open-source desktop client — Electron shell + vendored HTWSkills agent layer.",
+  "workspaces": [
+    "apps/desktop",
+    "agent/cli"
+  ],
+  "scripts": {
+    "desktop": "npm --workspace apps/desktop run start",
+    "cli": "npm --workspace agent/cli run --"
+  }
+}
