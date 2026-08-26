@@ -4,19 +4,38 @@
   function getBaseInput() { return document.getElementById("api-base"); }
   function getKeyInput() { return document.getElementById("api-key"); }
 
+  // localStorage 作为兜底存储：即便 preload 的 saveConfig（写文件）因故未生效，
+  // 密钥仍能在会话间保留。与 userData 文件互为备份。
+  function readLocal() {
+    try {
+      return {
+        apiBase: localStorage.getItem("htw_apiBase") || "",
+        apiKey: localStorage.getItem("htw_apiKey") || "",
+      };
+    } catch (e) { return { apiBase: "", apiKey: "" }; }
+  }
+  function writeLocal(base, key) {
+    try {
+      if (base) localStorage.setItem("htw_apiBase", base); else localStorage.removeItem("htw_apiBase");
+      if (key) localStorage.setItem("htw_apiKey", key); else localStorage.removeItem("htw_apiKey");
+    } catch (e) { /* ignore */ }
+  }
+
   function applyAuth() {
     const base = getBaseInput().value.trim();
     const key = getKeyInput().value;
     if (window.htw && window.htw.saveConfig) window.htw.saveConfig({ apiBase: base, apiKey: key });
+    writeLocal(base, key);
     if (base) window.HTWApi.setBase(base);
     window.HTWApi.setKey(key);
     refreshKeyUI();
   }
 
   function persistAuth() {
-    if (window.htw && window.htw.saveConfig) {
-      window.htw.saveConfig({ apiBase: getBaseInput().value.trim(), apiKey: getKeyInput().value });
-    }
+    const base = getBaseInput().value.trim();
+    const key = getKeyInput().value;
+    if (window.htw && window.htw.saveConfig) window.htw.saveConfig({ apiBase: base, apiKey: key });
+    writeLocal(base, key);
   }
 
   function openGetKey() {
@@ -99,7 +118,11 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
-    const saved = (window.htw && window.htw.loadConfig) ? window.htw.loadConfig() : {};
+    let saved = (window.htw && window.htw.loadConfig) ? window.htw.loadConfig() : {};
+    if (!saved.apiKey) {
+      const l = readLocal();
+      if (l.apiKey) { saved.apiKey = l.apiKey; saved.apiBase = l.apiBase || saved.apiBase; }
+    }
     if (saved.apiBase) getBaseInput().value = saved.apiBase;
     if (saved.apiKey) getKeyInput().value = saved.apiKey;
     getBaseInput().addEventListener("change", applyAuth);
