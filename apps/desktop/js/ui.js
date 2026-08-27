@@ -82,11 +82,24 @@
     });
   }
 
+  function resolveUrl(url) {
+    if (typeof url !== "string") return url;
+    if (/^https?:\/\//i.test(url)) return url;
+    var base = (window.HTWApi && window.HTWApi.base) || "";
+    if (!base) return url;
+    try { return new URL(url, base).href; } catch (e) { return url; }
+  }
+
   function isImageUrl(key, val) {
     var s = String(val || "");
-    if (!/^https?:\/\//.test(s)) return false;
     if (/\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|$)/i.test(s)) return true;
-    return /image|cover|thumbnail|poster|pic/i.test(String(key || ""));
+    if (!/^https?:\/\//i.test(s)) return false;
+    if (/image|cover|thumbnail|poster|pic/i.test(String(key || ""))) return true;
+    try {
+      var host = new URL(s).hostname.toLowerCase();
+      if (/(img|image|cover|pic|thumbnail|poster|byteimg|bili|douyin|sns|cdn)/.test(host) && !/\.(mp4|webm|mov|m4v|avi)(\?|$)/i.test(s)) return true;
+    } catch (e) {}
+    return false;
   }
   function isAudioUrl(key, val) {
     var s = String(val || "");
@@ -102,18 +115,20 @@
   }
 
   function imageNode(url) {
-    var img = el("img", { class: "result-img", src: url, alt: url });
-    img.addEventListener("click", function () { openExternal(url); });
+    var resolved = resolveUrl(url);
+    var img = el("img", { class: "result-img", src: resolved, alt: url });
+    img.addEventListener("click", function () { openExternal(resolved); });
     img.style.cursor = "pointer";
     return el("div", { class: "img-wrap" }, [
       img,
-      el("a", { class: "title-link", href: url, text: "打开图片", onclick: function (e) { e.preventDefault(); openExternal(url); } }),
+      el("a", { class: "title-link", href: resolved, text: "打开图片", onclick: function (e) { e.preventDefault(); openExternal(resolved); } }),
     ]);
   }
   function audioNode(url) {
+    var resolved = resolveUrl(url);
     return el("div", { class: "audio-wrap" }, [
-      el("audio", { controls: true, src: url, preload: "none" }),
-      el("a", { class: "title-link", href: url, text: "下载音频", onclick: function (e) { e.preventDefault(); openExternal(url); } }),
+      el("audio", { controls: true, src: resolved, preload: "none" }),
+      el("a", { class: "title-link", href: resolved, text: "下载音频", onclick: function (e) { e.preventDefault(); openExternal(resolved); } }),
     ]);
   }
   function statusBadge(val) {

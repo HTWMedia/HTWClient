@@ -7,6 +7,13 @@ const https = require("https");
 const { URL } = require("url");
 
 const API_BASE = process.env.HTW_API_BASE || "https://htwmedia.dpdns.org";
+// 直连源站 IP：大文件直传走这里，绕过 Cloudflare 域名代理（域名对大文件上传很慢）。
+// 可用环境变量 HTW_API_DIRECT 覆盖（如 https://123.57.217.155）。
+const API_DIRECT = process.env.HTW_API_DIRECT || "http://123.57.217.155";
+
+function resolveBase(override) {
+  return override || API_BASE;
+}
 
 function configPath() {
   const dir = app.getPath("userData");
@@ -54,6 +61,7 @@ function loadJson(name) {
 // (AuthKey header) is done by the renderer; the key never leaves the client.
 contextBridge.exposeInMainWorld("htw", {
   apiBase: API_BASE,
+  directBase: API_DIRECT,
   loadConfig: loadConfig,
   saveConfig: saveConfig,
   saveJson: saveJson,
@@ -63,14 +71,16 @@ contextBridge.exposeInMainWorld("htw", {
     try { if (url) shell.openExternal(url); } catch (e) { /* ignore */ }
   },
   // Generic V2 caller. `body` is optional (omitted => GET).
-  call: async (method, path, body, apiKey) => {
+  // baseOverride 用于大文件直连源站 IP（绕过域名代理）。
+  call: async (method, path, body, apiKey, baseOverride) => {
+    const base = resolveBase(baseOverride);
     const headers = { AuthKey: apiKey || "" };
     const init = { method, headers };
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
       init.body = typeof body === "string" ? body : JSON.stringify(body);
     }
-    const res = await fetch(`${API_BASE}${path}`, init);
+    const res = await fetch(`${base}${path}`, init);
     const text = await res.text();
     let data;
     try { data = JSON.parse(text); } catch { data = text; }
@@ -81,8 +91,8 @@ contextBridge.exposeInMainWorld("htw", {
   // from a preload context and throws "reading 'request'").
   // `filePaths` is an array of absolute path strings OR `{name, buffer}`
   // objects (where `buffer` is an ArrayBuffer from a renderer file input).
-  // (method, path, filePaths, fields, headers, onProgress)
-  upload: (method, path, filePaths, fields, headers, onProgress) => {
+  // (method, path, filePaths, fields, headers, onProgress, fileField, baseOverride)
+  upload: (method, path, filePaths, fields, headers, onProgress, fileField, baseOverride) => {
     return new Promise((resolve, reject) => {
       const boundary = crypto.randomBytes(16).toString("hex");
       const enc = (s) => Buffer.from(s, "utf-8");
@@ -109,8 +119,9 @@ contextBridge.exposeInMainWorld("htw", {
           safeName = String(f.name || "file").replace(/["\r\n]/g, "_");
         }
         parts.push(enc(`--${boundary}\r\n`));
+        const fieldName = fileField || "file";
         parts.push(
-          enc(`Content-Disposition: form-data; name="file"; filename="${safeName}"\r\n`)
+          enc(`Content-Disposition: form-data; name="${fieldName}"; filename="${safeName}"\r\n`)
         );
         parts.push(enc("Content-Type: application/octet-stream\r\n\r\n"));
         parts.push(content);
@@ -121,8 +132,9 @@ contextBridge.exposeInMainWorld("htw", {
       const bodyBuf = Buffer.concat(parts);
 
       let target;
+      const base = resolveBase(baseOverride);
       try {
-        target = new URL(`${API_BASE}${path}`);
+        target = new URL(`${base}${path}`);
       } catch (e) {
         resolve({ status: 0, ok: false, data: { errCode: 0, errMsg: "invalid url: " + e.message } });
         return;
@@ -135,6 +147,8 @@ contextBridge.exposeInMainWorld("htw", {
         "Content-Length": bodyBuf.length,
       };
 
+      // 直连源站 IP 时证书主机名通常不匹配（证书签发给域名），关闭校验避免 TLS 报错。
+      const tlsOpts = baseOverride ? { rejectUnauthorized: false } : {};
       const req = transport.request(
         {
           method,
@@ -143,6 +157,7 @@ contextBridge.exposeInMainWorld("htw", {
           port: target.port || (target.protocol === "https:" ? 443 : 80),
           path: target.pathname + target.search,
           headers: reqHeaders,
+          ...tlsOpts,
         },
         (response) => {
           const chunks = [];

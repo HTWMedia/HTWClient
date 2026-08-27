@@ -5,3 +5,12 @@ dist/
 .env
 .env.local
 .superpowers/
+.opencode-trace/
+.playwright-mcp/
+config.json
+测试数据.txt
+page-*.yml
+insight-hotrank.png
+publish-cookie.png
+tools-image-result.png
+docs/superpowers/

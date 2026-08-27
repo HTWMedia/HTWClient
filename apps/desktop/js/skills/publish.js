@@ -293,7 +293,7 @@
               platforms: platforms,
             });
             if (!up.ok) { UI.showError(pubRegion, formatErr(up)); return; }
-            UI.showResult(pubRegion, { message: "已提交发布 taskId=" + (up.data && up.data.taskId), taskId: up.data && up.data.taskId });
+            UI.showResult(pubRegion, { message: "已提交发布 taskId=" + (up.taskId || (up.data && up.data.taskId)), taskId: up.taskId || (up.data && up.data.taskId) });
             switchTab("queue");
           } catch (e) { UI.showError(pubRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });

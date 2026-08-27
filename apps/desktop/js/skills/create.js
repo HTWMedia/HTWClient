@@ -1,7 +1,8 @@
 'use strict';
 
-const api = require('../api');
-const UI = require('../ui');
+const api = window.HTWApi;
+const UI = window.UI;
+const Skills = (window.Skills = window.Skills || {});
 
 let recommendationsCache = null;
 
@@ -237,7 +238,7 @@ function act(tab, state, root, kind, instruction) {
   });
 }
 
-exports.mount = function (root) {
+Skills.create = { mount: function (root) {
   const states = {
     video: { sessionId: null, topic: '', refurls: '', vtype: null, steps: { research: false, keypoint: true, material: false, publish: false }, polling: false },
     image: { sessionId: null, topic: '', steps: { optimize: true }, polling: false },
@@ -273,4 +274,4 @@ exports.mount = function (root) {
   });
 
   renderInputCard(current, states[current], root);
-};
+} };

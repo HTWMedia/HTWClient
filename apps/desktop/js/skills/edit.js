@@ -129,7 +129,7 @@
           try {
             const files = await readFiles(srFile);
             if (!files.length) { UI.showError(srRegion, "请选择视频文件"); return; }
-            const up = await API.upload("POST", "/api/v2/edit/super-res", files, { width: srW.value, height: srH.value });
+            const up = await API.upload("POST", "/api/v2/edit/super-res", files, { width: srW.value, height: srH.value }, null, "video");
             if (!up.ok) { UI.showError(srRegion, formatErr(up)); return; }
             const taskId = up.taskId || (up.data && up.data.taskId);
             if (!taskId) { UI.showError(srRegion, "未返回 taskId: " + JSON.stringify(up.data)); return; }

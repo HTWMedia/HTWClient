@@ -8,6 +8,15 @@
     "start": "electron .",
     "build": "electron-builder"
   },
+  "build": {
+    "appId": "com.htwmedia.desktop",
+    "productName": "HTW Media",
+    "icon": "assets/icon.ico",
+    "files": [
+      "**/*",
+      "assets/icon.ico"
+    ]
+  },
   "devDependencies": {
     "electron": "^31.0.0"
   },

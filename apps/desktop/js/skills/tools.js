@@ -193,12 +193,12 @@
       transcribeBtn.addEventListener("click", function () {
         UI.withLoading(transcribeBtn, async function () {
           try {
-            const fid = await uploadAudio(transcribeFile, transcribeRegion);
+            const fid = await uploadAudio(transFile, transcribeRegion);
             if (!fid) return;
             const up = await API.call("POST", "/api/v2/voice/transcribe", { fileId: fid, format: transFmt.value, language: transLang.value, translate: transTranslate.checked, role: transRoleChk.checked, alignText: transAlignChk.checked ? transAlignText.value.trim() : "" });
             if (!up.ok) { UI.showError(transcribeRegion, formatErr(up)); return; }
-            UI.showResult(transcribeRegion, { message: "已提交 taskId=" + (up.data && up.data.taskId) });
-            await pollVoiceTask(transcribeRegion, up.data && up.data.taskId);
+            UI.showResult(transcribeRegion, { message: "已提交 taskId=" + (up.taskId || (up.data && up.data.taskId)) });
+            await pollVoiceTask(transcribeRegion, up.taskId || (up.data && up.data.taskId));
           } catch (e) { UI.showError(transcribeRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
@@ -209,7 +209,7 @@
             if (!fid) return;
             const up = await API.call("POST", "/api/v2/voice/translate", { fileId: fid, language: translateLang.value });
             if (!up.ok) { UI.showError(translateRegion, formatErr(up)); return; }
-            await pollVoiceTask(translateRegion, up.data && up.data.taskId);
+            await pollVoiceTask(translateRegion, up.taskId || (up.data && up.data.taskId));
           } catch (e) { UI.showError(translateRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
@@ -220,7 +220,7 @@
             if (!fid) return;
             const up = await API.call("POST", "/api/v2/voice/summarize", { fileId: fid });
             if (!up.ok) { UI.showError(summarizeRegion, formatErr(up)); return; }
-            await pollVoiceTask(summarizeRegion, up.data && up.data.taskId);
+            await pollVoiceTask(summarizeRegion, up.taskId || (up.data && up.data.taskId));
           } catch (e) { UI.showError(summarizeRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
@@ -231,7 +231,7 @@
             if (!fid) return;
             const up = await API.call("POST", "/api/v2/voice/lyrics", { fileId: fid });
             if (!up.ok) { UI.showError(lyricsRegion, formatErr(up)); return; }
-            await pollVoiceTask(lyricsRegion, up.data && up.data.taskId);
+            await pollVoiceTask(lyricsRegion, up.taskId || (up.data && up.data.taskId));
           } catch (e) { UI.showError(lyricsRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
@@ -242,7 +242,7 @@
             if (!fid) return;
             const up = await API.call("POST", "/api/v2/voice/separate", { fileId: fid, type: sepType.value });
             if (!up.ok) { UI.showError(separateRegion, formatErr(up)); return; }
-            await pollVoiceTask(separateRegion, up.data && up.data.taskId);
+            await pollVoiceTask(separateRegion, up.taskId || (up.data && up.data.taskId));
           } catch (e) { UI.showError(separateRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
@@ -253,7 +253,7 @@
           try {
             const up = await API.call("POST", "/api/v2/voice/tts", { text: t, speaker: ttsSpeaker.value });
             if (!up.ok) { UI.showError(ttsRegion, formatErr(up)); return; }
-            await pollVoiceTask(ttsRegion, up.data && up.data.taskId);
+            await pollVoiceTask(ttsRegion, up.taskId || (up.data && up.data.taskId));
           } catch (e) { UI.showError(ttsRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
@@ -265,7 +265,7 @@
           try {
             const up = await API.call("POST", "/api/v2/image/generate", { prompt: p, model: "v4.5", ratio: imgRatio.value, resolution: imgRes.value, negativePrompt: imgNeg.value });
             if (!up.ok) { UI.showError(imgGenRegion, formatErr(up)); return; }
-            await pollImage(up.data && up.data.taskId).then(function (res) { if (!res.ok) { UI.showError(imgGenRegion, formatErr(res)); return; } UI.showResult(imgGenRegion, res.data); });
+            await pollImage(up.taskId || (up.data && up.data.taskId)).then(function (res) { if (!res.ok) { UI.showError(imgGenRegion, formatErr(res)); return; } UI.showResult(imgGenRegion, res.data); });
           } catch (e) { UI.showError(imgGenRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
@@ -288,7 +288,7 @@
           try {
             const up = await API.call("POST", "/api/v2/agent/one-click", { topic: t, platform: agentPlatform.value, length: agentLength.value, style: agentStyle.value, ratio: agentRatio.value, mode: agentMode.value, referenceText: agentRef.value, voice: agentVoice.value });
             if (!up.ok) { UI.showError(agentRegion, formatErr(up)); return; }
-            const tid = up.data && up.data.taskId;
+            const tid = up.taskId || (up.data && up.data.taskId);
             UI.showResult(agentRegion, { message: "已提交 taskId=" + tid, statusUrl: up.data && up.data.statusUrl, streamUrl: up.data && up.data.streamUrl });
             if (tid) { await pollAgent(tid).then(function (res) { if (!res.ok) { UI.showError(agentRegion, formatErr(res)); return; } UI.showResult(agentRegion, res.data); }); }
           } catch (e) { UI.showError(agentRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
@@ -302,7 +302,7 @@
             if (!files.length) { UI.showError(subRegion, "请选择视频"); return; }
             const up = await API.upload("POST", "/api/v2/subtitle/extract", files, { format: subFormat.value, engine: "kimi" });
             if (!up.ok) { UI.showError(subRegion, formatErr(up)); return; }
-            await pollSub(up.data && up.data.taskId).then(function (res) { if (!res.ok) { UI.showError(subRegion, formatErr(res)); return; } UI.showResult(subRegion, res.data); });
+            await pollSub(up.taskId || (up.data && up.data.taskId)).then(function (res) { if (!res.ok) { UI.showError(subRegion, formatErr(res)); return; } UI.showResult(subRegion, res.data); });
           } catch (e) { UI.showError(subRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });

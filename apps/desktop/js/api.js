@@ -7,9 +7,14 @@
   let _base =
     (typeof window !== "undefined" && window.htw && window.htw.apiBase) ||
     "https://htwmedia.dpdns.org";
+  // 大文件直连源站 IP（绕过域名代理，上传更快）。可用 setDirectBase 覆盖。
+  let _directBase =
+    (typeof window !== "undefined" && window.htw && window.htw.directBase) ||
+    "http://123.57.217.155";
 
   function setKey(k) { _key = k || ""; }
   function setBase(b) { if (b) _base = b; }
+  function setDirectBase(b) { if (b) _directBase = b; }
   function hasKey() { return !!_key; }
   function authHeader() { return { AuthKey: _key }; }
 
@@ -19,9 +24,9 @@
     return e;
   }
 
-  async function call(method, path, body) {
+  async function call(method, path, body, baseOverride) {
     if (!_key) throw keyError();
-    const res = await window.htw.call(method, path, body, _key);
+    const res = await window.htw.call(method, path, body, _key, baseOverride);
     return normalize(res);
   }
 
@@ -41,6 +46,8 @@
     const full = new Uint8Array(file.buffer);
     const uploadId = genUploadId();
     const total = Math.max(1, Math.ceil(full.length / CHUNK_SIZE));
+    // 大文件走直连源站 IP（_directBase），绕过域名代理以加速上传。
+    const uploadBase = _directBase;
     let failed = null;
     let next = 0;
     async function worker() {
@@ -56,7 +63,10 @@
             "/api/v2/files/chunk",
             [{ name: file.name, buffer: chunkBuf }],
             { fileId: uploadId, index: String(i), total: String(total), fileName: file.name },
-            authHeader()
+            authHeader(),
+            null,
+            null,
+            uploadBase
           );
           const norm = normalize(res);
           if (!norm.ok) { const e = new Error("分片 " + i + " 上传失败: " + (norm.message || norm.code)); e.httpError = true; failed = e; return; }
@@ -75,7 +85,7 @@
       target: path,
       fileField: fileField || "file",
       fields: fields || {},
-    });
+    }, uploadBase);
   }
 
   async function upload(method, path, filePaths, fields, onProgress, fileField) {
@@ -97,7 +107,7 @@
         console.warn("分片上传失败，回退为整文件上传:", e);
       }
     }
-    const res = await window.htw.upload(method, path, filePaths, fields, authHeader(), onProgress);
+    const res = await window.htw.upload(method, path, filePaths, fields, authHeader(), onProgress, fileField);
     return normalize(res);
   }
 
@@ -140,6 +150,8 @@
     }
   }
 
-  return { setKey: setKey, setBase: setBase, hasKey: hasKey, authHeader: authHeader, call: call, upload: upload, normalize: normalize, pollTask: pollTask, get base() { return _base; } };
+  const get = (p) => call("GET", p);
+  const post = (p, b) => call("POST", p, b);
+  return { setKey: setKey, setBase: setBase, setDirectBase: setDirectBase, hasKey: hasKey, authHeader: authHeader, call: call, get: get, post: post, upload: upload, normalize: normalize, pollTask: pollTask, get base() { return _base; }, get directBase() { return _directBase; } };
 });
 
