@@ -4,6 +4,7 @@
   "private": true,
   "description": "HTW Media desktop client (Electron) — wraps the HTW platform V2 API. Agent skills live in ../../agent.",
   "main": "main.js",
+  "author": "HTW Media",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder"
@@ -12,13 +13,14 @@
     "appId": "com.htwmedia.desktop",
     "productName": "HTW Media",
     "icon": "assets/icon.ico",
+    "npmRebuild": false,
     "files": [
       "**/*",
       "assets/icon.ico"
     ]
   },
   "devDependencies": {
-    "electron": "^31.0.0"
+    "electron": "31.7.7"
   },
   "optionalDependencies": {
     "electron-builder": "^24.0.0"
