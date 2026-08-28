@@ -95,9 +95,7 @@
     try {
       var full = new URL(url, base).href;
       if (_mediaToken && _sessionId && full.indexOf("/Download/") >= 0) {
-        var file = full.substring(full.lastIndexOf("/") + 1);
-        full = new URL("/api/v2/creation/media-file?sessionId=" + encodeURIComponent(_sessionId) +
-          "&fileName=" + encodeURIComponent(file) + "&token=" + encodeURIComponent(_mediaToken), base).href;
+        full += (full.indexOf("?") >= 0 ? "&" : "?") + "sessionId=" + encodeURIComponent(_sessionId) + "&token=" + encodeURIComponent(_mediaToken);
       } else if (_mediaToken && full.indexOf("/creation/media-file") >= 0) {
         full += (full.indexOf("?") >= 0 ? "&" : "?") + "token=" + encodeURIComponent(_mediaToken);
       }
