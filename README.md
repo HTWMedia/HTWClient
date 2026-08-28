@@ -7,7 +7,7 @@
 基于 Electron 的**开源桌面客户端**，对接 [HTW 媒体平台](https://htwmedia.dpdns.org) V2 API，把「转写字幕、媒资洞察、内容创作、智能剪辑、多平台发布」全部收进一个工作台。
 
 <p align="center">
-  对接 <a href="https://htwmedia.dpdns.org">HTW 媒体平台 V2 API</a> 的开源桌面客户端 · 转写 / 洞察 / 创作 / 剪辑 / 发布 一体工作台
+  <img src="docs/images/banner.png" width="720" alt="HTW Media Client">
 </p>
 
 [![Version](https://img.shields.io/badge/version-v0.1.0-blue.svg)](https://github.com/HTWMedia/HTWClient/releases)
