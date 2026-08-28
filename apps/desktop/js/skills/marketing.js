@@ -211,7 +211,7 @@ Skills.marketing = {
       progressCard.style.display = "none";
       restoreBtn();
       try {
-        var url = data && data.downloadUrl;
+        var url = (data && data.cloudUrl) || (data && data.downloadUrl);
         if (!url) { setErr("未获取到下载链接，请稍后重试"); return; }
         // 服务端已下发可直接使用的下载链接（带短时效凭证），桌面端直接作为
         // <video> 源与 <a download> 使用，避免用 AuthKey 头取二进制再转 Blob。
