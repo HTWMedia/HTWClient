@@ -180,4 +180,18 @@ contextBridge.exposeInMainWorld("htw", {
       req.end();
     });
   },
+  // 下载二进制（如成片视频）。桌面端用 AuthKey 头鉴权，无法像 web 端那样靠
+  // 会话 Cookie 直接给 <video> 设 src，因此这里取 ArrayBuffer 回渲染进程转 Blob。
+  download: async (method, path, apiKey, baseOverride) => {
+    const base = resolveBase(baseOverride);
+    const headers = { AuthKey: apiKey || "" };
+    try {
+      const res = await fetch(`${base}${path}`, { method, headers });
+      if (!res.ok) return { status: res.status, ok: false, data: null };
+      const buf = await res.arrayBuffer();
+      return { status: res.status, ok: true, data: buf };
+    } catch (e) {
+      return { status: 0, ok: false, data: null, error: e.message };
+    }
+  },
 });

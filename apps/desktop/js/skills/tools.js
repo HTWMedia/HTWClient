@@ -1,5 +1,5 @@
 (function () {
-  const Skills = (window.Skills = window.Skills || {});
+  var Skills = (window.Skills = window.Skills || {});
 
   function formatErr(r) {
     if (!r) return "未知错误";
@@ -10,7 +10,7 @@
 
   Skills.tools = {
     mount: function (panel) {
-      const UI = window.UI;
+      var UI = window.UI;
       const API = window.HTWApi;
       UI.clear(panel);
 

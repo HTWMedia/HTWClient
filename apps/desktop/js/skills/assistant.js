@@ -1,6 +1,6 @@
 window.Skills = window.Skills || {};
 window.Skills.assistant = (function () {
-  const UI = window.UI;
+  var UI = window.UI;
   const htw = window.htw;
   const MARKED = window.marked;
 

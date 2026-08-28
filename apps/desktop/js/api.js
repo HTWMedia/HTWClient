@@ -128,6 +128,11 @@
     return { ok: true, data: data !== undefined ? data : d, taskId: taskId || null };
   }
 
+  async function download(method, path, baseOverride) {
+    if (!_key) throw keyError();
+    return await window.htw.download(method, path, _key, baseOverride);
+  }
+
   async function pollTask(taskId, opts) {
     opts = opts || {};
     const interval = opts.interval || 2000;
@@ -152,6 +157,6 @@
 
   const get = (p) => call("GET", p);
   const post = (p, b) => call("POST", p, b);
-  return { setKey: setKey, setBase: setBase, setDirectBase: setDirectBase, hasKey: hasKey, authHeader: authHeader, call: call, get: get, post: post, upload: upload, normalize: normalize, pollTask: pollTask, get base() { return _base; }, get directBase() { return _directBase; } };
+  return { setKey: setKey, setBase: setBase, setDirectBase: setDirectBase, hasKey: hasKey, authHeader: authHeader, call: call, get: get, post: post, upload: upload, download: download, normalize: normalize, pollTask: pollTask, get base() { return _base; }, get directBase() { return _directBase; } };
 });
 
