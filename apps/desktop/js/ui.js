@@ -48,9 +48,11 @@
   }
 
   var _mediaToken = null;
+  var _sessionId = null;
 
   function showResult(region, data) {
     _mediaToken = (data && data.mediaToken) || null;
+    _sessionId = (data && data.Id) || null;
     return presentResult(region, data);
   }
 
@@ -92,7 +94,11 @@
     if (!base) return url;
     try {
       var full = new URL(url, base).href;
-      if (_mediaToken && full.indexOf("/creation/media-file") >= 0) {
+      if (_mediaToken && _sessionId && full.indexOf("/Download/") >= 0) {
+        var file = full.substring(full.lastIndexOf("/") + 1);
+        full = new URL("/api/v2/creation/media-file?sessionId=" + encodeURIComponent(_sessionId) +
+          "&fileName=" + encodeURIComponent(file) + "&token=" + encodeURIComponent(_mediaToken), base).href;
+      } else if (_mediaToken && full.indexOf("/creation/media-file") >= 0) {
         full += (full.indexOf("?") >= 0 ? "&" : "?") + "token=" + encodeURIComponent(_mediaToken);
       }
       return full;

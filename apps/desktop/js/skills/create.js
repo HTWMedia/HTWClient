@@ -1,8 +1,8 @@
 'use strict';
 
-const api = window.HTWApi;
-const UI = window.UI;
-const Skills = (window.Skills = window.Skills || {});
+var api = window.HTWApi;
+var UI = window.UI;
+var Skills = (window.Skills = window.Skills || {});
 
 let recommendationsCache = null;
 
@@ -169,7 +169,12 @@ function renderDetail(tab, state, root, data) {
 
   det.innerHTML = html;
 
-  UI.showResult(det, data);
+  var dataForShow = data;
+  if (data && typeof data.artifact === "string") {
+    try { dataForShow = Object.assign({}, data, { artifact: JSON.parse(data.artifact) }); }
+    catch (e) { dataForShow = data; }
+  }
+  UI.showResult(det, dataForShow);
 
   if (data.artifact) {
     try {
