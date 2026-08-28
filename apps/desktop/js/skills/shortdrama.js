@@ -56,7 +56,7 @@ Skills.shortdrama = {
     const continueInput = UI.el("input", { type: "text", placeholder: "续写 / 细化指令（保留上文，推进下一阶段）" });
     const continueBtn = UI.el("button", { class: "btn", id: "sd-continue", text: "继续" });
     const shotPrompt = UI.el("textarea", { placeholder: "分镜画面描述（可选，留空用剧情创意生成）。例：机器人低头，手指轻触破土而出的小花，暖光", rows: 3 });
-    const shotsBtn = UI.el("button", { class: "btn", id: "sd-shots", text: "生成分镜(Seedance)" });
+    const shotsBtn = UI.el("button", { class: "btn", id: "sd-shots", text: "生成分镜" });
     const docBtn = UI.el("button", { class: "btn", id: "sd-doc", text: "查看剧本" });
     const composeBtn = UI.el("button", { class: "btn", id: "sd-compose", text: "合成成片" });
 
@@ -66,7 +66,7 @@ Skills.shortdrama = {
 
     UI.mount(root, UI.el("div", {}, [
       UI.el("h2", { text: "短剧创作 ShortDrama" }),
-       UI.el("div", { class: "muted", text: "由服务端豆包「短剧编排」技能驱动：规划 → 剧本 → 分镜(Seedance) → 成片。若豆包/Seedance 不可用，自动切换「剪映素材库」管线兜底合成（不走 Seedance）。" }),
+       UI.el("div", { class: "muted", text: "由 AI 短剧编排能力驱动：规划 → 剧本 → 分镜 → 成片。若在线生成暂不可用，会自动改用备用生成通道合成成片。" }),
       section("剧情设定", [
         field("剧情创意", idea),
         UI.el("div", { class: "row" }, [startBtn, UI.el("span", { class: "muted", id: "sd-conv", text: "会话号：—" })]),
@@ -115,7 +115,7 @@ Skills.shortdrama = {
     // 兜底：豆包短剧技能 / Seedance 不可用时，改用营销成片同款 VideoCreationService 管线（剪映素材库 + 即梦，不使用 Seedance）
     let fbRunning = false;
     function noteFallback() {
-      region.insertAdjacentHTML("beforeend", '<div class="progresslog"><div>豆包短剧技能暂不可用，已切换「剪映素材库」管线兜底合成（不走 Seedance）。</div></div>');
+      region.insertAdjacentHTML("beforeend", '<div class="progresslog"><div>在线短剧生成暂不可用，已自动切换备用通道合成成片。</div></div>');
     }
     async function fallbackCompose(theme) {
       if (fbRunning) return;
@@ -127,12 +127,12 @@ Skills.shortdrama = {
           videoTypeId: "shortdrama",
           enableSeedance: false,
         });
-        if (!up.ok) { UI.showError(region, "兜底合成失败：" + formatErr(up)); return; }
+        if (!up.ok) { UI.showError(region, "成片生成失败：" + formatErr(up)); return; }
         const sessionId = up.data && up.data.sessionId;
-        if (!sessionId) { UI.showError(region, "兜底合成未返回 sessionId"); return; }
+        if (!sessionId) { UI.showError(region, "成片生成未返回会话"); return; }
         fbPoll(sessionId);
       } catch (e) {
-        UI.showError(region, "兜底合成异常：" + (e && e.message ? e.message : e));
+        UI.showError(region, "成片生成异常：" + (e && e.message ? e.message : e));
       } finally {
         fbRunning = false;
       }
@@ -153,7 +153,7 @@ Skills.shortdrama = {
         const artRaw = d && (d.Artifact !== undefined ? d.Artifact : d.artifact);
         const art = artRaw ? tryParse(artRaw) : null;
         if (art && art.type === "video_script" && art.scriptText) {
-          showStage("▎兜底剧本（剪映素材库管线）：\n" + art.scriptText);
+          showStage("▎剧本（备用通道）：\n" + art.scriptText);
         }
 
         const vurl = findVideoUrl(d);
@@ -161,7 +161,7 @@ Skills.shortdrama = {
           const src = /^https?:\/\//.test(vurl)
             ? "/api/v2/creation/proxy-media?url=" + encodeURIComponent(vurl)
             : (vurl.charAt(0) === "/" ? vurl : "/api/v2/creation/media-file?sessionId=" + encodeURIComponent(sessionId) + "&fileName=" + encodeURIComponent(vurl));
-          showVideo(src, "兜底成片");
+          showVideo(src, "成片");
         }
 
         if (status === "running") {
@@ -173,10 +173,10 @@ Skills.shortdrama = {
             .catch(e => UI.showError(region, "确认步骤失败：" + (e && e.message ? e.message : e)));
           approve();
         } else if (status === "failed") {
-          UI.showError(region, "兜底合成失败：" + (pick(d, "Error", "error") || "未知错误"));
+          UI.showError(region, "成片生成失败：" + (pick(d, "Error", "error") || "未知错误"));
         }
       } catch (e) {
-        UI.showError(region, "兜底状态错误：" + (e && e.message ? e.message : e));
+        UI.showError(region, "成片生成状态错误：" + (e && e.message ? e.message : e));
       }
     }
 
@@ -200,8 +200,8 @@ Skills.shortdrama = {
       if (!convId) { UI.showError(region, "请先「开始创作」"); return; }
       const hint = shotPrompt.value.trim();
       const instr = hint
-        ? ("请基于以下提示调用 Seedance 生成分镜视频：" + hint)
-        : "请基于以上剧本调用 Seedance 生成分镜视频";
+        ? ("请基于以下提示生成分镜视频：" + hint)
+        : "请基于以上剧本生成分镜视频";
       UI.withLoading(shotsBtn, async function () {
         const r = await doCompose(instr, true);
         if (!r.ok || !r.text) { noteFallback(); await fallbackCompose(idea.value.trim()); }
