@@ -24,7 +24,7 @@
 
 ## 界面预览 🖥️
 
-工作台内置五大能力面板，统一 V2 契约 `{ ok, data, errCode, errMsg, taskId }`：
+工作台内置六大能力面板，统一 V2 契约 `{ ok, data, errCode, errMsg, taskId }`：
 
 <table align="center">
   <tr>
@@ -65,6 +65,8 @@
   - [x] **图片创作** 与 **文章创作**：主题驱动生成，支持「优化精修」
   - [x] 内置 **实时热点** 与 **创作建议**，点击卡片即可填入主题；创作过程实时进度日志，结果可 **确认 / 重新生成 / 精修**
   - [x] 支持上传参考素材（图片 / 视频，单文件 ≤20MB），最终产出视频脚本等成片
+  - [x] **营销成片 MarketVideo**：上传 **≥5 张商品参考图**（或 1 个参考视频），点击「生成卖点 / 生成营销文案」由 DeepSeek 自动产出卖点与口播文案；一键「生成成片」调用 **Seedance** 生成钩子镜头分镜并叠加营销浮层（卖点 CTA / 主标题），实时进度日志 + 成片预览 / 下载
+  - [x] **营销成片辅助接口**（服务端 `AuthKey` 直连）：`POST /api/v2/market-video/product-info` 生成商品名与卖点，`POST /api/v2/market-video/generate-script` 生成营销口播文案
 - [x] **智能剪辑**：由服务端算力执行的专业视频处理
   - [x] **粗剪 Coarse-cut**：设定成片时长区间（最短 / 最长秒数）与配音文案，可选「模糊处理」，自动生成精简成片
   - [x] **草稿导出 Draft-export**：导入 CapCut / 剪映 草稿 ZIP，导出可继续编辑的工程文件
@@ -88,7 +90,7 @@
 │  ├─ js/               # 工作台 UI 与各能力面板
 │  └─ assets/icon.ico   # 应用图标
 ├─ agent/               # Agent Skills + Node CLI（可被 npx / AI Agent 调用）
-│  ├─ skills/           # htw-media-{insight,create,publish,tools,edit}
+│  ├─ skills/           # htw-media-{insight,create,publish,tools,edit,marketing}
 │  └─ cli/
 └─ docs/
 ```

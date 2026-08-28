@@ -14,11 +14,14 @@ function tryParse(s) {
   try { return typeof s === "string" ? JSON.parse(s) : s; } catch (e) { return null; }
 }
 
-// 从 status / artifact 中找出成片视频 URL（兼容多种字段名）
+function pick(o, a, b) { return o == null ? undefined : (o[a] !== undefined ? o[a] : o[b]); }
+
+// 从 status / artifact 中找出成片视频 URL（兼容多种字段名与大小写）
 function findVideoUrl(d) {
-  const keys = ["videoUrl", "url", "mediaFile", "resultUrl", "downloadUrl", "resultPath"];
+  const keys = ["videoUrl", "VideoUrl", "url", "Url", "mediaFile", "MediaFile", "resultUrl", "ResultUrl", "downloadUrl", "DownloadUrl", "resultPath", "ResultPath", "video", "Video", "mp4", "Mp4"];
   const out = [];
-  const art = d && d.artifact ? tryParse(d.artifact) : null;
+  const artRaw = d && (d.Artifact !== undefined ? d.Artifact : d.artifact);
+  const art = artRaw ? tryParse(artRaw) : null;
   if (art) keys.forEach(k => { if (art[k]) out.push(art[k]); });
   if (d) keys.forEach(k => { if (d[k]) out.push(d[k]); });
   return out[0] || null;
@@ -51,11 +54,13 @@ Skills.marketing = {
     const copyText = UI.el("textarea", { placeholder: "文案（可选，留空由 AI 生成脚本）" });
     const discount = UI.el("input", { type: "text", placeholder: "优惠活动，如 买二送一（可选）" });
     const audience = UI.el("input", { type: "text", placeholder: "适用人群，逗号分隔，如 学生,上班族（可选）" });
+    const genSellBtn = UI.el("button", { class: "btn", id: "mv-gen-sell", text: "生成卖点" });
+    const genCopyBtn = UI.el("button", { class: "btn", id: "mv-gen-copy", text: "生成营销文案" });
     const seedanceClips = UI.el("input", { type: "number", value: "2", min: "0", max: "6" });
     const overlay = UI.el("input", { type: "checkbox", checked: true });
     const videoType = UI.el("select", {}, [UI.el("option", { value: "", text: "默认(kol)" })]);
     const stepResearch = stepChk("research", "调研", false);
-    const stepKeypoint = stepChk("keypoint", "关键点提取", true);
+    const stepKeypoint = stepChk("keypoint", "关键点提取", false);
     const stepMaterial = stepChk("material", "素材搜索", false);
     const stepPublish = stepChk("publish", "自动发布", false);
     const startBtn = UI.el("button", { class: "btn primary", id: "mv-start", text: "生成成片" });
@@ -70,6 +75,7 @@ Skills.marketing = {
         field("文案", copyText),
         field("优惠活动", discount),
         field("适用人群", audience),
+        UI.el("div", { class: "row" }, [genSellBtn, genCopyBtn, UI.el("span", { class: "muted", text: "（调用服务端 market-video V2 接口）" })]),
         field("Seedance 钩子镜头数", seedanceClips),
         field("营销浮层", overlay),
         field("视频类型", videoType),
@@ -93,23 +99,26 @@ Skills.marketing = {
     }
 
     function render(d) {
+      const status = pick(d, "Status", "status");
+      const label = pick(d, "CurrentStepLabel", "currentStepLabel");
+      const logs = pick(d, "ProgressLogs", "progressLogs");
       let html = "";
-      if (d.currentStepLabel) html += `<div class="detail-step">${UI.esc(d.currentStepLabel)} <span class="badge ${UI.esc(d.status)}">${UI.esc(d.status)}</span></div>`;
-      if (d.progressLogs && d.progressLogs.length) html += '<div class="progresslog">' + d.progressLogs.map(l => `<div>${UI.esc(l)}</div>`).join("") + "</div>";
+      if (label) html += `<div class="detail-step">${UI.esc(label)} <span class="badge ${UI.esc(status)}">${UI.esc(status)}</span></div>`;
+      if (logs && logs.length) html += '<div class="progresslog">' + logs.map(l => `<div>${UI.esc(l)}</div>`).join("") + "</div>";
       region.innerHTML = html;
       UI.showResult(region, d);
       const vurl = findVideoUrl(d);
       if (vurl) {
-        const src = /^https?:\/\//.test(vurl)
-          ? ("/api/v2/creation/proxy-media?url=" + encodeURIComponent(vurl))
-          : ("/api/v2/creation/media-file?sessionId=" + encodeURIComponent(sessionId) + "&fileName=" + encodeURIComponent(vurl));
+        let src;
+        if (/^https?:\/\//.test(vurl)) src = "/api/v2/creation/proxy-media?url=" + encodeURIComponent(vurl);
+        else if (vurl.charAt(0) === "/") src = vurl;
+        else src = "/api/v2/creation/media-file?sessionId=" + encodeURIComponent(sessionId) + "&fileName=" + encodeURIComponent(vurl);
         region.insertAdjacentHTML("beforeend", `<div class="field inline uprow"><video src="${UI.esc(src)}" controls style="max-width:100%"></video> <a class="btn" href="${UI.esc(src)}" download>下载成片</a></div>`);
       }
-      if (d.artifact) {
-        const art = tryParse(d.artifact);
-        if (art && art.type === "video_script" && art.scriptText) {
-          region.insertAdjacentHTML("beforeend", `<div class="scriptbox"><pre>${UI.esc(art.scriptText)}</pre></div>`);
-        }
+      const artRaw = d && (d.Artifact !== undefined ? d.Artifact : d.artifact);
+      const art = artRaw ? tryParse(artRaw) : null;
+      if (art && art.type === "video_script" && art.scriptText) {
+        region.insertAdjacentHTML("beforeend", `<div class="scriptbox"><pre>${UI.esc(art.scriptText)}</pre></div>`);
       }
     }
 
@@ -140,10 +149,19 @@ Skills.marketing = {
         const d = r && r.data;
         if (!d) return;
         render(d);
-        if (polling && d.status === "running") {
+        const status = pick(d, "Status", "status");
+        const stepId = pick(d, "CurrentStepId", "currentStepId");
+        if (polling && status === "running") {
           setTimeout(poll, 2000);
-        } else if (d.status === "waiting_approval") {
-          polling = false; renderActions();
+        } else if (status === "waiting_approval") {
+          // 脚本步骤交给用户确认/重新生成/精修；其余中间步骤（配音、画面、音乐、模板、合成）自动确认，直达成片
+          if (stepId === "script") {
+            polling = false; renderActions();
+          } else {
+            api.post("/api/v2/creation/approve", { sessionId: sessionId, type: "video" })
+              .then(() => { polling = true; poll(); })
+              .catch(e => { polling = false; UI.showError(region, "确认失败：" + (e && e.message ? e.message : e)); });
+          }
         } else {
           polling = false;
         }
@@ -164,6 +182,17 @@ Skills.marketing = {
     startBtn.addEventListener("click", function () {
       const name = productName.value.trim();
       if (!name) { UI.showError(region, "请输入商品名称"); return; }
+      const list = files.input.files || [];
+      let imgCount = 0, vidCount = 0;
+      for (let i = 0; i < list.length; i++) {
+        const t = list[i].type || "";
+        if (t.startsWith("video/")) vidCount++;
+        else imgCount++;
+      }
+      if (imgCount < 5 && vidCount < 1) {
+        UI.showError(region, "营销成片需要至少 5 张参考图，或 1 个参考视频（当前图片 " + imgCount + " 张 / 视频 " + vidCount + " 个）");
+        return;
+      }
       UI.withLoading(startBtn, async function () {
         try {
           const topic = [name, sellPoints.value.trim(), copyText.value.trim()].filter(Boolean).join("\n");
@@ -192,6 +221,44 @@ Skills.marketing = {
           poll();
         } catch (e) {
           UI.showError(region, "请求异常: " + (e && e.message ? e.message : e));
+        }
+      });
+    });
+
+    genSellBtn.addEventListener("click", function () {
+      const name = productName.value.trim();
+      if (!name) { UI.showError(region, "请先填写商品名称"); return; }
+      UI.withLoading(genSellBtn, async function () {
+        try {
+          const r = await api.post("/api/v2/market-video/product-info", { text: name });
+          if (!r.ok) { UI.showError(region, "生成卖点失败：" + formatErr(r)); return; }
+          const d = r.data || {};
+          if (d.productName) productName.value = d.productName;
+          if (d.sellPoints && d.sellPoints.length) sellPoints.value = d.sellPoints.join("\n");
+        } catch (e) {
+          UI.showError(region, "生成卖点异常：" + (e && e.message ? e.message : e));
+        }
+      });
+    });
+
+    genCopyBtn.addEventListener("click", function () {
+      const name = productName.value.trim();
+      if (!name) { UI.showError(region, "请先填写商品名称"); return; }
+      UI.withLoading(genCopyBtn, async function () {
+        try {
+          const r = await api.post("/api/v2/market-video/generate-script", {
+            productName: name,
+            sellPoints: sellPoints.value.trim(),
+            ratio: "16:9",
+            duration: "15-30",
+            discountActivity: discount.value.trim(),
+            audienceTypes: audience.value.trim(),
+          });
+          if (!r.ok) { UI.showError(region, "生成文案失败：" + formatErr(r)); return; }
+          const d = r.data || {};
+          if (d.script) copyText.value = d.script;
+        } catch (e) {
+          UI.showError(region, "生成文案异常：" + (e && e.message ? e.message : e));
         }
       });
     });
