@@ -169,12 +169,31 @@ function renderDetail(tab, state, root, data) {
 
   det.innerHTML = html;
 
-  var dataForShow = data;
-  if (data && typeof data.artifact === "string") {
-    try { dataForShow = Object.assign({}, data, { artifact: JSON.parse(data.artifact) }); }
-    catch (e) { dataForShow = data; }
+  var parsedArtifact = data && data.artifact;
+  try { if (typeof parsedArtifact === "string") parsedArtifact = JSON.parse(parsedArtifact); } catch (e) { parsedArtifact = null; }
+  var cloudUrl = parsedArtifact && typeof parsedArtifact === "object" ? parsedArtifact.CloudUrl : null;
+  var dataForShow = Object.assign({}, data, { artifact: parsedArtifact });
+  if (cloudUrl) {
+    try {
+      var artClone = JSON.parse(JSON.stringify(parsedArtifact));
+      delete artClone.DownloadUrl;
+      delete artClone.CloudUrl;
+      dataForShow.artifact = artClone;
+    } catch (e) {}
   }
   UI.showResult(det, dataForShow);
+
+  if (cloudUrl) {
+    var vbox = document.createElement("div");
+    vbox.className = "media-box";
+    var vid = document.createElement("video");
+    vid.className = "result-video"; vid.src = cloudUrl; vid.controls = true; vid.preload = "metadata";
+    var dl = document.createElement("a");
+    dl.className = "title-link"; dl.href = cloudUrl; dl.textContent = "下载视频（剪映 CDN 直链）"; dl.setAttribute("download", "");
+    dl.addEventListener("click", function (e) { e.preventDefault(); if (window.htw && window.htw.openExternal) window.htw.openExternal(cloudUrl); else window.open(cloudUrl, "_blank"); });
+    vbox.appendChild(vid); vbox.appendChild(dl);
+    det.insertBefore(vbox, det.firstChild);
+  }
 
   if (data.artifact) {
     try {
