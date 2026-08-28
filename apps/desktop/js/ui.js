@@ -47,7 +47,10 @@
     return region;
   }
 
+  var _mediaToken = null;
+
   function showResult(region, data) {
+    _mediaToken = (data && data.mediaToken) || null;
     return presentResult(region, data);
   }
 
@@ -87,7 +90,13 @@
     if (/^https?:\/\//i.test(url)) return url;
     var base = (window.HTWApi && window.HTWApi.base) || "";
     if (!base) return url;
-    try { return new URL(url, base).href; } catch (e) { return url; }
+    try {
+      var full = new URL(url, base).href;
+      if (_mediaToken && full.indexOf("/creation/media-file") >= 0) {
+        full += (full.indexOf("?") >= 0 ? "&" : "?") + "token=" + encodeURIComponent(_mediaToken);
+      }
+      return full;
+    } catch (e) { return url; }
   }
 
   function isImageUrl(key, val) {
@@ -106,6 +115,19 @@
     if (!/^https?:\/\//.test(s)) return false;
     if (/\.(mp3|wav|m4a|ogg|aac|flac)(\?|$)/i.test(s)) return true;
     return /audio|voice|tts/i.test(String(key || ""));
+  }
+  function isVideoUrl(key, val) {
+    var s = String(val || "");
+    if (/\.(mp4|webm|m4v|mov|ogv|avi)(\?|$)/i.test(s)) return true;
+    if (!/^https?:\/\//.test(s)) return false;
+    return /video|成片|影片|mp4/i.test(String(key || ""));
+  }
+  function videoNode(url) {
+    var resolved = resolveUrl(url);
+    return el("div", { class: "media-box" }, [
+      el("video", { class: "result-video", src: resolved, controls: true, preload: "metadata" }),
+      el("a", { class: "title-link", href: resolved, text: "下载视频", onclick: function (e) { e.preventDefault(); openExternal(resolved); } }),
+    ]);
   }
   function isStatusKey(key) { return /status|state|result/i.test(String(key || "")); }
   function isRichText(s) {
@@ -146,6 +168,7 @@
     var s = String(val == null ? "" : val);
     if (isImageUrl(key, s)) return imageNode(s);
     if (isAudioUrl(key, s)) return audioNode(s);
+    if (isVideoUrl(key, s)) return videoNode(s);
     if (/^https?:\/\//.test(s)) return linkNode(s, s);
     if (isStatusKey(key)) return statusBadge(s);
     if (isRichText(s)) return el("div", { class: "kv-md" }, renderMarkdown(s));
