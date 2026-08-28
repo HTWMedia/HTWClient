@@ -201,7 +201,8 @@ Skills.shortdrama = {
     }
 
     function loadShotImage(img, url) {
-      api.download("GET", url)
+      var bust = url + (url.indexOf("?") >= 0 ? "&" : "?") + "_t=" + Date.now();
+      api.download("GET", bust)
         .then(function (r) {
           if (r.ok && r.data) img.src = URL.createObjectURL(new Blob([r.data], { type: "image/png" }));
         })
