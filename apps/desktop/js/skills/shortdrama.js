@@ -313,25 +313,21 @@ Skills.shortdrama = {
             if (!r.ok) { stopRecompose(); setErr("状态查询失败：" + formatErr(r)); recomposeBtn.disabled = false; return; }
             if (d.status === "completed" || d.status === "done") {
               stopRecompose();
-              showProgress("正在获取成片...");
-              api.download("GET", "/api/v2/agent/download?taskId=" + encodeURIComponent(tid))
-                .then(function (res) {
-                  if (res.ok && res.data) {
-                    var v = UI.el("video", { controls: true, style: "width:100%;max-width:480px;border-radius:8px;background:#000" });
-                    v.src = URL.createObjectURL(new Blob([res.data], { type: "video/mp4" }));
-                    resultCard.innerHTML = "";
-                    resultCard.appendChild(UI.el("div", { class: "result-area-text", text: "成片合成完成" }));
-                    resultCard.appendChild(v);
-                    resultCard.appendChild(UI.el("a", { class: "btn primary", href: v.src, download: true, text: "下载视频" }));
-                    resultCard.style.display = "block";
-                    progressCard.style.display = "none";
-                    setErr("");
-                  } else {
-                    setErr("成片下载失败");
-                  }
-                  recomposeBtn.disabled = false;
-                })
-                .catch(function (e) { setErr("成片下载异常：" + (e && e.message ? e.message : e)); recomposeBtn.disabled = false; });
+              // 服务端已下发可直接使用的下载链接（带短时效凭证），桌面端直接作为
+              // <video> 源与 <a download> 使用，避免用 AuthKey 头取二进制再转 Blob。
+              var url = d.downloadUrl;
+              if (!url) { setErr("未获取到下载链接，请稍后重试"); recomposeBtn.disabled = false; return; }
+              if (url.charAt(0) === "/") url = api.base + url;
+              var v = UI.el("video", { controls: true, style: "width:100%;max-width:480px;border-radius:8px;background:#000" });
+              v.src = url;
+              resultCard.innerHTML = "";
+              resultCard.appendChild(UI.el("div", { class: "result-area-text", text: "成片合成完成" }));
+              resultCard.appendChild(v);
+              resultCard.appendChild(UI.el("a", { class: "btn primary", href: url, download: "short_drama.mp4", text: "下载视频" }));
+              resultCard.style.display = "block";
+              progressCard.style.display = "none";
+              setErr("");
+              recomposeBtn.disabled = false;
             } else if (d.status === "failed") {
               stopRecompose();
               setErr(d.error || "重新合成失败");
