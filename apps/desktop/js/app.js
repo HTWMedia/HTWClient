@@ -1,5 +1,5 @@
 (function () {
-  const SKILLS = ["insight", "edit", "tools", "publish", "assistant", "create", "marketing"];
+  const SKILLS = ["insight", "edit", "tools", "publish", "assistant", "create", "marketing", "shortdrama"];
 
   function getBaseInput() { return document.getElementById("api-base"); }
   function getKeyInput() { return document.getElementById("api-key"); }

@@ -24,7 +24,7 @@
 
 ## 界面预览 🖥️
 
-工作台内置六大能力面板，统一 V2 契约 `{ ok, data, errCode, errMsg, taskId }`：
+工作台内置多组能力面板，统一 V2 契约 `{ ok, data, errCode, errMsg, taskId }`：
 
 <table align="center">
   <tr>
@@ -66,6 +66,7 @@
   - [x] 内置 **实时热点** 与 **创作建议**，点击卡片即可填入主题；创作过程实时进度日志，结果可 **确认 / 重新生成 / 精修**
   - [x] 支持上传参考素材（图片 / 视频，单文件 ≤20MB），最终产出视频脚本等成片
   - [x] **营销成片 MarketVideo**：上传商品参考图（或参考视频），一键自动生成卖点与口播文案，并产出带营销浮层的带货短视频，支持实时进度与成片预览 / 下载
+  - [x] **短剧创作 ShortDrama**：描述剧情创意，由服务端豆包技能自动完成规划、剧本、分镜与成片，支持多轮细化、分镜生成与剧本查看
 - [x] **智能剪辑**：由服务端算力执行的专业视频处理
   - [x] **粗剪 Coarse-cut**：设定成片时长区间（最短 / 最长秒数）与配音文案，可选「模糊处理」，自动生成精简成片
   - [x] **草稿导出 Draft-export**：导入 CapCut / 剪映 草稿 ZIP，导出可继续编辑的工程文件
@@ -89,7 +90,7 @@
 │  ├─ js/               # 工作台 UI 与各能力面板
 │  └─ assets/icon.ico   # 应用图标
 ├─ agent/               # Agent Skills + Node CLI（可被 npx / AI Agent 调用）
-│  ├─ skills/           # htw-media-{insight,create,publish,tools,edit,marketing}
+│  ├─ skills/           # htw-media-{insight,create,publish,tools,edit,marketing,shortdrama}
 │  └─ cli/
 └─ docs/
 ```
