@@ -1,6 +1,6 @@
 {
   "name": "htwsuite-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "HTW Media desktop client (Electron) - wraps the HTW platform V2 API. Agent skills live in ../../agent.",
   "main": "main.js",

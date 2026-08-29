@@ -1,6 +1,6 @@
 {
   "name": "htwsuite",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "HTW Media open-source desktop client — Electron shell + vendored HTWSkills agent layer.",
   "workspaces": [
