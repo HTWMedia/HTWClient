@@ -127,7 +127,12 @@
     ],
   };
 
-  // mock 接口：返回 Promise，形状与真实 API 一致；服务端就绪后替换为 HTWApi.call
+  function apiCall(path, options) {
+    if (USE_MOCK) return mockApi(path, options);
+    return window.HTWApi.call((options && options.method) || "GET", path, options && options.body);
+  }
+
+  // 离线演示用的 mock（接口形状与 PRD 一致）
   function mockApi(path, options) {
     return new Promise(function (resolve) {
       setTimeout(function () {
@@ -152,6 +157,8 @@
       }, 350);
     });
   }
+
+  var USE_MOCK = false; // 服务端 /api/v2/topics/* 已实现；置 true 可离线演示
 
   var STAGE = {
     rising: { text: "↑ 上升期", cls: "tp-stage-up", tip: "上升期：建议 24 小时内跟进" },
@@ -205,7 +212,11 @@
         root.appendChild(tip);
         var grid = UI.el("div", { class: "tp-grid" });
         root.appendChild(grid);
-        mockApi("/api/v2/topics/daily").then(function (r) {
+        apiCall("/api/v2/topics/daily").catch(function (e) {
+          UI.showError(grid, (e && e.message) ? e.message : "请求失败");
+          return { ok: false };
+        }).then(function (r) {
+          if (!r || !r.ok) return;
           UI.clear(grid);
           r.data.cards.forEach(function (c) {
             var evText;
@@ -298,7 +309,7 @@
         }
         function fmtN(n) { return n >= 10000 ? (n / 10000).toFixed(1) + "万" : String(n); }
 
-        mockApi("/api/v2/topics/radar/accounts").then(function (r) {
+        apiCall("/api/v2/topics/radar/accounts").then(function (r) {
           renderList(r.data.accounts, r.data.alerts);
         });
 
@@ -307,7 +318,7 @@
           if (!url) return;
           mockApi("/api/v2/topics/radar/accounts", { method: "POST", body: { platform: sel.value, url: url } }).then(function () {
             input.value = "";
-            mockApi("/api/v2/topics/radar/accounts").then(function (r) { renderList(r.data.accounts, r.data.alerts); });
+            apiCall("/api/v2/topics/radar/accounts").then(function (r) { renderList(r.data.accounts, r.data.alerts); });
           });
         });
       }
@@ -316,7 +327,7 @@
       function renderTrends(root) {
         var tip = UI.el("div", { class: "tp-hint", text: "每小时采样一次热榜，累计形成热度曲线。上升期的话题建议 24 小时内跟进。" });
         root.appendChild(tip);
-        mockApi("/api/v2/topics/trends").then(function (r) {
+        apiCall("/api/v2/topics/trends").then(function (r) {
           r.data.topics.forEach(function (t) {
             var st = STAGE[t.stage] || STAGE.plateau;
             var row = UI.el("div", { class: "tp-trend" }, [
