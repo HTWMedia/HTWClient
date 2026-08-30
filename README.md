@@ -179,7 +179,7 @@ node htw-skills.mjs call insight --hot --dry-run
 | 素材 / 成片存在哪？ | 仅在服务端处理期间临时使用，**任务完成即销毁，不做保留** |
 | 平台 Cookie 会传给服务器吗？ | **不会**。Cookie 只保存在你本地客户端；发布时由客户端直接携带登录态请求各平台接口，不经过 HTW 服务器 |
 | 有人看我的内容吗？ | **没有**。转写 / 剪辑 / 发布均由自动化流水线处理，全程无人工介入 |
-| 服务能长期稳定吗？ | 平台持续运营中；服务端自部署 / 开源方案已列入规划（见 [docs/roadmap-opensource.md](docs/roadmap-opensource.md)） |
+| 服务能长期稳定吗？ | 平台持续运营中；**新用户注册即送 1 个月免费体验**（AuthKey 有效期 30 天，可续期）；AuthKey 仅作为防流量攻击的准入闸口。演进规划见 [docs/roadmap.md](docs/roadmap.md) |
 
 ## 许可证 📝
 
