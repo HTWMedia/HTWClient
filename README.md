@@ -32,7 +32,9 @@
 
 ## 界面预览 🖥️
 
-> 🎬 30 秒快速演示 GIF 制作中（分镜脚本见 [docs/demo-script.md](docs/demo-script.md)），先看静态预览：
+![HTWClient 30 秒演示](docs/images/demo.gif)
+
+> 🎬 以上 30 秒演示的录制分镜见 [docs/demo-script.md](docs/demo-script.md)。
 
 工作台内置多组能力面板，统一 V2 契约 `{ ok, data, errCode, errMsg, taskId }`：
 
