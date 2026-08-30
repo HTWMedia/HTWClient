@@ -251,7 +251,7 @@
         var alertBox = UI.el("div");
         root.appendChild(alertBox);
         var listCard = UI.el("div", { class: "card" }, [
-          UI.el("h3", { text: " monitors 对标账号" }),
+          UI.el("h3", { text: "对标账号" }),
           UI.el("div", { id: "radar-list" }),
         ]);
         root.appendChild(listCard);
