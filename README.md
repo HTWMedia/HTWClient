@@ -38,30 +38,7 @@
 
 工作台内置多组能力面板，统一 V2 契约 `{ ok, data, errCode, errMsg, taskId }`：
 
-<table align="center">
-  <tr>
-    <td align="center" width="50%"><img src="docs/images/panel-transcribe.png" width="100%" alt="音频转写 / 字幕"></td>
-    <td align="center" width="50%"><img src="docs/images/panel-insight.png" width="100%" alt="媒资洞察"></td>
-  </tr>
-  <tr>
-    <td align="center">🔤 音频转写 / 字幕</td>
-    <td align="center">📊 媒资洞察（文案 / 视频）</td>
-  </tr>
-  <tr>
-    <td align="center" width="50%"><img src="docs/images/panel-create.png" width="100%" alt="内容创作"></td>
-    <td align="center" width="50%"><img src="docs/images/panel-edit.png" width="100%" alt="智能剪辑"></td>
-  </tr>
-  <tr>
-    <td align="center">✍️ 内容创作</td>
-    <td align="center">✂️ 智能剪辑 / 草稿导出</td>
-  </tr>
-  <tr>
-    <td align="center" width="50%" colspan="2"><img src="docs/images/panel-publish.png" width="60%" alt="多平台发布"></td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2">🚀 多平台一键发布（抖音 / 小红书 / B站 / 今日头条）</td>
-  </tr>
-</table>
+![媒资洞察 · 多平台发布](docs/images/panels.png)
 
 ---
 
