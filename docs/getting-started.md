@@ -83,8 +83,9 @@ a post about ...".
 
 ## Troubleshooting
 
-- **401 / 402** — key missing, invalid, or expired. Re-request via the
-  `/auth/applykey` flow.
+- **401** — key missing, invalid, or expired. Re-request via the `/auth/applykey` flow.
+- **402** — free quota exhausted (the key itself is fine). Top up on the platform and
+  retry; quota is only consumed when a task actually starts.
 - **"未配置 Cookie"** — the tool needs a platform cookie configured server-side.
 - **HTW_API_KEY not set** — the CLI prints setup guidance; export the key first.
 - **fetch failed / ECONNREFUSED** — check network access to
