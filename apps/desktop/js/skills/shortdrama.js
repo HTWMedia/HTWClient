@@ -17,8 +17,12 @@ Skills.shortdrama = {
 
     var taskId = null;
     var pollTimer = null;
+    var pollStopped = false;
     var recomposeTimer = null;
+    var recomposeStopped = false;
     var isProcessing = false;
+    // 轮询上限：任务卡在中间状态时不能无限问下去（每 2 秒一次会一直打服务端）。
+    var POLL_TIMEOUT = 30 * 60 * 1000;
 
     var errBox, progressCard, progressStep, progressBar, resultCard;
 
@@ -39,8 +43,14 @@ Skills.shortdrama = {
       progressBar.style.width = (pct || 0) + "%";
       if (step) progressStep.textContent = step;
     }
-    function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
-    function stopRecompose() { if (recomposeTimer) { clearInterval(recomposeTimer); recomposeTimer = null; } }
+    function stopPolling() {
+      pollStopped = true;
+      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    }
+    function stopRecompose() {
+      recomposeStopped = true;
+      if (recomposeTimer) { clearTimeout(recomposeTimer); recomposeTimer = null; }
+    }
 
     function buildProgress() {
       progressStep = UI.el("div", { class: "progress-area-text", text: "正在启动..." });
@@ -89,6 +99,15 @@ Skills.shortdrama = {
         UI.el("option", { value: "Quick", text: "快速", selected: true }),
         UI.el("option", { value: "Full", text: "完整（含调研）" }),
       ]);
+      // 动态镜头：给前 N 个镜头（开场钩子）生成真视频，其余仍是静态图 + 运镜。
+      // 只做前几个是因为这类生成是文生视频、不锚定本镜头关键帧图，
+      // 全片铺开会导致镜头之间画风跳变；当钩子用才划算。
+      var motion = UI.el("select", {}, [
+        UI.el("option", { value: "0", text: "关闭（静态图 + 运镜）", selected: true }),
+        UI.el("option", { value: "1", text: "前 1 个镜头" }),
+        UI.el("option", { value: "2", text: "前 2 个镜头" }),
+        UI.el("option", { value: "3", text: "前 3 个镜头" }),
+      ]);
       var startBtn = UI.el("button", { class: "btn primary", text: "开始生成" });
 
       UI.mount(root, UI.el("div", {}, [
@@ -100,6 +119,8 @@ Skills.shortdrama = {
           field("视频风格", style),
           field("画面风格", storyboardStyle),
           field("生成模式", mode),
+          field("动态镜头（AI 生成真视频）", motion),
+          UI.el("div", { class: "hint", text: "动态镜头只给开头几个镜头生成真视频（更慢，且画风可能与其他镜头略有差异），其余仍用静态图 + 运镜。生成失败会自动回退，不影响成片。" }),
           UI.el("div", { class: "row" }, [startBtn]),
           progressCard,
           resultCard,
@@ -117,6 +138,7 @@ Skills.shortdrama = {
         startBtn.textContent = "生成中...";
         showProgress("正在启动生成任务...");
 
+        var motionClips = Number(motion.value) || 0;
         api.post("/api/v2/agent/start", {
           theme: themeVal,
           platform: "ShortDrama",
@@ -125,6 +147,8 @@ Skills.shortdrama = {
           style: style.value,
           storyboardStyleVal: storyboardStyle.value,
           mode: mode.value,
+          enableSeedance: motionClips > 0,
+          seedanceMaxClips: motionClips,
         })
           .then(function (r) {
             if (r.code === 402) { setErr("免费次数已用完，请先充值"); restore(); return; }
@@ -144,11 +168,17 @@ Skills.shortdrama = {
       }
     }
 
+    // 自调度 setTimeout 而不是 setInterval：setInterval 不等待上一次请求返回，
+    // 慢请求会一轮轮堆积（界面卡顿 + 打爆服务端），这里一轮结束才排下一轮。
     function pollStatus() {
       if (!taskId) return;
-      pollTimer = setInterval(function () {
+      pollStopped = false;
+      var startedAt = Date.now();
+      function tick() {
+        if (pollStopped) return;
         api.get("/api/v2/agent/status?taskId=" + encodeURIComponent(taskId))
           .then(function (r) {
+            if (pollStopped) return;
             if (!r.ok) { stopPolling(); setErr("状态查询失败：" + formatErr(r)); return; }
             var d = r.data || {};
             if (d.status === "completed" || d.status === "done") {
@@ -158,15 +188,21 @@ Skills.shortdrama = {
             } else if (d.status === "failed") {
               stopPolling();
               setErr(d.error || "生成失败");
+            } else if (Date.now() - startedAt > POLL_TIMEOUT) {
+              stopPolling();
+              setErr("生成超时（已等待 30 分钟），任务可能仍在服务端运行，请稍后重试");
             } else {
               setProgress(Math.min(d.progress || 0, 99), d.currentStep || "正在生成...");
+              pollTimer = setTimeout(tick, 2000);
             }
           })
           .catch(function (e) {
+            if (pollStopped) return;
             stopPolling();
             setErr("状态查询异常：" + (e && e.message ? e.message : e));
           });
-      }, 2000);
+      }
+      tick();
     }
 
     // ============ 编辑器阶段 ============
@@ -306,10 +342,14 @@ Skills.shortdrama = {
 
     function pollRecompose(tid, recomposeBtn) {
       stopRecompose();
-      recomposeTimer = setInterval(function () {
+      recomposeStopped = false;
+      var startedAt = Date.now();
+      function tick() {
+        if (recomposeStopped) return;
         api.get("/api/v2/agent/status?taskId=" + encodeURIComponent(tid))
           .then(function (r) {
             var d = (r.data) || {};
+            if (recomposeStopped) return;
             if (!r.ok) { stopRecompose(); setErr("状态查询失败：" + formatErr(r)); recomposeBtn.disabled = false; return; }
             if (d.status === "completed" || d.status === "done") {
               stopRecompose();
@@ -333,16 +373,23 @@ Skills.shortdrama = {
               setErr(d.error || "重新合成失败");
               recomposeBtn.disabled = false;
               progressCard.style.display = "none";
+            } else if (Date.now() - startedAt > POLL_TIMEOUT) {
+              stopRecompose();
+              setErr("合成超时（已等待 30 分钟），任务可能仍在服务端运行，请稍后重试");
+              recomposeBtn.disabled = false;
             } else {
               setProgress(Math.min(d.progress || 0, 99), d.currentStep || "合成中...");
+              recomposeTimer = setTimeout(tick, 2000);
             }
           })
           .catch(function (e) {
+            if (recomposeStopped) return;
             stopRecompose();
             setErr("状态查询异常：" + (e && e.message ? e.message : e));
             recomposeBtn.disabled = false;
           });
-      }, 2000);
+      }
+      tick();
     }
 
     renderGenerate();

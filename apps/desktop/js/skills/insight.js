@@ -23,10 +23,13 @@
         kids.push(region);
         return UI.el("div", { class: "card" }, kids);
       }
+      // fn 自己渲染完（比如热榜回落到缓存榜）时返回带 __rendered 的结果，
+      // 这里就不再重复渲染一遍覆盖掉它。
       function run(btn, region, fn) {
         UI.withLoading(btn, async function () {
           try {
             const r = await fn();
+            if (r && r.__rendered) return;
             if (!r.ok) { UI.showError(region, formatErr(r)); return; }
             UI.renderResult(region, r.data);
           } catch (e) {
@@ -89,8 +92,31 @@
         if (!u) { UI.showError(accountRegion, "请输入账号 URL"); return; }
         run(accountBtn, accountRegion, function () { return API.call("POST", "/api/v2/insight/analyze-account", { url: u }); });
       });
+      // 实时热榜对非付费账号有 3 次/分钟的限流，撞上就是 429。
+      // 后端给的提示是「改用 hot-rankings-cached」，但界面上原来没有这条路径，
+      // 用户点了只能看到一句错误干等 —— 这里直接自动回落到库里的采样榜。
+      async function loadHot() {
+        const live = await API.call("GET", "/api/v2/insight/hot-rankings");
+        if (live.ok) return live;
+        if (live.code !== 429) return live;
+
+        const cached = await API.call("GET", "/api/v2/insight/hot-rankings-cached");
+        if (!cached.ok) return live; // 缓存也没有，还是把限流原因原样告诉用户
+
+        const d = cached.data || {};
+        const rows = d.data !== undefined ? d.data : d;
+        UI.renderResult(hotRegion, rows);
+        const when = d.sampledAt ? "（采样时间 " + d.sampledAt + "）" : "";
+        // renderResult 会清空区域，提示要在渲染之后插到最前面
+        hotRegion.insertBefore(
+          UI.el("div", { class: "hint", text: "实时抓取太频繁，已改展示后台缓存的热榜" + when }),
+          hotRegion.firstChild
+        );
+        return { ok: true, __rendered: true };
+      }
+
       hotBtn.addEventListener("click", function () {
-        run(hotBtn, hotRegion, function () { return API.call("GET", "/api/v2/insight/hot-rankings"); });
+        run(hotBtn, hotRegion, loadHot);
       });
       searchBtn.addEventListener("click", function () {
         const kw = searchKeyword.value.trim();

@@ -55,19 +55,24 @@
         return UI.el("div", { class: "card" }, kids);
       }
 
-      // 音频选择合入每个语音工具卡片内；点击操作时自动上传（按文件名+大小缓存，避免重复上传）
+      // 音频选择合入每个语音工具卡片内；点击操作时自动上传。
+      // 缓存按 文件名:字节数 记录，但服务端上传文件有生命周期（会被清理），
+      // 隔天再用同一个文件会拿到一个已经失效的 fileId，且报错信息完全看不出原因
+      // —— 所以缓存必须带时效，过期后重新上传。
       const uploadCache = {};
+      const UPLOAD_CACHE_TTL = 30 * 60 * 1000;
       async function uploadAudio(fileInput, region) {
         const files = await readFiles(fileInput);
         if (!files.length) { UI.showError(region, "请选择音频"); return null; }
         const f = files[0];
         const key = f.name + ":" + f.buffer.byteLength;
-        if (uploadCache[key]) return uploadCache[key];
+        const hit = uploadCache[key];
+        if (hit && Date.now() - hit.at < UPLOAD_CACHE_TTL) return hit.fileId;
         const up = await API.upload("POST", "/api/v2/voice/upload", files, {});
         if (!up.ok) { UI.showError(region, formatErr(up)); return null; }
         const id = up.data && up.data.fileId;
         if (!id) { UI.showError(region, formatErr(up)); return null; }
-        uploadCache[key] = id;
+        uploadCache[key] = { fileId: id, at: Date.now() };
         return id;
       }
 
@@ -165,9 +170,16 @@
 
       const subFile = UI.fileInput({ label: "选择视频", accept: "video/*" });
       const subFormat = UI.el("select", {}, [opt("txt"), opt("srt")]);
+      // 引擎必须可选：Kimi 那条路依赖后台 Kimi 凭据（access token 只有 15 分钟，
+      // 靠 refresh token 自动续），凭据失效时整条链路会失败；OCR 走同一套模型但
+      // 是逐帧识别，可作为回退。之前写死 kimi，凭据一挂桌面端就没有任何退路。
+      const subEngine = UI.el("select", {}, [
+        opt("kimi", "Kimi 整段理解（默认，更快）"),
+        opt("ocr", "OCR 逐帧识别（Kimi 不可用时的回退）"),
+      ]);
       const subBtn = UI.el("button", { class: "btn", text: "提取字幕" });
       const subRegion = UI.el("div");
-      const subCard = section("字幕提取 Subtitle", [subFile, field("格式", subFormat)], subBtn, subRegion, "fa-closed-captioning");
+      const subCard = section("字幕提取 Subtitle", [subFile, field("格式", subFormat), field("引擎", subEngine)], subBtn, subRegion, "fa-closed-captioning");
 
       const tplKeyword = UI.el("input", { type: "text", placeholder: "关键词" });
       const tplPage = UI.el("input", { type: "number", value: "1" });
@@ -300,7 +312,7 @@
           try {
             const files = await readFiles(subFile);
             if (!files.length) { UI.showError(subRegion, "请选择视频"); return; }
-            const up = await API.upload("POST", "/api/v2/subtitle/extract", files, { format: subFormat.value, engine: "kimi" });
+            const up = await API.upload("POST", "/api/v2/subtitle/extract", files, { format: subFormat.value, engine: subEngine.value || "kimi" });
             if (!up.ok) { UI.showError(subRegion, formatErr(up)); return; }
             await pollSub(up.taskId || (up.data && up.data.taskId)).then(function (res) { if (!res.ok) { UI.showError(subRegion, formatErr(res)); return; } UI.showResult(subRegion, res.data); });
           } catch (e) { UI.showError(subRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
