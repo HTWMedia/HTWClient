@@ -18,3 +18,9 @@ frames2/
 # 内部物料（不公开；路线图 docs/roadmap.md 已公开，README 有引用，勿再加进来）
 marketing/
 frames/
+
+# 本地运行产物与内部记录（含真实请求日志、下载 token、本机凭据与内部复盘，绝不入库）
+Logs/
+.workbuddy/
+docs/review-*.md
+local-web.log
