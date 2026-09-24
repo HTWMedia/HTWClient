@@ -51,8 +51,9 @@
   var _sessionId = null;
 
   function showResult(region, data) {
-    _mediaToken = (data && data.mediaToken) || null;
-    _sessionId = (data && data.Id) || null;
+    // api.js 会把响应 data 的 key 统一转成 camelCase，这里两种写法都认。
+    _mediaToken = (data && (data.mediaToken || data.MediaToken)) || null;
+    _sessionId = (data && (data.id || data.Id || data.sessionId || data.SessionId)) || null;
     return presentResult(region, data);
   }
 
@@ -368,11 +369,25 @@
   }
 
   // 去掉可能执行脚本的结构（innerHTML 不会执行 <script>，但仍屏蔽 on* 与 javascript:）。
+  // 注意这是"黑名单"式过滤，只能挡住已知形态；marked 的输出由模型生成，属于不可信内容，
+  // 任何 innerHTML 之前都必须过这一层。
   function sanitizeHtml(html) {
     return String(html)
-      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      // <script>、<iframe>、<object>、<embed>、<svg>（可内嵌脚本与 foreignObject）、
+      // <style>（可带 expression / url(javascript:)）、<base>（可劫持相对链接）整段去掉。
+      .replace(/<\s*(script|iframe|object|embed|svg|style|base|meta|link|form)\b[\s\S]*?<\s*\/\s*\1\s*>/gi, "")
+      .replace(/<\s*(script|iframe|object|embed|svg|style|base|meta|link|form)\b[^>]*\/?>/gi, "")
+      // 事件属性：on* = "..." / on* = '...' / on* = xxx（无引号）
       .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
-      .replace(/(href|src)\s*=\s*("javascript:[^"]*"|'javascript:[^']*')/gi, '$1="#"');
+      // href/src/action 里的 javascript: 与 data:text/html（data: 图片可放行，但 HTML 会执行脚本）。
+      // 用一个替换同时覆盖双引号 / 单引号 / 无引号三种写法 —— 只匹配带引号会漏掉
+      // `href=javascript:alert(1)` 这种无引号属性。
+      .replace(/(href|src|action|formaction)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi,
+        function (m, attr, dq, sq, bare) {
+          var v = dq !== undefined ? dq : (sq !== undefined ? sq : bare);
+          if (/^\s*(javascript|vbscript)\s*:/i.test(v) || /^\s*data\s*:\s*text\/html/i.test(v)) return attr + '="#"';
+          return m;
+        });
   }
 
   // 优先用 marked（与 web 项目同款解析器）；不可用时退回兜底渲染器。
@@ -413,13 +428,36 @@
     return btn;
   }
 
+  // 模型输出里常混入协议收尾标记（FINISHED / SEARCH# / <|im_end|> …），
+  // 不清掉用户会看到"…导出。FINISHEDHTW创作面板使用"这种尾巴。
+  var INTERNAL_MARKER = /FINISHED|SEARCH#|<\|im_end\|>|<\|end\|>|\[DONE\]/g;
+  function cleanText(s) {
+    if (typeof s !== "string") return s;
+    var out = s;
+    // 收尾标记落在末尾时，它后面还拼着一个内部标题（…正文。FINISHED标题），
+    // 要连后面的内容一起截掉；标记出现在开头时（FINISHEDSEARCH# 正文…）只删标记本身。
+    // idx 为 0 表示标记在最前面（"FINISHEDSEARCH# 正文…"），只能删标记不能截断：
+    // 文本比窗口短时 idx > length - 40 恒成立，不加这个判断会把整条短回复清空。
+    var idx = out.toUpperCase().lastIndexOf("FINISHED");
+    if (idx > 0 && idx > out.length - 40) out = out.slice(0, idx);
+    return out.replace(INTERNAL_MARKER, "").trim();
+  }
+  function cleanDeep(v) {
+    if (typeof v === "string") return cleanText(v);
+    if (!v || typeof v !== "object") return v;
+    if (Array.isArray(v)) return v.map(cleanDeep);
+    var out = {};
+    for (var k of Object.keys(v)) out[k] = cleanDeep(v[k]);
+    return out;
+  }
+
   function presentResult(region, data) {
     clear(region);
     if (data == null) {
       mount(region, el("div", { class: "result-text", text: "（无数据）" }));
       return region;
     }
-    var value = unwrapEnvelope(data);
+    var value = unwrapEnvelope(cleanDeep(data));
     if (typeof value === "string") {
       mount(region, renderMarkdown(value));
     } else {
@@ -468,12 +506,19 @@
       var a = e.target && e.target.closest ? e.target.closest("a") : null;
       if (!a) return;
       var href = a.getAttribute("href") || "";
-      if (!a.classList.contains("title-link") && /^https?:\/\//i.test(href)) {
+      // 带 download 属性的是"下载视频"按钮（服务端下发的 CDN 直链），必须放行原生下载：
+      // 以前这里一律 preventDefault + openExternal，结果点了没反应（下载被取消）。
+      if (!a.classList.contains("title-link") && !a.hasAttribute("download") && /^https?:\/\//i.test(href)) {
         e.preventDefault();
         openExternal(href);
       }
     });
   }
 
-  return { el: el, clear: clear, mount: mount, showError: showError, showResult: showResult, renderResult: renderResult, spinner: spinner, fileInput: fileInput, withLoading: withLoading, esc: escapeHtml };
+  return {
+    el: el, clear: clear, mount: mount, showError: showError, showResult: showResult,
+    renderResult: renderResult, spinner: spinner, fileInput: fileInput, withLoading: withLoading,
+    esc: escapeHtml, cleanText: cleanText, platformName: platformName,
+    sanitizeHtml: sanitizeHtml, renderMarkdown: renderMarkdown,
+  };
 });

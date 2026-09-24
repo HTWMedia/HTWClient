@@ -7,14 +7,25 @@
   let _base =
     (typeof window !== "undefined" && window.htw && window.htw.apiBase) ||
     "https://htwmedia.dpdns.org";
-  // 大文件直连源站 IP（绕过域名代理，上传更快）。可用 setDirectBase 覆盖。
+  // 可选的大文件直连通道：默认空串（走 _base）。自建部署需要让分片上传绕过
+  // 反向代理时，可用 setDirectBase 或环境变量 HTW_API_DIRECT 指定。
   let _directBase =
-    (typeof window !== "undefined" && window.htw && window.htw.directBase) ||
-    "http://123.57.217.155";
+    (typeof window !== "undefined" && window.htw && window.htw.directBase) || "";
 
   function setKey(k) { _key = k || ""; }
-  function setBase(b) { if (b) _base = b; }
-  function setDirectBase(b) { if (b) _directBase = b; }
+  // 改服务端地址必须先向 preload 登记：preload 只向白名单内的来源发请求，
+  // 否则任何页面脚本都能让 preload 带着 AuthKey 去连它指定的服务器。
+  // （以前 setBase 只改了这里，请求仍发往 preload 内置的默认地址 —— 设置面板填的地址根本没生效。）
+  function setBase(b) {
+    if (!b) return;
+    if (window.htw && window.htw.registerBase) window.htw.registerBase(b);
+    _base = b;
+  }
+  function setDirectBase(b) {
+    if (!b) return;
+    if (window.htw && window.htw.registerBase) window.htw.registerBase(b);
+    _directBase = b;
+  }
   function hasKey() { return !!_key; }
   function authHeader() { return { AuthKey: _key }; }
 
@@ -26,7 +37,9 @@
 
   async function call(method, path, body, baseOverride) {
     if (!_key) throw keyError();
-    const res = await window.htw.call(method, path, body, _key, baseOverride);
+    // 默认带上当前服务端地址：不传的话 preload 会退回它的内置默认值，
+    // 「设置」里改过的地址就失效了。
+    const res = await window.htw.call(method, path, body, _key, baseOverride || _base);
     return normalize(res);
   }
 
@@ -42,14 +55,19 @@
     return s;
   }
 
-  async function chunkedUpload(method, path, file, fields, fileField) {
+  async function chunkedUpload(method, path, file, fields, fileField, onProgress) {
     const full = new Uint8Array(file.buffer);
     const uploadId = genUploadId();
     const total = Math.max(1, Math.ceil(full.length / CHUNK_SIZE));
-    // 大文件走直连源站 IP（_directBase），绕过域名代理以加速上传。
+    // 大文件走分片上传；若配置了直连通道（_directBase）则走它，否则走 _base。
     const uploadBase = _directBase;
     let failed = null;
     let next = 0;
+    let done = 0;
+    const report = () => {
+      if (typeof onProgress !== "function") return;
+      try { onProgress({ loaded: Math.min(full.length, done * CHUNK_SIZE), total: full.length }); } catch (e) { /* ignore */ }
+    };
     async function worker() {
       while (true) {
         const i = next++;
@@ -70,6 +88,8 @@
           );
           const norm = normalize(res);
           if (!norm.ok) { const e = new Error("分片 " + i + " 上传失败: " + (norm.message || norm.code)); e.httpError = true; failed = e; return; }
+          done++;
+          report();
         } catch (e) { failed = e; return; }
       }
     }
@@ -88,31 +108,73 @@
     }, uploadBase);
   }
 
+  // 多文件走整包上传时的体积上限（Cloudflare 免费版单请求 100MB）：
+  // 分片接口一次只能合并出一个文件，多文件没法分片，超限时必须明确报错，
+  // 否则只会被反向代理以 413 / 连接重置拒绝，界面上表现为"提交失败"却看不出原因。
+  const MULTI_MAX_TOTAL = 100 * 1024 * 1024;
+
   async function upload(method, path, filePaths, fields, onProgress, fileField) {
     if (!_key) throw keyError();
     fileField = fileField || "file";
-    if (
-      Array.isArray(filePaths) &&
-      filePaths.length === 1 &&
-      filePaths[0] &&
-      filePaths[0].buffer &&
-      filePaths[0].buffer.byteLength > CHUNK_SIZE
-    ) {
+    const list = Array.isArray(filePaths) ? filePaths : [];
+    const bigOne = list.length === 1 && list[0] && list[0].buffer && list[0].buffer.byteLength > CHUNK_SIZE;
+    if (bigOne) {
       try {
-        return await chunkedUpload(method, path, filePaths[0], fields || {}, fileField);
+        return await chunkedUpload(method, path, list[0], fields || {}, fileField, onProgress);
       } catch (e) {
-        // 服务端明确拒绝分片（如缺少 /api/v2/files/chunk 端点）时，不要再回退为整文件上传：
-        // 大文件直传必然被反向代理以 413 / 连接重置（"socket hang up"）拒绝，回退只会掩盖真正原因。
-        if (e && e.httpError) throw e;
-        console.warn("分片上传失败，回退为整文件上传:", e);
+        // 一律不回退为整文件上传：大文件直传必然被反向代理以 413 / 连接重置
+        // （"socket hang up"）拒绝，回退只会用第二个更难懂的错误盖掉真正的原因。
+        throw e;
       }
     }
-    const res = await window.htw.upload(method, path, filePaths, fields, authHeader(), onProgress, fileField);
+    if (list.length > 1) {
+      let total = 0;
+      for (const f of list) total += (f && f.buffer && f.buffer.byteLength) || 0;
+      if (total > MULTI_MAX_TOTAL) {
+        throw new Error(
+          "素材总大小 " + (total / 1024 / 1024).toFixed(1) + "MB，超过单次上传上限 100MB。" +
+          "请减少单次上传的文件数量或压缩后重试（多文件暂不支持分片上传）。"
+        );
+      }
+    }
+    const res = await window.htw.upload(method, path, filePaths, fields, authHeader(), onProgress, fileField, _base);
     return normalize(res);
+  }
+
+  // 后端 MVC 走 AddNewtonsoftJson + DefaultContractResolver：POCO / DTO 一律 PascalCase
+  // 输出，只有匿名投影里手写的小写字段才是小写（如 { date, cards }、{ sessionId, step }）。
+  // 渲染层统一按 camelCase 读取，这里对 data 做一次深度转换，避免每个面板各自踩大小写坑。
+  // 缩写开头（URL、CDNId…）保持原样，避免 Url -> uRL 之类的误伤。
+  const ACRONYM_PREFIX = /^[A-Z]{2,}/;
+  function camelKey(k) {
+    if (typeof k !== "string" || !k) return k;
+    if (ACRONYM_PREFIX.test(k)) return k;
+    if (k[0] >= "A" && k[0] <= "Z") return k[0].toLowerCase() + k.slice(1);
+    return k;
+  }
+  function camelize(v) {
+    if (!v || typeof v !== "object") return v;
+    if (Array.isArray(v)) return v.map(camelize);
+    const out = {};
+    for (const k of Object.keys(v)) out[camelKey(k)] = camelize(v[k]);
+    return out;
+  }
+
+  // 402 = 免费额度用尽。它是账号级状态，不是某个面板的错，所以不塞进各自的格式函数里
+  // （那里有 40 处调用，且 shortdrama/marketing 走的是自己的 setErr）。
+  // 这里识别出来后回调给 app.js 弹一条全局横幅，所有面板、所有错误路径都覆盖到。
+  let _quotaHandler = null;
+  function onQuotaExceeded(fn) { _quotaHandler = typeof fn === "function" ? fn : null; }
+
+  function fireQuotaExceeded(raw) {
+    if (!_quotaHandler) return;
+    const url = (raw && (raw.redirectUrl || raw.RedirectUrl)) || "/Home/Recharge";
+    try { _quotaHandler({ redirectUrl: url, message: (raw && (raw.error || raw.Error)) || "" }); } catch (e) { /* ignore */ }
   }
 
   function normalize(res) {
     const d = res.data !== undefined ? res.data : res.body;
+    if (res.status === 402) fireQuotaExceeded(d);
     if (!d || typeof d !== "object") {
       return { ok: !!res.ok, data: d, taskId: null, code: res.status, message: res.ok ? "" : ("HTTP " + res.status) };
     }
@@ -122,15 +184,17 @@
     const code = d.errCode !== undefined ? d.errCode : d.ErrCode;
     const msg = d.errMsg !== undefined ? d.errMsg : d.ErrMsg;
     const taskId = d.taskId !== undefined ? d.taskId : d.TaskId;
-    if (res.ok && ok === true) return { ok: true, data: data, taskId: taskId || null };
+    if (res.ok && ok === true) return { ok: true, data: camelize(data), taskId: taskId || null };
     if (res.ok && ok === false) return { ok: false, code: code, message: msg, raw: d };
     if (!res.ok) return { ok: false, code: code || res.status, message: msg || ("HTTP " + res.status), raw: d };
-    return { ok: true, data: data !== undefined ? data : d, taskId: taskId || null };
+    return { ok: true, data: camelize(data !== undefined ? data : d), taskId: taskId || null };
   }
 
   async function download(method, path, baseOverride) {
     if (!_key) throw keyError();
-    return await window.htw.download(method, path, _key, baseOverride);
+    const res = await window.htw.download(method, path, _key, baseOverride || _base);
+    if (res && !res.ok && res.error) throw new Error(res.error);
+    return res;
   }
 
   async function pollTask(taskId, opts) {
@@ -157,6 +221,6 @@
 
   const get = (p) => call("GET", p);
   const post = (p, b) => call("POST", p, b);
-  return { setKey: setKey, setBase: setBase, setDirectBase: setDirectBase, hasKey: hasKey, authHeader: authHeader, call: call, get: get, post: post, upload: upload, download: download, normalize: normalize, pollTask: pollTask, get base() { return _base; }, get directBase() { return _directBase; } };
+  return { setKey: setKey, setBase: setBase, setDirectBase: setDirectBase, hasKey: hasKey, authHeader: authHeader, call: call, get: get, post: post, upload: upload, download: download, normalize: normalize, pollTask: pollTask, onQuotaExceeded: onQuotaExceeded, get base() { return _base; }, get directBase() { return _directBase; } };
 });
 

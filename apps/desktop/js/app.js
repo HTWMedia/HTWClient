@@ -4,8 +4,9 @@
   function getBaseInput() { return document.getElementById("api-base"); }
   function getKeyInput() { return document.getElementById("api-key"); }
 
-  // localStorage 作为兜底存储：即便 preload 的 saveConfig（写文件）因故未生效，
-  // 密钥仍能在会话间保留。与 userData 文件互为备份。
+  // AuthKey 只存主进程的 userData 文件（明文，README 已声明）。
+  // 早期版本还往 localStorage 写了一份做"互为备份"，那只是把泄露面扩大了一倍
+  // （渲染层任何脚本都能读到），现在改为：仅在迁移时读一次，读到后立刻清掉。
   function readLocal() {
     try {
       return {
@@ -14,10 +15,10 @@
       };
     } catch (e) { return { apiBase: "", apiKey: "" }; }
   }
-  function writeLocal(base, key) {
+  function clearLocal() {
     try {
-      if (base) localStorage.setItem("htw_apiBase", base); else localStorage.removeItem("htw_apiBase");
-      if (key) localStorage.setItem("htw_apiKey", key); else localStorage.removeItem("htw_apiKey");
+      localStorage.removeItem("htw_apiBase");
+      localStorage.removeItem("htw_apiKey");
     } catch (e) { /* ignore */ }
   }
 
@@ -25,7 +26,7 @@
     const base = getBaseInput().value.trim();
     const key = getKeyInput().value;
     if (window.htw && window.htw.saveConfig) window.htw.saveConfig({ apiBase: base, apiKey: key });
-    writeLocal(base, key);
+    clearLocal();
     if (base) window.HTWApi.setBase(base);
     window.HTWApi.setKey(key);
     refreshKeyUI();
@@ -35,7 +36,7 @@
     const base = getBaseInput().value.trim();
     const key = getKeyInput().value;
     if (window.htw && window.htw.saveConfig) window.htw.saveConfig({ apiBase: base, apiKey: key });
-    writeLocal(base, key);
+    clearLocal();
   }
 
   function openGetKey() {
@@ -90,6 +91,24 @@
     refreshKeyUI();
   }
 
+  // 402 是账号级状态：任何一个面板撞上都要能看见，且要给出充值入口。
+  // 注册在 api.js 的 normalize 里 —— 所有请求都经过它，不用改 40 处错误提示。
+  function showQuotaBanner(info) {
+    const banner = document.getElementById("quota-banner");
+    if (!banner) return;
+    banner.textContent = "免费次数已用完，充值后可继续使用。";
+    const btn = document.createElement("button");
+    btn.className = "quota-btn";
+    btn.textContent = "去充值";
+    btn.addEventListener("click", function () {
+      const base = (getBaseInput().value.trim() || (window.htw && window.htw.apiBase) || "https://htwmedia.dpdns.org").replace(/\/+$/, "");
+      const url = /^https?:/i.test(info.redirectUrl || "") ? info.redirectUrl : base + (info.redirectUrl || "/Home/Recharge");
+      if (window.htw && window.htw.openExternal) window.htw.openExternal(url);
+    });
+    banner.appendChild(btn);
+    banner.hidden = false;
+  }
+
   function wireNav() {
     document.querySelectorAll(".nav-item").forEach((b) => {
       b.addEventListener("click", () => {
@@ -117,22 +136,42 @@
     }
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
-    let saved = (window.htw && window.htw.loadConfig) ? window.htw.loadConfig() : {};
+  // preload 的配置读写现在走 IPC（异步），这里必须先等结果再决定用哪份配置。
+  async function boot() {
+    let saved = {};
+    if (window.htw && window.htw.loadConfig) {
+      try { saved = (await window.htw.loadConfig()) || {}; } catch (e) { saved = {}; }
+    }
     if (!saved.apiKey) {
+      // 迁移老版本留在 localStorage 里的凭据：读出来后马上清掉。
       const l = readLocal();
       if (l.apiKey) { saved.apiKey = l.apiKey; saved.apiBase = l.apiBase || saved.apiBase; }
     }
+    clearLocal();
     if (saved.apiBase) getBaseInput().value = saved.apiBase;
     if (saved.apiKey) getKeyInput().value = saved.apiKey;
     getBaseInput().addEventListener("change", applyAuth);
     getKeyInput().addEventListener("input", applyAuth);
     applyAuth();
+    if (window.HTWApi && window.HTWApi.onQuotaExceeded) window.HTWApi.onQuotaExceeded(showQuotaBanner);
     wireNav();
     mountSkills();
-    showPanel("tools");
+    // README 主推的工作流从「选题」开始；默认落在「工具」会让新用户第一眼看到一堆
+    // 与创作无关的卡片（此前选题面板还是坏的，更糟）。
+    showPanel("topics");
     window.addEventListener("beforeunload", persistAuth);
     document.addEventListener("visibilitychange", function () { if (document.visibilityState === "hidden") persistAuth(); });
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    boot().catch(function (e) {
+      // 启动失败时也要把界面装配起来，否则整个应用是白屏。
+      console.error("boot failed", e);
+      applyAuth();
+      wireNav();
+      mountSkills();
+      showPanel("topics");
+    });
   });
 
   window.App = {

@@ -31,6 +31,27 @@ test("normalize: plain ok (no envelope)", () => {
   assert.deepStrictEqual(r, { ok: true, data: { foo: "bar" }, taskId: null });
 });
 
+// 402 = 免费额度用尽，后端会带 redirectUrl。它是账号级状态，因此不在各面板的错误文案里
+// 处理（那里有几十处调用），而是由 normalize 统一回调给 app.js 弹全局横幅。
+test("normalize: 402 triggers quota handler with redirectUrl", () => {
+  const seen = [];
+  api.onQuotaExceeded((info) => seen.push(info));
+
+  api.normalize({ ok: false, status: 402, data: { success: false, error: "免费次数已用完", redirectUrl: "/Home/Recharge" } });
+  assert.strictEqual(seen.length, 1);
+  assert.strictEqual(seen[0].redirectUrl, "/Home/Recharge");
+
+  // 非 402 不该触发
+  api.normalize({ ok: false, status: 401, data: { errMsg: "unauthorized" } });
+  assert.strictEqual(seen.length, 1);
+
+  // 后端没带 redirectUrl 时用默认充值页
+  api.normalize({ ok: false, status: 402, data: { error: "quota" } });
+  assert.strictEqual(seen[1].redirectUrl, "/Home/Recharge");
+
+  api.onQuotaExceeded(null);
+});
+
 test("pollTask: progresses then done", async () => {
   let n = 0;
   const fetcher = async () => {
