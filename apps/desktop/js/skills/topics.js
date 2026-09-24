@@ -2,182 +2,96 @@
   var Skills = (window.Skills = window.Skills || {});
 
   /*
-   * 选题雷达（原型实现）
-   * 数据来自 MOCK（接口形状与 docs/prd-topic-selection.md §5 一致）。
-   * 服务端实现后：将 mockApi(path, options) 替换为 HTWApi.call 即可，UI 无需改动。
+   * 选题雷达
+   * 数据来自服务端 /api/v2/topics/*（契约见后端 docs/prd-topic-selection.md §5）。
+   * 响应字段统一经 HTWApi.normalize 转成 camelCase 后再读取（后端 POCO 是 PascalCase）。
    * 对应接口：
-   *   GET  /api/v2/topics/daily
-   *   GET  /api/v2/topics/radar/accounts
-   *   POST /api/v2/topics/radar/accounts
-   *   GET  /api/v2/topics/radar/alerts
-   *   GET  /api/v2/topics/trends
-   *   POST /api/v2/topics/feedback
+   *   GET    /api/v2/topics/daily
+   *   GET    /api/v2/topics/radar/accounts
+   *   POST   /api/v2/topics/radar/accounts
+   *   DELETE /api/v2/topics/radar/accounts/{id}
+   *   POST   /api/v2/topics/radar/sample
+   *   GET    /api/v2/topics/trends
+   *   POST   /api/v2/topics/feedback
    */
-
-  var MOCK = {
-    daily: {
-      date: "2026-08-30",
-      cards: [
-        {
-          id: "tp_001",
-          title: "打工人一周备餐指南：成本 50 块吃五天",
-          hook: "开头用价格对比制造冲突：一顿外卖 = 一天备餐",
-          category: "美食",
-          tags: ["备餐", "省钱", "上班族"],
-          evidence: {
-            type: "peer",
-            ref_title: "本周备餐挑战",
-            metric_label: "数据超对标账号均值",
-            metric_value: "5.2×",
-          },
-          score: 92,
-        },
-        {
-          id: "tp_002",
-          title: "把《黑神话》的 UI 设计拆给你看：为什么它一开售就封神",
-          hook: "开局直接亮销量数字，用结果倒推设计决策",
-          category: "游戏",
-          tags: ["游戏设计", "国产之光", "拆解"],
-          evidence: {
-            type: "hot",
-            ref_title: "热榜 #2 · 热度 +186%",
-            metric_label: "热榜趋势",
-            metric_value: "↑ 上升期",
-          },
-          score: 88,
-        },
-        {
-          id: "tp_003",
-          title: "面试官问我离职原因，我反手甩出这份离职攻略",
-          hook: "第一人称冲突开场：'我被问住了，然后我反问了'",
-          category: "职场",
-          tags: ["职场", "离职", "面试"],
-          evidence: {
-            type: "peer",
-            ref_title: "职场避坑系列",
-            metric_label: "数据超对标账号均值",
-            metric_value: "3.8×",
-          },
-          score: 81,
-        },
-        {
-          id: "tp_004",
-          title: "10 元做出米其林摆盘：穷人版 fine dining 挑战",
-          hook: "反差感：菜市场食材 × 米其林摆盘审美",
-          category: "美食",
-          tags: ["挑战", "平替", "摆盘"],
-          evidence: {
-            type: "gap",
-            ref_title: "垂类内无人做过同题材",
-            metric_label: "趋势缺口",
-            metric_value: "gap",
-          },
-          score: 76,
-        },
-        {
-          id: "tp_005",
-          title: "我用 AI 一周做完了原本要一个月的活",
-          hook: "亮工作量对比：原来 30 天 → 现在 7 天",
-          category: "效率",
-          tags: ["AI", "工作流", "效率"],
-          evidence: {
-            type: "hot",
-            ref_title: "热榜 #5 · AI 工具话题持续上升",
-            metric_label: "热榜趋势",
-            metric_value: "↑ 上升期",
-          },
-          score: 74,
-        },
-        {
-          id: "tp_006",
-          title: "租房党改造出租屋：200 块的幸福感爆棚改造",
-          hook: "Before/After 对比放在第 3 秒",
-          category: "生活",
-          tags: ["租房", "改造", "平价"],
-          evidence: {
-            type: "peer",
-            ref_title: "租房改造合集",
-            metric_label: "数据超对标账号均值",
-            metric_value: "2.6×",
-          },
-          score: 69,
-        },
-      ],
-    },
-    radarAccounts: [
-      { id: "acc_01", platform: "bilibili", name: "干饭王阿伟", baseline_plays: 52000, baseline_likes: 4300, samples: 24, last: "今天 09:00" },
-      { id: "acc_02", platform: "xiaohongshu", name: "低卡食堂", baseline_plays: 18000, baseline_likes: 2100, samples: 18, last: "今天 09:00" },
-    ],
-    radarAlerts: [
-      {
-        id: "al_01",
-        account: "干饭王阿伟",
-        title: "挑战全网最便宜的一顿减脂餐",
-        multiplier: "5.2×",
-        detail: "播放 27 万（基线 5.2 万）· 发布于 2 小时前",
-      },
-    ],
-    trends: [
-      { rank: 1, title: "中国女vs泰国女排", source: "今日头条", heat: "2841万", stage: "fading" },
-      { rank: 2, title: "黑神话 UI 设计拆解", source: "B站", heat: "932万", stage: "rising" },
-      { rank: 3, title: "一周备餐挑战", source: "小红书", heat: "417万", stage: "rising" },
-      { rank: 4, title: "中足联公布英博国安冲突处罚", source: "今日头条", heat: "386万", stage: "plateau" },
-      { rank: 5, title: "AI 工具替代岗位讨论", source: "B站", heat: "255万", stage: "rising" },
-      { rank: 6, title: "国庆调休安排", source: "今日头条", heat: "187万", stage: "fading" },
-    ],
-  };
-
-  function apiCall(path, options) {
-    if (USE_MOCK) return mockApi(path, options);
-    return window.HTWApi.call((options && options.method) || "GET", path, options && options.body);
-  }
-
-  // 离线演示用的 mock（接口形状与 PRD 一致）
-  function mockApi(path, options) {
-    return new Promise(function (resolve) {
-      setTimeout(function () {
-        if (path === "/api/v2/topics/daily") return resolve({ ok: true, data: MOCK.daily });
-        if (path === "/api/v2/topics/radar/accounts")
-          return resolve({ ok: true, data: { accounts: MOCK.radarAccounts, alerts: MOCK.radarAlerts } });
-        if (path === "/api/v2/topics/trends") return resolve({ ok: true, data: { topics: MOCK.trends } });
-        if (path === "/api/v2/topics/radar/accounts" && options && options.method === "POST") {
-          var b = options.body || {};
-          MOCK.radarAccounts.push({
-            id: "acc_" + Date.now(),
-            platform: b.platform || "bilibili",
-            name: b.url.replace(/^https?:\/\/[^/]+\//, "").slice(0, 18) || "新账号",
-            baseline_plays: 0,
-            baseline_likes: 0,
-            samples: 0,
-            last: "刚刚",
-          });
-          return resolve({ ok: true });
-        }
-        resolve({ ok: true });
-      }, 350);
-    });
-  }
-
-  var USE_MOCK = false; // 服务端 /api/v2/topics/* 已实现；置 true 可离线演示
 
   var STAGE = {
     rising: { text: "↑ 上升期", cls: "tp-stage-up", tip: "上升期：建议 24 小时内跟进" },
     plateau: { text: "→ 平台期", cls: "tp-stage-flat", tip: "平台期：需要差异化角度切入" },
     fading: { text: "↓ 已过气", cls: "tp-stage-down", tip: "已过气：不建议再追" },
+    unknown: { text: "○ 数据积累中", cls: "tp-stage-unknown", tip: "采样数据还不足，暂无法判定趋势" },
   };
+
+  var HEALTH = {
+    ok: { text: "采样正常", cls: "tp-health-ok" },
+    waiting: { text: "等待首轮采样", cls: "tp-health-wait", tip: "刚添加，后台每 30 分钟采样一轮，请稍候" },
+    nodata: { text: "抓不到作品", cls: "tp-health-bad", tip: "采样在跑但一直没抓到作品，多半是账号 URL 写错或平台登录态失效" },
+    stale: { text: "采样已停摆", cls: "tp-health-bad", tip: "超过 6 小时没有新的采样，后台任务可能没在运行" },
+  };
+
+  function call(method, path, body) {
+    return window.HTWApi.call(method, path, body);
+  }
+
+  function errText(e) {
+    if (!e) return "请求失败";
+    if (e.authMissing) return e.message;
+    return e.message || String(e);
+  }
+
+  // 统一的取数：接口失败 / 业务失败都渲染成可见的错误区，不留白屏。
+  function load(region, method, path, body, onData) {
+    UI.clear(region);
+    region.appendChild(UI.el("div", { class: "tp-hint", text: "加载中…" }));
+    call(method, path, body).then(function (r) {
+      if (!r || !r.ok) {
+        UI.showError(region, (r && r.message) || "请求失败");
+        return;
+      }
+      onData(r.data || {});
+    }).catch(function (e) {
+      UI.showError(region, errText(e));
+    });
+  }
+
+  function emptyBox(text) {
+    return UI.el("div", { class: "tp-empty", text: text });
+  }
+
+  function fmtN(n) {
+    n = Number(n) || 0;
+    return n >= 10000 ? (n / 10000).toFixed(1) + "万" : String(n);
+  }
+
+  function fmtTime(s) {
+    if (!s) return "—";
+    var str = String(s);
+    if (str.indexOf("T") > 0) str = str.replace("T", " ").slice(0, 16);
+    return str.slice(0, 16);
+  }
+
+  function copyBtn(label, text, onCopied) {
+    var b = UI.el("button", { class: "btn", text: label });
+    b.addEventListener("click", function () {
+      var done = function (ok) {
+        var old = b.textContent;
+        b.textContent = ok ? "✓ 已复制" : "复制失败";
+        setTimeout(function () { b.textContent = old; }, 1500);
+        if (onCopied) { try { onCopied(ok); } catch (e) { } }
+      };
+      try {
+        var p = navigator.clipboard.writeText(String(text || ""));
+        if (p && p.then) p.then(function () { done(true); }, function () { done(false); });
+        else done(true);
+      } catch (e) { done(false); }
+    });
+    return b;
+  }
 
   Skills.topics = {
     mount: function (panel) {
       var UI = window.UI;
       UI.clear(panel);
-
-      // 原型模式角标
-      panel.appendChild(
-        UI.el("div", {
-          class: "tp-proto-badge",
-          text: "原型模式 · 当前为演示数据（接口契约见 docs/prd-topic-selection.md）",
-        })
-      );
 
       // Tab 导航
       var tabs = UI.el("div", { class: "tp-tabs" });
@@ -186,6 +100,8 @@
         { key: "daily", text: "今日选题" },
         { key: "radar", text: "对标雷达" },
         { key: "trends", text: "热榜趋势" },
+        { key: "profile", text: "垂类画像" },
+        { key: "outcome", text: "选题效果" },
       ];
       tabDefs.forEach(function (t, i) {
         var b = UI.el("button", { class: "btn tp-tab" + (i === 0 ? " active" : ""), text: t.text });
@@ -204,54 +120,100 @@
         if (key === "daily") renderDaily(body);
         if (key === "radar") renderRadar(body);
         if (key === "trends") renderTrends(body);
+        if (key === "profile") renderProfile(body);
+        if (key === "outcome") renderOutcome(body);
       }
 
       // ---------- 今日选题 ----------
       function renderDaily(root) {
-        var tip = UI.el("div", { class: "tp-hint", text: "每天由服务端结合热榜趋势与你的垂类画像生成，每条选题都附带数据证据。" });
-        root.appendChild(tip);
-        var grid = UI.el("div", { class: "tp-grid" });
-        root.appendChild(grid);
-        apiCall("/api/v2/topics/daily").catch(function (e) {
-          UI.showError(grid, (e && e.message) ? e.message : "请求失败");
-          return { ok: false };
-        }).then(function (r) {
-          if (!r || !r.ok) return;
-          UI.clear(grid);
-          r.data.cards.forEach(function (c) {
-            var evText;
-            if (c.evidence.type === "peer")
-              evText = "对标 @" + c.evidence.ref_title + " · " + c.evidence.metric_label + " " + c.evidence.metric_value;
-            else if (c.evidence.type === "hot") evText = c.evidence.ref_title + " · " + c.evidence.metric_value;
-            else evText = c.evidence.ref_title;
-            var card = UI.el("div", { class: "tp-card" }, [
-              UI.el("div", { class: "tp-card-head" }, [
-                UI.el("span", { class: "tp-badge", text: c.category }),
-                UI.el("span", { class: "tp-score", text: "潜力 " + c.score }),
-              ]),
-              UI.el("div", { class: "tp-title", text: c.title }),
-              UI.el("div", { class: "tp-hook", text: "钩子：" + c.hook }),
-              UI.el("div", { class: "tp-evidence", text: "📌 " + evText }),
-              UI.el("div", { class: "tp-tags", text: c.tags.map(function (t) { return "#" + t; }).join(" ") }),
-              (function () {
-                var b = UI.el("button", { class: "btn", text: "🚀 去创作" });
-                b.addEventListener("click", function () {
-                  var title = c.title;
-                  try {
-                    (navigator.clipboard || { writeText: function () {} }).writeText
-                      ? navigator.clipboard.writeText(title)
-                      : null;
-                  } catch (e) {}
-                  b.textContent = "✓ 标题已复制，去「创作」粘贴";
-                  b.disabled = true;
-                  setTimeout(function () { b.textContent = "🚀 去创作"; b.disabled = false; }, 1800);
-                });
-                return b;
-              })(),
-            ]);
-            grid.appendChild(card);
+        var wrap = UI.el("div");
+        root.appendChild(wrap);
+        load(wrap, "GET", "/api/v2/topics/daily", null, function (d) {
+          UI.clear(wrap);
+          var cards = d.cards || [];
+          wrap.appendChild(UI.el("div", {
+            class: "tp-hint",
+            text: d.date
+              ? d.date + " 的选题：结合热榜趋势与你的垂类画像生成，每条都附带数据证据。"
+              : "每天由服务端结合热榜趋势与你的垂类画像生成，每条选题都附带数据证据。",
+          }));
+          if (!d.profile_set) {
+            wrap.appendChild(UI.el("div", {
+              class: "tp-notice",
+              text: d.profile_inferred
+                ? "当前垂类画像是根据对标账号推断的，补全画像后推荐会更准。"
+                : "尚未设置垂类画像，推荐暂未考虑你的垂类。可在「对标雷达」补充对标账号，画像会自动推断。",
+            }));
+          }
+          if (!cards.length) { wrap.appendChild(emptyBox("今天还没有生成选题，稍后再来看看。")); return; }
+
+          var grid = UI.el("div", { class: "tp-grid" });
+          wrap.appendChild(grid);
+          cards.forEach(function (c) {
+            grid.appendChild(topicCard(c));
           });
         });
+      }
+
+      function topicCard(c) {
+        var ev = c.evidence || {};
+        var evText = "";
+        var type = ev.type || "";
+        if (type === "peer") evText = "对标 @" + (ev.refTitle || "") + " · " + (ev.metricLabel || "") + " " + (ev.metricValue || "");
+        else if (type === "hot") evText = (ev.refTitle || "热榜话题") + " · " + (ev.metricValue || "");
+        else if (type === "gap") evText = (ev.refTitle || "垂类内暂无同题材");
+        else evText = ev.refTitle || "暂无证据说明";
+
+        var children = [
+          UI.el("div", { class: "tp-card-head" }, [
+            UI.el("span", { class: "tp-badge", text: c.category || "未分类" }),
+            UI.el("span", { class: "tp-score", text: "潜力 " + (c.score != null ? c.score : "—") }),
+          ]),
+          UI.el("div", { class: "tp-title", text: c.title || "" }),
+        ];
+        if (c.hook) children.push(UI.el("div", { class: "tp-hook", text: "钩子：" + c.hook }));
+        children.push(UI.el("div", { class: "tp-evidence", text: "📌 " + evText }));
+        if (c.niche_fit != null && c.niche_fit > 0) {
+          children.push(UI.el("div", {
+            class: "tp-niche",
+            text: "垂类匹配 " + c.niche_fit + (c.niche_reason ? " · " + c.niche_reason : ""),
+          }));
+        }
+        if (c.tags && c.tags.length) {
+          children.push(UI.el("div", { class: "tp-tags", text: c.tags.map(function (t) { return "#" + t; }).join(" ") }));
+        }
+
+        var actions = UI.el("div", { class: "tp-actions" });
+        // 「去创作」= 采纳（闭环第一环）+ 复制标题。以前只复制标题，
+        // 服务端无从区分"推荐了没人做"和"做了没效果"，权重也就没法按真实效果调。
+        actions.appendChild(copyBtn("🚀 去创作", c.title || "", function () {
+          if (!c.id) return;
+          call("POST", "/api/v2/topics/outcome/adopt", {
+            TopicId: c.id,
+            Title: c.title || "",
+            EvidenceType: (c.evidence && c.evidence.type) || "",
+            Source: "",
+            Score: Number(c.score) || 0,
+            NicheFit: c.niche_fit == null ? null : Number(c.niche_fit),
+            Signals: c.signals || null,
+          }).then(function () {
+            // 采纳即入库，稍后可在「选题效果」里标记发布与回填。
+          }).catch(function (e) {
+            // 采纳失败不该挡住用户去创作，只记日志
+            if (window.console) console.warn("adopt 失败", e);
+          });
+        }));
+        var skip = UI.el("button", { class: "btn btn-ghost", text: "不感兴趣" });
+        skip.addEventListener("click", function () {
+          skip.disabled = true;
+          call("POST", "/api/v2/topics/feedback", { TopicTitle: c.title || "", Reason: "不感兴趣" })
+            .then(function () { skip.textContent = "已记录"; })
+            .catch(function () { skip.disabled = false; skip.textContent = "不感兴趣"; });
+        });
+        actions.appendChild(skip);
+        children.push(actions);
+
+        return UI.el("div", { class: "tp-card" }, children);
       }
 
       // ---------- 对标雷达 ----------
@@ -261,12 +223,13 @@
 
         var alertBox = UI.el("div");
         root.appendChild(alertBox);
+
         var listCard = UI.el("div", { class: "card" }, [
           UI.el("h3", { text: "对标账号" }),
           UI.el("div", { id: "radar-list" }),
         ]);
         root.appendChild(listCard);
-        var addRow = UI.el("div", { class: "row" });
+
         var sel = UI.el("select", { class: "input" }, [
           UI.el("option", { value: "bilibili", text: "B站" }),
           UI.el("option", { value: "xiaohongshu", text: "小红书" }),
@@ -275,81 +238,405 @@
         var input = UI.el("input", { class: "input", placeholder: "对标账号主页 URL" });
         input.style.flex = "1";
         var addBtn = UI.el("button", { class: "btn", text: "＋ 添加账号" });
-        addRow.appendChild(sel); addRow.appendChild(input); addRow.appendChild(addBtn);
+        var sampleBtn = UI.el("button", { class: "btn btn-ghost", text: "立即采样" });
+        var addRow = UI.el("div", { class: "row" }, [sel, input, addBtn, sampleBtn]);
         listCard.appendChild(addRow);
+        var addMsg = UI.el("div", { class: "tp-hint" });
+        listCard.appendChild(addMsg);
 
         function renderList(accounts, alerts) {
           var list = listCard.querySelector("#radar-list");
           UI.clear(list);
-          accounts.forEach(function (a) {
-            var row = UI.el("div", { class: "tp-acct" }, [
-              UI.el("div", {}, [
-                UI.el("div", { class: "tp-acct-name", text: "🪪 " + a.name + "（" + a.platform + "）" }),
-                UI.el("div", { class: "tp-acct-meta", text: "基线 " + fmtN(a.baseline_plays) + " 播放 · 已采样 " + a.samples + " 次 · 最近 " + a.last }),
-              ]),
+          if (!accounts || !accounts.length) {
+            list.appendChild(emptyBox("还没有对标账号。粘贴主页 URL 添加一个，后台会自动采样。"));
+          }
+          (accounts || []).forEach(function (a) {
+            var h = HEALTH[a.health] || null;
+            var meta = "基线 " + fmtN(a.baseline_plays) + " 播放 · 已采样 " + (a.samples || 0) + " 次 · 最近 " + fmtTime(a.last);
+            var right = UI.el("div", { class: "tp-acct-right" }, [
               UI.el("button", { class: "btn btn-ghost", text: "移除" }),
             ]);
-            row.querySelector(".btn-ghost").addEventListener("click", function () {
-              a._del = true; renderList(accounts, alerts);
+            right.querySelector(".btn-ghost").addEventListener("click", function () {
+              removeAccount(a.id, right.querySelector(".btn-ghost"));
             });
+            var row = UI.el("div", { class: "tp-acct" }, [
+              UI.el("div", {}, [
+                UI.el("div", { class: "tp-acct-name", text: "🪪 " + (a.name || "未命名") + "（" + (a.platform || "") + "）" }),
+                UI.el("div", { class: "tp-acct-meta", text: meta }),
+                h ? UI.el("div", { class: "tp-health " + h.cls, text: h.text, title: h.tip || "" }) : null,
+              ]),
+              right,
+            ]);
             list.appendChild(row);
           });
+
+          UI.clear(alertBox);
           (alerts || []).forEach(function (al) {
             alertBox.appendChild(
               UI.el("div", { class: "tp-alert" }, [
                 UI.el("div", { class: "tp-alert-head" }, [
-                  UI.el("span", { text: "🔥 爆款提醒 · " + al.account }),
-                  UI.el("span", { class: "tp-mult", text: al.multiplier }),
+                  UI.el("span", { text: "🔥 爆款提醒 · " + (al.account || "") + (al.kind === "revisit" ? "（回访检出）" : "") }),
+                  UI.el("span", { class: "tp-mult", text: al.multiplier || "" }),
                 ]),
-                UI.el("div", { class: "tp-alert-title", text: al.title }),
-                UI.el("div", { class: "tp-alert-meta", text: al.detail }),
+                UI.el("div", { class: "tp-alert-title", text: al.title || "" }),
+                UI.el("div", { class: "tp-alert-meta", text: al.revisit_note || al.detail || "" }),
+                (function () {
+                  var row = UI.el("div", { class: "tp-actions" });
+                  if (al.title) row.appendChild(copyBtn("以此创作", al.title));
+                  var ig = UI.el("button", { class: "btn btn-ghost", text: "忽略" });
+                  ig.addEventListener("click", function () {
+                    ig.disabled = true;
+                    call("POST", "/api/v2/topics/radar/alerts/" + al.id + "/dismiss", {})
+                      .then(function () { ig.textContent = "已忽略"; refresh(); })
+                      .catch(function (e) { ig.disabled = false; ig.textContent = "忽略"; UI.showError(alertBox, errText(e)); });
+                  });
+                  row.appendChild(ig);
+                  return row;
+                })(),
               ])
             );
           });
         }
-        function fmtN(n) { return n >= 10000 ? (n / 10000).toFixed(1) + "万" : String(n); }
 
-        apiCall("/api/v2/topics/radar/accounts").then(function (r) {
-          renderList(r.data.accounts, r.data.alerts);
-        });
+        function refresh() {
+          load(listCard.querySelector("#radar-list"), "GET", "/api/v2/topics/radar/accounts", null, function (d) {
+            renderList(d.accounts || [], d.alerts || []);
+          });
+        }
+
+        function removeAccount(id, btn) {
+          if (id == null) return;
+          btn.disabled = true;
+          call("DELETE", "/api/v2/topics/radar/accounts/" + id).then(function () {
+            refresh();
+          }).catch(function (e) {
+            btn.disabled = false;
+            UI.showError(listCard.querySelector("#radar-list"), errText(e));
+          });
+        }
 
         addBtn.addEventListener("click", function () {
           var url = input.value.trim();
-          if (!url) return;
-          mockApi("/api/v2/topics/radar/accounts", { method: "POST", body: { platform: sel.value, url: url } }).then(function () {
+          if (!url) { addMsg.textContent = "请填写对标账号主页 URL"; return; }
+          addMsg.textContent = "添加中…";
+          addBtn.disabled = true;
+          call("POST", "/api/v2/topics/radar/accounts", { platform: sel.value, url: url }).then(function (r) {
+            addBtn.disabled = false;
+            if (!r || !r.ok) { addMsg.textContent = (r && r.message) || "添加失败"; return; }
             input.value = "";
-            apiCall("/api/v2/topics/radar/accounts").then(function (r) { renderList(r.data.accounts, r.data.alerts); });
+            addMsg.textContent = "已添加：" + ((r.data && r.data.name) || "新账号");
+            refresh();
+          }).catch(function (e) {
+            addBtn.disabled = false;
+            addMsg.textContent = errText(e);
           });
         });
+
+        sampleBtn.addEventListener("click", function () {
+          sampleBtn.disabled = true;
+          sampleBtn.textContent = "采样中…";
+          call("POST", "/api/v2/topics/radar/sample", {}).then(function (r) {
+            sampleBtn.disabled = false;
+            sampleBtn.textContent = "立即采样";
+            if (!r || !r.ok) { addMsg.textContent = (r && r.message) || "采样失败"; return; }
+            var d = r.data || {};
+            addMsg.textContent = "采样完成：覆盖 " + (d.accounts || 0) + " 个账号，新增 " + (d.added || 0) + " 条数据";
+            refresh();
+          }).catch(function (e) {
+            sampleBtn.disabled = false;
+            sampleBtn.textContent = "立即采样";
+            addMsg.textContent = errText(e);
+          });
+        });
+
+        refresh();
       }
 
       // ---------- 热榜趋势 ----------
       function renderTrends(root) {
-        var tip = UI.el("div", { class: "tp-hint", text: "每小时采样一次热榜，累计形成热度曲线。上升期的话题建议 24 小时内跟进。" });
-        root.appendChild(tip);
-        apiCall("/api/v2/topics/trends").then(function (r) {
-          r.data.topics.forEach(function (t) {
-            var st = STAGE[t.stage] || STAGE.plateau;
+        // 某个源被风控时会连续失败并被退避跳过，表现只是"这个平台的榜单是空的"。
+        // 把健康状态摆出来，用户才知道是源挂了而不是真的没有热榜。
+        var healthBox = UI.el("div");
+        root.appendChild(healthBox);
+        loadHealth(healthBox);
+
+        var wrap = UI.el("div");
+        root.appendChild(wrap);
+        load(wrap, "GET", "/api/v2/topics/trends", null, function (d) {
+          UI.clear(wrap);
+          var topics = d.topics || [];
+          wrap.appendChild(UI.el("div", {
+            class: "tp-hint",
+            text: "每小时采样一次热榜，累计形成热度曲线。上升期的话题建议 24 小时内跟进。",
+          }));
+          if (d.degraded) {
+            wrap.appendChild(UI.el("div", { class: "tp-notice", text: "采样已中断较久，趋势阶段暂不可信，下面是最近一次采到的榜单。" }));
+          } else if (d.stale) {
+            wrap.appendChild(UI.el("div", { class: "tp-notice", text: "榜单更新有延迟（距今 " + d.stale_minutes + " 分钟），阶段判定可能滞后。" }));
+          }
+          if (d.sampled_at) {
+            wrap.appendChild(UI.el("div", { class: "tp-hint", text: "最近采样：" + fmtTime(d.sampled_at) }));
+          }
+          if (!topics.length) { wrap.appendChild(emptyBox("还没有热榜数据，等待后台采集。")); return; }
+
+          topics.forEach(function (t) {
+            var st = STAGE[t.stage] || STAGE.unknown;
+            var heat = t.heat != null && t.heat !== "" ? String(t.heat) : fmtN(t.heatValue);
             var row = UI.el("div", { class: "tp-trend" }, [
-              UI.el("span", { class: "tp-rank", text: "#" + t.rank }),
+              UI.el("span", { class: "tp-rank", text: "#" + (t.rank != null ? t.rank : "—") }),
               UI.el("div", { class: "tp-trend-main" }, [
-                UI.el("div", { class: "tp-trend-title", text: t.title }),
-                UI.el("div", { class: "tp-trend-meta", text: t.source + " · 热度 " + t.heat }),
+                UI.el("div", { class: "tp-trend-title", text: t.title || "" }),
+                UI.el("div", { class: "tp-trend-meta", text: (t.source || "") + " · 热度 " + heat }),
               ]),
               UI.el("span", { class: "tp-stage " + st.cls, text: st.text, title: st.tip }),
-              (function () {
-                var b = UI.el("button", { class: "btn", text: "以此创作" });
-                b.addEventListener("click", function () {
-                  try { navigator.clipboard.writeText(t.title); } catch (e) {}
-                  b.textContent = "✓ 已复制";
-                  setTimeout(function () { b.textContent = "以此创作"; }, 1500);
-                });
-                return b;
-              })(),
+              copyBtn("以此创作", t.title || ""),
             ]);
-            root.appendChild(row);
+            wrap.appendChild(row);
           });
         });
+      }
+
+      function loadHealth(box) {
+        call("GET", "/api/v2/topics/health").then(function (r) {
+          if (!r || !r.ok) return;
+          var srcs = (r.data && r.data.sources) || [];
+          if (!srcs.length) return;
+          UI.clear(box);
+          var row = UI.el("div", { class: "tp-actions" });
+          srcs.forEach(function (s) {
+            var label = UI.platformName(s.source) + (s.ok ? " 正常" : (s.cooling_down ? " 冷却中" : " 异常"));
+            var tip = s.ok
+              ? "最近一次成功：" + (s.last_success || "—")
+              : "连续失败 " + (s.consecutive_failures || 0) + " 次" +
+                (s.last_error ? "：" + s.last_error : "") +
+                (s.skip_until ? "，冷却至 " + s.skip_until : "");
+            row.appendChild(UI.el("span", {
+              class: "tp-health " + (s.ok ? "tp-health-ok" : "tp-health-bad"),
+              text: label,
+              title: tip,
+            }));
+          });
+          box.appendChild(row);
+        }).catch(function () { });
+      }
+
+      // ---------- 垂类画像 ----------
+      // 画像参与选题的垂类匹配度评分。后端 GET 会同时给 available_platforms（白名单）
+      // 与 inferred_platforms（按对标账号推断的主阵地），没填画像时据此提示用户补全。
+      function renderProfile(root) {
+        var wrap = UI.el("div");
+        root.appendChild(wrap);
+        load(wrap, "GET", "/api/v2/topics/profile", null, function (d) {
+          UI.clear(wrap);
+          wrap.appendChild(UI.el("div", {
+            class: "tp-hint",
+            text: "垂类画像决定选题与你的匹配程度。不填也能用——系统会根据对标账号自动推断一个，下面会标出来。",
+          }));
+          if (!d.has_profile && d.effective_inferred && (d.inferred_platforms || []).length) {
+            wrap.appendChild(UI.el("div", {
+              class: "tp-notice",
+              text: "当前用的是推断画像（主阵地：" + d.inferred_platforms.map(UI.platformName).join("、") +
+                "）。补全下面的内容后，垂类匹配分会更准。",
+            }));
+          }
+          if (d.has_profile) {
+            wrap.appendChild(UI.el("div", { class: "tp-hint", text: "已保存画像，下面显示的是当前值。" }));
+          }
+
+          var boxes = {};
+          var platRow = UI.el("div", { class: "tp-actions" });
+          (d.available_platforms || []).forEach(function (p) {
+            var cb = UI.el("input", { type: "checkbox" });
+            cb.checked = (d.platforms || []).indexOf(p) >= 0;
+            boxes[p] = cb;
+            platRow.appendChild(UI.el("label", { class: "tp-plat" }, [cb, " " + UI.platformName(p)]));
+          });
+          if (!(d.available_platforms || []).length) {
+            platRow.appendChild(UI.el("span", { class: "tp-hint", text: "后端未返回可选平台" }));
+          }
+
+          var inc = UI.el("input", { class: "input", placeholder: "想多看到的关键词，逗号分隔，如：AI 工具, 效率" });
+          inc.value = (d.include_keywords || []).join(", ");
+          var exc = UI.el("input", { class: "input", placeholder: "不想看到的关键词，逗号分隔，如：八卦, 明星" });
+          exc.value = (d.exclude_keywords || []).join(", ");
+          var aud = UI.el("textarea", { class: "input", placeholder: "目标受众，如：25-35 岁想提效的职场人" });
+          aud.value = d.audience || "";
+
+          var msg = UI.el("div", { class: "tp-hint" });
+          var save = UI.el("button", { class: "btn", text: "保存画像" });
+          save.addEventListener("click", function () {
+            var picked = Object.keys(boxes).filter(function (p) { return boxes[p].checked; });
+            save.disabled = true;
+            msg.textContent = "保存中…";
+            call("PUT", "/api/v2/topics/profile", {
+              Platforms: picked,
+              IncludeKeywords: splitKeywords(inc.value),
+              ExcludeKeywords: splitKeywords(exc.value),
+              Audience: aud.value.trim(),
+            }).then(function (r) {
+              save.disabled = false;
+              if (!r || !r.ok) { msg.textContent = (r && r.message) || "保存失败"; return; }
+              msg.textContent = "✓ 已保存，下次生成选题时生效。";
+            }).catch(function (e) {
+              save.disabled = false;
+              msg.textContent = errText(e);
+            });
+          });
+
+          wrap.appendChild(UI.el("div", { class: "card" }, [
+            UI.el("h3", { text: "主阵地平台" }),
+            platRow,
+            UI.el("h3", { text: "想多看到的关键词" }),
+            inc,
+            UI.el("h3", { text: "不想看到的关键词" }),
+            exc,
+            UI.el("h3", { text: "目标受众" }),
+            aud,
+            UI.el("div", { class: "row" }, [save]),
+            msg,
+          ]));
+        });
+      }
+
+      function splitKeywords(s) {
+        return String(s || "").split(/[,，、\s]+/).map(function (x) { return x.trim(); }).filter(Boolean);
+      }
+
+      // ---------- 选题效果（采纳 → 发布 → 回测）----------
+      // outcome/stats 一次给全：汇总统计 + rows（每条选题的 stage 由服务端判定：
+      // adopted / published / measured）。以服务端为准，不在本地另存一份状态。
+
+      function renderOutcome(root) {
+        UI.clear(root);              // 标记发布/回填后会整体重绘，不清会越堆越多
+        var wrap = UI.el("div");
+        root.appendChild(wrap);
+        load(wrap, "GET", "/api/v2/topics/outcome/stats", null, function (d) {
+          UI.clear(wrap);
+          wrap.appendChild(UI.el("div", {
+            class: "tp-hint",
+            text: "选题的推荐权重会按你的真实效果自动调整：采纳得多、发出去效果好，这类选题以后会排得更靠前。",
+          }));
+
+          var pct = function (v) { return (Number(v) || 0) * 100; };
+          var lines = [
+            "采纳 " + (d.adopted || 0) + " 条 · 已发布 " + (d.published || 0) + " 条 · 已回填效果 " + (d.measured || 0) + " 条",
+            "采纳率 " + pct(d.adoption_rate).toFixed(1) + "% · 命中率 " + pct(d.hit_rate).toFixed(1) + "%",
+          ];
+          var w = d.current_weights || {};
+          lines.push("当前权重：证据 " + w.evidence + " · 热度趋势 " + w.momentum + " · 热度 " + w.heat + " · 垂类 " + w.niche);
+          wrap.appendChild(UI.el("div", { class: "card" }, [
+            UI.el("h3", { text: "效果统计" }),
+            UI.el("div", { class: "tp-hint", text: lines.join("\n") }),
+            d.baseline_ready
+              ? UI.el("div", { class: "tp-hint", text: "你的平均播放基线：" + fmtN(d.baseline_views) + "，超过这个数算命中。" })
+              : UI.el("div", { class: "tp-notice", text: "样本还不够（需要更多回填数据），暂时用默认基线判定命中。" }),
+            tuningNote(d.tuning),
+          ]));
+
+          var rows = d.rows || [];
+          var box = UI.el("div", { class: "card" }, [UI.el("h3", { text: "我采纳过的选题" })]);
+          if (!rows.length) {
+            box.appendChild(emptyBox("还没有记录。在「今日选题」点「去创作」采纳一条后，这里就能标记发布与回填效果。"));
+          }
+          rows.forEach(function (r) {
+            box.appendChild(outcomeRow(r, function () { renderOutcome(root); }));
+          });
+          wrap.appendChild(box);
+        });
+      }
+
+      function tuningNote(t) {
+        if (!t) return UI.el("div");
+        var head = t.applied
+          ? "✓ 已按你的真实数据调整推荐权重"
+          : "权重暂未调整（" + (t.reason || "样本不足") + "）";
+        var kids = [UI.el("div", { class: "tp-hint", text: head })];
+        (t.notes || []).forEach(function (n) {
+          kids.push(UI.el("div", { class: "tp-evidence", text: n.signal + "：" + (n.note || n.detail || n.message || "") }));
+        });
+        return UI.el("div", {}, kids);
+      }
+
+      // 一条已采纳选题。stage 由服务端给：adopted → published → measured。
+      function outcomeRow(r, onChange) {
+        var STAGE_TEXT = { adopted: "已采纳，去发布", published: "已发布，待回填效果", measured: "已回填效果" };
+        var meta = (STAGE_TEXT[r.stage] || "已采纳") +
+          (r.publish_platform ? "（" + UI.platformName(r.publish_platform) + "）" : "");
+        if (r.stage === "measured") {
+          meta += " · 播放 " + fmtN(r.views) + " / 赞 " + fmtN(r.likes) + " / 评 " + fmtN(r.comments);
+          if (r.multiplier) meta += " · " + r.multiplier + "× 基线";
+        }
+        var canMeasure = r.stage !== "measured";
+        var row = UI.el("div", { class: "tp-acct" }, [
+          UI.el("div", {}, [
+            UI.el("div", { class: "tp-acct-name", text: r.title || "(无标题)" }),
+            UI.el("div", { class: "tp-acct-meta", text: meta }),
+            r.verdict_text ? UI.el("div", {
+              class: "tp-health " + (r.verdict === "hit" ? "tp-health-ok" : (r.verdict === "weak" ? "tp-health-bad" : "tp-health-wait")),
+              text: r.verdict_text,
+            }) : null,
+          ]),
+          UI.el("div", { class: "tp-acct-right" }, [
+            UI.el("button", { class: "btn btn-ghost", text: canMeasure ? (r.stage === "adopted" ? "标记发布" : "回填效果") : "重新回填" }),
+          ]),
+        ]);
+        var btn = row.querySelector(".btn-ghost");
+        var form = UI.el("div", { class: "tp-actions" });
+        form.style.display = "none";
+        btn.addEventListener("click", function () {
+          var show = form.style.display === "none";
+          form.style.display = show ? "flex" : "none";
+          if (show) buildForm();
+        });
+
+        function buildForm() {
+          UI.clear(form);
+          if (r.stage === "adopted") {
+            var sel = UI.el("select", { class: "input" }, [
+              UI.el("option", { value: "douyin", text: "抖音" }),
+              UI.el("option", { value: "xiaohongshu", text: "小红书" }),
+              UI.el("option", { value: "bilibili", text: "B站" }),
+              UI.el("option", { value: "toutiao", text: "今日头条" }),
+              UI.el("option", { value: "weibo", text: "微博" }),
+            ]);
+            var url = UI.el("input", { class: "input", placeholder: "作品链接（可选）" });
+            var ok = UI.el("button", { class: "btn", text: "提交" });
+            ok.addEventListener("click", function () {
+              ok.disabled = true;
+              call("POST", "/api/v2/topics/outcome/publish", { TopicId: r.topic_id, Platform: sel.value, Url: url.value.trim() })
+                .then(function (res) {
+                  ok.disabled = false;
+                  if (!res || !res.ok) { UI.showError(form, (res && res.message) || "标记失败"); return; }
+                  onChange();
+                }).catch(function (e) { ok.disabled = false; UI.showError(form, errText(e)); });
+            });
+            form.appendChild(sel); form.appendChild(url); form.appendChild(ok);
+          } else {
+            var v = UI.el("input", { class: "input", placeholder: "播放量" });
+            v.value = r.views || "";
+            var l = UI.el("input", { class: "input", placeholder: "点赞" });
+            l.value = r.likes || "";
+            var c = UI.el("input", { class: "input", placeholder: "评论" });
+            c.value = r.comments || "";
+            var ok2 = UI.el("button", { class: "btn", text: "提交" });
+            ok2.addEventListener("click", function () {
+              ok2.disabled = true;
+              call("POST", "/api/v2/topics/outcome/metrics", {
+                TopicId: r.topic_id,
+                Views: Number(v.value) || 0,
+                Likes: Number(l.value) || 0,
+                Comments: Number(c.value) || 0,
+              }).then(function (res) {
+                ok2.disabled = false;
+                if (!res || !res.ok) { UI.showError(form, (res && res.message) || "回填失败"); return; }
+                onChange();
+              }).catch(function (e) { ok2.disabled = false; UI.showError(form, errText(e)); });
+            });
+            form.appendChild(v); form.appendChild(l); form.appendChild(c); form.appendChild(ok2);
+          }
+        }
+
+        return UI.el("div", {}, [row, form]);
       }
 
       renderTab("daily");
