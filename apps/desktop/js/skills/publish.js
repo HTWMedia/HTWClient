@@ -53,7 +53,8 @@
 
       // ===== 状态 =====
       const tags = [];
-      let mediaUrl = "", coverUrl = "";
+      // 媒体可以是多个（后端 upload-file 一次只收一个文件，前端逐个上传后拼成数组）
+      let mediaUrls = [], coverUrl = "";
       let platformCfg = {};
       const platformEls = {};       // checkbox
       const platformDotEls = {};     // 状态点（cookie 是否有效）
@@ -64,10 +65,11 @@
       // ===== 发布编辑面板 =====
       const pubTitle = UI.el("input", { type: "text", placeholder: "标题", maxlength: "100" });
       const pubContent = UI.el("textarea", { placeholder: "正文内容（可选）" });
-      const tagInput = UI.el("input", { type: "text", placeholder: "输入标签，回车添加" });
+      const tagInput = UI.el("input", { type: "text", placeholder: "输入标签，回车或逗号添加" });
       const tagBox = UI.el("div", { class: "tagbox" });
       const tagGenBtn = UI.el("button", { class: "btn secondary", text: "AI 生成" });
-      const mediaFile = UI.fileInput({ label: "选择视频/图片", accept: "video/*,image/*" });
+      // multiple：后端 submit 收的是 mediaUrls 数组，界面却只能选一个文件，自相矛盾。
+      const mediaFile = UI.fileInput({ label: "选择视频/图片（可多选）", accept: "video/*,image/*", multiple: true });
       const mediaUploadBtn = UI.el("button", { class: "btn secondary", text: "上传媒体" });
       const mediaPrev = UI.el("div", { class: "hintline" });
       const coverFile = UI.fileInput({ label: "选择封面图", accept: "image/*" });
@@ -159,7 +161,63 @@
 
       // ===== Cookie 配置 =====
       const cookieRegion = UI.el("div");
-      const cookieCard = section("Cookie 配置", [UI.el("div", { class: "hintline", text: "每个账号的 Cookie 相互隔离，仅当前登录账号可用。粘贴对应平台浏览器中的完整 Cookie 字符串保存。" })], UI.el("div", {}, [cookieRegion]), null, "fa-cookie");
+      const connBox = UI.el("div", { class: "pb-conn" });
+      // cookie-status 读的是 60 秒内的缓存结果（快）；改完 Cookie 想立刻验真假，
+      // 得走 check-connections 强制重验——小红书那条要开浏览器，会比较慢。
+      const checkAllBtn = UI.el("button", { class: "btn secondary", text: "检测全部连接" });
+      checkAllBtn.addEventListener("click", function () {
+        UI.withLoading(checkAllBtn, async function () {
+          try {
+            UI.clear(connBox);
+            connBox.appendChild(UI.el("span", { class: "hintline", text: "正在逐个平台真实校验，可能需要十几秒…" }));
+            const r = await API.call("GET", "/api/v2/publish/check-connections");
+            if (!r.ok) { UI.showError(connBox, formatErr(r)); return; }
+            renderConn(connItems(r.data));
+          } catch (e) { UI.showError(connBox, "请求异常: " + (e && e.message ? e.message : String(e))); }
+        });
+      });
+      // 两个端点返回的形状不一样，不能只按数组处理：
+      //   platform-status → [{ platform_id, platform_name, connected }]
+      //   check-connections → { toutiao: false, bilibili: false, ... }（平台 id 为键、布尔为值）
+      // 后者用 asList 会被 "只要对象项" 的过滤全部丢掉，页面就成了"没有可用的平台"。
+      function connItems(raw) {
+        const out = [];
+        if (Array.isArray(raw)) {
+          raw.forEach(function (p) {
+            if (!p || typeof p !== "object") return;
+            out.push({
+              id: p.platform_id || p.platform || p.platformId || "",
+              name: p.platform_name || p.name || "",
+              connected: p.connected,
+            });
+          });
+          return out;
+        }
+        if (raw && typeof raw === "object") {
+          Object.keys(raw).forEach(function (k) {
+            const v = raw[k];
+            out.push({ id: k, name: "", connected: typeof v === "boolean" ? v : (v && v.connected) });
+          });
+        }
+        return out;
+      }
+      function renderConn(list) {
+        UI.clear(connBox);
+        if (!list.length) { connBox.appendChild(UI.el("span", { class: "hintline", text: "没有可用的平台" })); return; }
+        list.forEach(function (p) {
+          const id = p.id || p.platform_id || p.platform || p.platformId || "";
+          const name = p.name || p.platform_name || PLAT_NAME[id] || id;
+          const ok = p.connected === true;
+          connBox.appendChild(UI.el("span", {
+            class: "pb-conn-item " + (ok ? "ok" : "bad"),
+            text: name + "：" + (p.connected === true ? "已连接" : (p.connected === false ? "未连接" : "未校验")),
+          }));
+        });
+      }
+      const cookieCard = section("Cookie 配置", [
+        UI.el("div", { class: "hintline", text: "每个账号的 Cookie 相互隔离，仅当前登录账号可用。粘贴对应平台浏览器中的完整 Cookie 字符串保存。" }),
+        connBox,
+      ], [checkAllBtn], cookieRegion, "fa-cookie");
 
       // ===== 标签页 =====
       const TABS = [
@@ -202,7 +260,7 @@
 
       // ===== 事件 =====
       tagInput.addEventListener("keydown", function (e) {
-        if (e.key === "Enter" || e.key === "," || e.key === " ") { e.preventDefault(); addTag(tagInput.value); }
+        if (e.key === "Enter" || e.key === "," || e.key === "，") { e.preventDefault(); addTag(tagInput.value); }
       });
       tagGenBtn.addEventListener("click", function () {
         UI.withLoading(tagGenBtn, async function () {
@@ -219,10 +277,18 @@
           try {
             const files = await readFiles(mediaFile);
             if (!files.length) { UI.showError(mediaPrev, "请选择媒体文件"); return; }
-            const up = await API.upload("POST", "/api/v2/publish/upload-file", files, {});
-            if (!up.ok) { UI.showError(mediaPrev, formatErr(up)); return; }
-            mediaUrl = (up.data && up.data.url) || "";
-            UI.showResult(mediaPrev, { message: "已上传: " + mediaUrl });
+            // 逐个上传：upload-file 一次只收一个文件，但发布时 mediaUrls 是数组，
+            // 多选了却只发第一个会让用户以为"都传上去了"。
+            const uploaded = [];
+            for (const one of files) {
+              const up = await API.upload("POST", "/api/v2/publish/upload-file", [one], {});
+              if (!up.ok) { UI.showError(mediaPrev, formatErr(up)); return; }
+              const url = (up.data && up.data.url) || "";
+              if (url) uploaded.push(url);
+            }
+            if (!uploaded.length) { UI.showError(mediaPrev, "上传成功但没有返回文件地址"); return; }
+            mediaUrls = mediaUrls.concat(uploaded);
+            UI.showResult(mediaPrev, { message: "已上传 " + mediaUrls.length + " 个：" + mediaUrls.join("、") });
           } catch (e) { UI.showError(mediaPrev, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
@@ -241,7 +307,7 @@
       genContentBtn.addEventListener("click", function () {
         UI.withLoading(genContentBtn, async function () {
           try {
-            const up = await API.call("POST", "/api/v2/publish/generate-content", { title: pubTitle.value, mediaHint: mediaUrl, platform: selPlats[0] || "all" });
+            const up = await API.call("POST", "/api/v2/publish/generate-content", { title: pubTitle.value, mediaHint: mediaUrls[0] || "", platform: selPlats[0] || "all" });
             if (!up.ok) { UI.showError(pubRegion, formatErr(up)); return; }
             const txt = (up.data && (up.data.content || up.data.text)) || "";
             if (txt) pubContent.value = txt;
@@ -287,7 +353,7 @@
               title: title,
               content: pubContent.value,
               tags: tags.slice(),
-              mediaUrls: mediaUrl ? [mediaUrl] : [],
+              mediaUrls: mediaUrls.slice(),
               coverImage: coverUrl,
               isDraft: false,
               platforms: platforms,
@@ -299,32 +365,104 @@
         });
       });
 
+      // 子任务/主任务状态。dot 用发布面板已有的三色点（gn 成功 / rd 失败 / gy 进行中）。
+      var PUB_STATUS = {
+        pending: { t: "等待中", c: "gy" },
+        running: { t: "进行中", c: "gy" },
+        uploading: { t: "上传中", c: "gy" },
+        completed: { t: "已完成", c: "gn" },
+        success: { t: "成功", c: "gn" },
+        partial_success: { t: "部分成功", c: "gn" },
+        failed: { t: "失败", c: "rd" },
+        partial_failed: { t: "部分失败", c: "rd" },
+        canceled: { t: "已取消", c: "gy" },
+        cancelled: { t: "已取消", c: "gy" },
+      };
+      function pubStatus(s) { return PUB_STATUS[s] || { t: s || "未知", c: "gy" }; }
+
+      // 任务卡片。以前直接把整个响应塞给 UI.showResult 铺成 KV，
+      // 一条任务里嵌套的子任务与长错误信息完全没法看，也没有任何操作入口。
+      function taskCard(item, onChanged) {
+        const st = pubStatus(item.status);
+        const kids = [
+          UI.el("div", { class: "pb-task-head" }, [
+            UI.el("span", { class: "dot " + st.c }),
+            UI.el("span", { class: "pb-task-title", text: item.title || "(无标题)" }),
+            UI.el("span", { class: "pb-task-status", text: st.t }),
+            UI.el("span", { class: "pb-task-time", text: item.createdAt || "" }),
+          ]),
+        ];
+        (item.subTasks || []).forEach(function (s) {
+          const sst = pubStatus(s.status);
+          const row = UI.el("div", { class: "pb-sub" }, [
+            UI.el("span", { class: "dot " + sst.c }),
+            UI.el("span", { class: "pb-sub-plat", text: s.platform || s.platformName || "" }),
+            UI.el("span", { class: "pb-sub-status", text: sst.t }),
+            s.error ? UI.el("span", { class: "pb-sub-err", text: s.error, title: s.error }) : null,
+            s.postUrl ? UI.el("a", { class: "title-link", href: s.postUrl, text: "查看作品" }) : null,
+          ]);
+          // 只有失败且拿得到子任务 id 才给重试：后端 retry 是按 subTaskId 定位子任务的，
+          // 缺了这个字段（老版本接口不返回）按钮就是个必然失败的空壳。
+          if (sst.c === "rd" && s.subTaskId) {
+            const rb = UI.el("button", { class: "btn secondary", text: "重试" });
+            rb.addEventListener("click", function () {
+              UI.withLoading(rb, async function () {
+                try {
+                  const r = await API.call("POST", "/api/v2/publish/retry", { SubTaskId: s.subTaskId });
+                  if (!r.ok) { UI.showError(row, formatErr(r)); return; }
+                  rb.textContent = "已提交";
+                  onChanged();
+                } catch (e) { UI.showError(row, "请求异常: " + (e && e.message ? e.message : String(e))); }
+              });
+            });
+            row.appendChild(rb);
+          }
+          kids.push(row);
+        });
+        return UI.el("div", { class: "pb-task" }, kids);
+      }
+
+      function renderTaskList(region, r, emptyText, onChanged) {
+        const d = r.data || {};
+        const items = d.items || [];
+        UI.clear(region);
+        if (!items.length) { region.appendChild(UI.el("div", { class: "hintline", text: emptyText })); return; }
+        if (d.total) region.appendChild(UI.el("div", { class: "hintline", text: "共 " + d.total + " 条，显示最近 " + items.length + " 条" }));
+        items.forEach(function (it) { region.appendChild(taskCard(it, onChanged)); });
+      }
+
       function refreshQueue() {
         API.call("GET", "/api/v2/publish/queue-status").then(function (r) {
           if (!r.ok) { UI.showError(queueRegion, formatErr(r)); return; }
-          const d = r.data || {};
-          if (d.items && !d.items.length) { UI.clear(queueRegion); queueRegion.appendChild(UI.el("div", { class: "hintline", text: "暂无任务" })); return; }
-          UI.showResult(queueRegion, d);
+          renderTaskList(queueRegion, r, "暂无进行中的任务", refreshQueue);
         }).catch(function (e) { UI.showError(queueRegion, "请求异常: " + (e && e.message ? e.message : String(e))); });
       }
       function refreshHistory() {
         API.call("GET", "/api/v2/publish/history?page=1&pageSize=20").then(function (r) {
           if (!r.ok) { UI.showError(histRegion, formatErr(r)); return; }
-          const d = r.data || {};
-          if (d.items && !d.items.length) { UI.clear(histRegion); histRegion.appendChild(UI.el("div", { class: "hintline", text: "暂无记录" })); return; }
-          UI.showResult(histRegion, d);
+          renderTaskList(histRegion, r, "暂无记录", refreshHistory);
         }).catch(function (e) { UI.showError(histRegion, "请求异常: " + (e && e.message ? e.message : String(e))); });
       }
 
       // ===== Cookie（注意保存后校验有效性）=====
+      // 后端 cookie-status 同时给 hasCookie（存过 Cookie）与 connected（登录态真的可用）。
+      // 只看 hasCookie 会把「配过但已失效」也画成绿勾，真发布时才被平台拒绝。
+      function cookieState(p) {
+        if (!p.hasCookie) return { cls: "gy", text: "未配置", icon: "⚪" };
+        if (p.connected === true) return { cls: "gn", text: "已连接", icon: "🟢" };
+        if (p.connected === false) return { cls: "rd", text: "Cookie 已失效", icon: "🟠" };
+        return { cls: "gy", text: "已配置（未校验）", icon: "⚪" };
+      }
+
       function refreshCookieStatus() {
         API.call("GET", "/api/v2/publish/cookie-status").then(function (r) {
           if (!r.ok) return;
           const list = asList(r.data);
           list.forEach(function (p) {
             cookieHas[p.platform] = !!p.hasCookie;
+            const st = cookieState(p);
             const dot = platformDotEls[p.platform];
-            if (dot) dot.className = "dot " + (p.hasCookie ? "gn" : "rd");
+            if (dot) { dot.className = "dot " + st.cls; dot.title = st.text; }
           });
           renderPlatConfig();
         }).catch(function () {});
@@ -375,7 +513,7 @@
             });
             clearBtn.addEventListener("click", function () { ta.value = ""; resLine.textContent = "已清空输入框"; resLine.className = "hintline"; });
             cookieRegion.appendChild(UI.el("div", { class: "subcfg" }, [
-              UI.el("h4", {}, [(p.hasCookie ? "🟢 " : "🔴 ") + (PLAT_NAME[p.platform] || p.platform) + (p.hasCookie ? "（已配置）" : "（未配置）")]),
+              UI.el("h4", {}, [cookieState(p).icon + " " + (PLAT_NAME[p.platform] || p.platform) + "（" + cookieState(p).text + "）"]),
               UI.el("div", { class: "hintline", text: hint }),
               ta,
               UI.el("div", { class: "row" }, [saveBtn, testBtn, clearBtn]),

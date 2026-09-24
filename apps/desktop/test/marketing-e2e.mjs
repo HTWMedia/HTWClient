@@ -18,7 +18,10 @@ const errors = [];
 page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', e => errors.push(String(e)));
 
-await page.evaluate((b, k) => { localStorage.setItem('htw_apiBase', b); localStorage.setItem('htw_apiKey', k); }, API_BASE, API_KEY);
+// AuthKey 只存主进程的 userData 文件（不再写 localStorage），注入凭据走 IPC。
+await page.evaluate(async (b, k) => {
+  if (window.htw && window.htw.saveConfig) await window.htw.saveConfig({ apiBase: b, apiKey: k });
+}, API_BASE, API_KEY);
 await page.reload();
 await page.click('[data-skill="marketing"]');
 await page.fill('#mv-product-name', '测试商品-营销成片E2E');
