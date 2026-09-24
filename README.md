@@ -12,14 +12,16 @@ HTW Media Client 把 **选题 → 创作 → 剪辑 → 发布** 收进同一个
   <img src="docs/images/banner.png" width="720" alt="HTW Media Client">
 </p>
 
-[![Version](https://img.shields.io/badge/version-v0.3.0-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
+[![Version](https://img.shields.io/badge/version-v0.4.0-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
 [![Download](https://img.shields.io/badge/download-Windows%20exe-brightgreen.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://htwmedia.dpdns.org)
+[![Platform](https://img.shields.io/badge/platform-Windows%20desktop%20%7C%20Web%20any-lightgrey.svg)](https://htwmedia.dpdns.org)
 [![Electron](https://img.shields.io/badge/Electron-31-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/HTWMedia/HTWClient?style=social)](https://github.com/HTWMedia/HTWClient/stargazers)
 
 简体中文 ｜ [问题反馈](https://github.com/HTWMedia/HTWClient/issues) ｜ [版本发布](https://github.com/HTWMedia/HTWClient/releases) ｜ [在线体验](https://htwmedia.dpdns.org)
+
+**关键词**：AI 短视频 · 多平台一键发布 · 自动剪辑 · 选题雷达 · 热榜趋势 · 字幕提取 · Agent Skills · Electron 客户端
 
 </div>
 
@@ -39,7 +41,7 @@ HTW Media Client 把 **选题 → 创作 → 剪辑 → 发布** 收进同一个
 
 > 🎬 以上 30 秒演示的录制分镜见 [docs/demo-script.md](docs/demo-script.md)。
 
-左侧是 9 个能力面板，各面板统一走 `/api/v2/*` 契约（`{ ok, data, errCode, errMsg, taskId }`）：
+左侧是 9 个能力面板，除助手外统一走 `/api/v2/*` 契约（`{ ok, data, errCode, errMsg, taskId }`）：
 
 ![媒资洞察 · 多平台发布](docs/images/panels.png)
 
@@ -53,8 +55,8 @@ HTW Media Client 把 **选题 → 创作 → 剪辑 → 发布** 收进同一个
 
 | 文件 | 说明 |
 | --- | --- |
-| `HTW.Media.Setup.0.3.0.exe` | 安装版，带开始菜单快捷方式 |
-| `HTW.Media.0.3.0.exe` | 便携版，双击即用，不写注册表 |
+| `HTW.Media.Setup.0.4.0.exe` | 安装版，带开始菜单快捷方式 |
+| `HTW.Media.0.4.0.exe` | 便携版，双击即用，不写注册表 |
 
 启动后在左侧 **设置** 填入 `AuthKey` 即可使用全部能力。
 AuthKey 在 [HTW 媒体平台](https://htwmedia.dpdns.org) Web 端「设置」里创建，
@@ -76,24 +78,37 @@ npm start        # 启动工作台
 
 ---
 
+## 🆕 v0.4.0 本次更新
+
+| 模块 | 更新内容 |
+| --- | --- |
+| 🎭 短剧创作 | 新增 **动态镜头**：可为前 1–3 个钩子镜头生成真实动态画面，其余镜头保持静态图 + 运镜；未配置时自动回退，不影响出片 |
+| 📝 字幕提取 | 新增 **引擎切换**（Kimi / OCR）；上游凭据或额度出问题时给出具体原因，不再笼统提示「检查凭据」 |
+| 📈 洞察 Analysis | 实时热榜触发限流时**自动回落**到已采样榜单，并在结果顶部标注采样时间 |
+| ✂️ 剪辑 / 打包 | 大文件分片上传更稳；修复非 80 端口部署时大文件转发失败 |
+| ⏱️ 任务状态 | 修复渲染完成后偶发卡在 100% 不结束的问题（进度回调与终态的竞态） |
+| 🔧 接口健壮性 | 多处参数绑定修复、上游错误文案人话化，排查问题时少走弯路 |
+
+---
+
 ## 能力全景 🎯
 
-| 面板 | 能做什么 | 适合什么时候用 |
-| --- | --- | --- |
-| 💡 **选题 Topics** | **今日选题**（结合热榜与你的垂类画像，每天给出带数据证据的选题卡）、**对标雷达**（加对标账号建基线，同行爆款超基线自动提醒）、**热榜趋势**（小时级热度曲线，标注上升期 / 平台期 / 已过气） | 每天早上决定「今天发什么」 |
-| 📈 **洞察 Analysis** | 文案拆解（标题 / 标签 / 钩子 / 爆款元素）、视频解析（B站 / 小红书 / 抖音 链接 → 运营分析报告）、热榜速览 | 拆解同行爆款，找可复用的套路 |
-| ✨ **创作 Create** | 主题驱动生成短视频脚本 / 图文 / 文章；可选「调研 · 关键点提取 · 素材搜索 · 自动发布」；实时进度与「确认 / 重新生成 / 精修」 | 从一句想法到可拍的脚本 |
-| 🎬 **营销成片 MarketVideo** | 上传商品参考图或视频，自动生成卖点与口播文案，产出带营销浮层的带货短视频 | 电商带货、商品种草 |
-| 🎭 **短剧创作 ShortDrama** | 描述剧情创意，自动完成规划 → 剧本 → 分镜 → 成片，支持多轮细化 | 剧情号连续更新 |
-| ✂️ **剪辑 Edit** | **粗剪**（设定成片时长区间与配音文案，自动生成精简版）、**超分**（提升到 1080P 等目标分辨率）、**草稿导出**（导入剪映 / CapCut 草稿 ZIP 继续编辑）、**解密**（解析剪映草稿 JSON） | 已有素材，需要加工成片 |
-| 📤 **发布 Publish** | 一次分发到 **抖音 · 小红书 · B站 · 今日头条**；发布前合规检测；AI 生成文案与封面；任务队列 / 历史 / 重试 | 一次搞定四个平台 |
-| 🧰 **工具 Tools** | 字幕、转写、翻译、内容总结、歌词提取、人声 / 伴奏分离、TTS 配音 | 处理音频素材 |
-| 💬 **助手 Assistant** | 对话式入口，用自然语言驱动上面的能力 | 不想找按钮的时候 |
+| 面板 | 输入 → 输出 | 核心能力 | 什么时候用 |
+| --- | --- | --- | --- |
+| 💡 **选题 Topics** | 你的垂类画像 → 今日选题卡 | 今日选题（带数据证据）、对标雷达（同行爆款超基线提醒）、热榜趋势（上升期 / 平台期 / 已过气） | 每天早上决定「今天发什么」 |
+| 📈 **洞察 Analysis** | 文案 / 视频链接 / 账号主页 → 分析报告 | 文案拆解（标题 · 标签 · 钩子 · 爆款元素）、视频解析（B站 / 小红书 / 抖音）、热榜速览 | 拆解同行爆款，找可复用的套路 |
+| ✨ **创作 Create** | 一句话主题 → 可拍的脚本 | 脚本 / 图文 / 文章生成；可选「调研 · 关键点提取 · 素材搜索 · 自动发布」；实时进度 +「确认 / 重新生成 / 精修」 | 从想法到可拍的脚本 |
+| 🎬 **营销成片 MarketVideo** | 商品参考图 / 视频 → 带货短视频 | 自动提炼卖点与口播文案，产出带营销浮层的成片 | 电商带货、商品种草 |
+| 🎭 **短剧创作 ShortDrama** | 剧情创意 → 成片 | 规划 → 剧本 → 分镜 → 成片全流程，支持多轮细化与动态镜头 | 剧情号连续更新 |
+| ✂️ **剪辑 Edit** | 视频 / 剪映草稿 → 成品或工程 | 粗剪（按时长区间自动生成精简版）、超分（提升到目标分辨率）、草稿导出、草稿解密 | 已有素材，需要加工成片 |
+| 📤 **发布 Publish** | 成片 → 四个平台 | 一次分发到 **抖音 · 小红书 · B站 · 今日头条**；发布前合规检测；AI 生成文案与封面；任务队列 / 历史 / 重试 | 一次搞定四个平台 |
+| 🧰 **工具 Tools** | 音视频 / 图片 → 文本或素材 | 语音转写、翻译、内容总结、歌词提取、人声 / 伴奏分离、TTS 配音、图像生成、图像识别、智能体成片、字幕提取、模板搜索 | 处理音视频与图片素材 |
+| 💬 **助手 Assistant** | 自然语言 → 上面的能力 | 对话式入口驱动全流程（服务端接口 `/api/backend/chat`，是唯一不走 `/api/v2/*` 的面板） | 不想找按钮的时候 |
 
 其他值得一提的：
 
 - **客户端只做调度**：所有重活（转写、剪辑、渲染、发布）都在服务端完成，客户端升级不影响你的素材；
-- **大文件直传**：内置分片上传，域名慢时自动直连源站 IP；
+- **大文件分片上传**：单文件超过 10MB 自动按片上传，规避反向代理的请求体大小限制；
 - **全流程可脚本化**：`agent/` 下的 Skills 与 CLI 暴露了同样的能力，可接进你自己的自动化。
 
 选题模块的接口契约与数据模型见 [docs/prd-topic-selection.md](docs/prd-topic-selection.md)。
@@ -158,7 +173,7 @@ node htw-skills.mjs call insight --hot --dry-run
 | 你担心的 | 实际情况 |
 | --- | --- |
 | 素材 / 成片存在哪？ | 仅在服务端处理期间临时使用，**任务完成即销毁，不做保留** |
-| 平台 Cookie 会传给服务器吗？ | **不会**。Cookie 只存在你本地客户端；发布时由客户端直接携带登录态请求各平台，不经过 HTW 服务器 |
+| 平台 Cookie 会传给服务器吗？ | **会**。在「发布 → 配置 Cookie」保存时，Cookie 会经 `POST /api/v2/publish/save-cookie` 上传并**存放在服务端**，用于服务端代你调用各平台接口完成发布；服务端也提供 `get-cookie` 可将其取回。它是你账号的完整登录凭据，**等同于把账号密码交给我们**，请只在信任本服务的前提下填写，并定期在各平台修改密码 / 退出登录以使其失效 |
 | 有人看我的内容吗？ | **没有**。转写 / 剪辑 / 发布均由自动化流水线处理，全程无人工介入 |
 | 会不会跑一半跑路？ | 平台持续运营中；**新用户注册即送 1 个月免费额度**（AuthKey 有效期 30 天，可续期）。演进规划公开在 [路线图](docs/roadmap.md) |
 | AuthKey 是干什么用的？ | 防流量攻击的准入闸口，不做内容授权、不采集你的素材 |
@@ -185,9 +200,9 @@ node htw-skills.mjs call insight --hot --dry-run
 <details>
 <summary><b>上传大视频很慢 / 卡住？</b></summary>
 
-客户端已内置分片上传与「直连源站」策略：域名访问缓慢时自动改用源站 IP 直传
-（默认 HTTP，可用环境变量 `HTW_API_DIRECT` 覆盖为 `https://`）。
-8MB 分片在 Cloudflare 边缘可能触发 100-continue 挂起，因此统一走直连通道以保稳定。
+客户端已内置分片上传：单文件超过 10MB 会切成 10MB 的分片逐个提交，
+规避反向代理对请求体大小的限制（否则大文件会被 413 直接拒绝）。
+自建部署如需让分片走独立通道，可用环境变量 `HTW_API_DIRECT` 指定直连地址。
 </details>
 
 <details>
@@ -195,7 +210,7 @@ node htw-skills.mjs call insight --hot --dry-run
 
 多平台发布依赖各平台的登录态（Cookie）。在「发布」面板点击对应平台的
 「配置 Cookie」填入后再提交；缺少 Cookie 时会明确提示「以下平台尚未配置 Cookie，无法发布」。
-Cookie 只存在本地，不会上传到服务器。
+Cookie 会上传到服务端保存（发布由服务端代发），等同于交出该平台的登录凭据，请谨慎填写。
 </details>
 
 <details>
