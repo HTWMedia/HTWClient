@@ -13,6 +13,7 @@ const SKILLS_SRC = join(__dirname, "..", "skills");
 const FEATURES = {
   insight: { skill: "htw-media-insight", aliases: ["insight", "analyze", "media-insight"] },
   create: { skill: "htw-media-create", aliases: ["create", "media-create"] },
+  topics: { skill: "htw-media-topics", aliases: ["topics", "topic", "media-topics"] },
   publish: { skill: "htw-media-publish", aliases: ["publish", "media-publish"] },
   tools: { skill: "htw-media-tools", aliases: ["tools", "tool", "media-tools"] },
   edit: { skill: "htw-media-edit", aliases: ["edit", "media-edit"] },
@@ -51,13 +52,14 @@ function usage() {
     "  install [feature]             Copy skills into ~/.agents/skills (+ ~/.claude/skills)",
     "  call <feature> [options]      Call the HTW API (add --dry-run to preview)",
     "",
-    "Features: insight | create | publish | tools | edit",
+    "Features: insight | create | topics | publish | tools | edit",
     "",
     "Examples:",
     "  htw-skills list",
     "  htw-skills guide insight",
     "  htw-skills install",
     "  htw-skills call insight --video https://www.douyin.com/video/123",
+    "  htw-skills call topics --daily",
     "  htw-skills call edit --decrypt draft.json --dry-run",
     "  htw-skills call edit --draft-export draft.zip --dry-run",
    ].join("\n");
@@ -198,6 +200,33 @@ function buildCall(feature, o, dry) {
     if (o["session-id"] && o.refine) return req("POST", "/api/v2/creation/refine", { sessionId: o["session-id"], message: o.refine, type: o.type || "video" });
     if (o["session-id"] && o["toggle-step"]) return req("POST", "/api/v2/creation/toggle-step", { sessionId: o["session-id"], stepId: o["toggle-step"], enabled: String(o.enabled) !== "false", type: o.type || "video" });
     if (o["session-id"] && o.status) return req("GET", "/api/v2/creation/status", undefined, `sessionId=${encodeURIComponent(o["session-id"])}&type=${encodeURIComponent(o.type || "video")}`);
+  }
+
+  // 选题雷达：看选题、管对标账号、维护垂类画像、走采纳→发布→回测闭环。
+  // 请求体用驼峰：ASP.NET 的模型绑定大小写不敏感，与后端 POCO 字段能对上。
+  if (feature === "topics") {
+    if (o.daily) return req("GET", "/api/v2/topics/daily", undefined, `count=${encodeURIComponent(o.count || 6)}`);
+    if (o.trends) return req("GET", "/api/v2/topics/trends", undefined, `category=${encodeURIComponent(o.category || "")}&count=${encodeURIComponent(o.count || 60)}`);
+    if (o.health) return req("GET", "/api/v2/topics/health");
+    if (o.radar) return req("GET", "/api/v2/topics/radar/accounts");
+    if (o["radar-add"]) return req("POST", "/api/v2/topics/radar/accounts", { platform: o.platform || "douyin", url: o["radar-add"] === true ? (o.url || "") : o["radar-add"] });
+    if (o["radar-remove"]) return req("DELETE", `/api/v2/topics/radar/accounts/${encodeURIComponent(o["radar-remove"])}`);
+    if (o["radar-sample"]) return req("POST", "/api/v2/topics/radar/sample", {});
+    if (o.alerts) return req("GET", "/api/v2/topics/radar/alerts");
+    if (o["alert-dismiss"]) return req("POST", `/api/v2/topics/radar/alerts/${encodeURIComponent(o["alert-dismiss"])}/dismiss`, {});
+    // --profile-save 要排在 --profile 前面：两者是不同的键，但先判写操作更符合直觉
+    if (o["profile-save"]) return req("PUT", "/api/v2/topics/profile", {
+      platforms: String(o.platforms || "").split(",").map((s) => s.trim()).filter(Boolean),
+      includeKeywords: String(o.include || "").split(",").map((s) => s.trim()).filter(Boolean),
+      excludeKeywords: String(o.exclude || "").split(",").map((s) => s.trim()).filter(Boolean),
+      audience: o.audience || "",
+    });
+    if (o.profile) return req("GET", "/api/v2/topics/profile");
+    if (o.feedback) return req("POST", "/api/v2/topics/feedback", { topicTitle: o.feedback === true ? (o.title || "") : o.feedback, reason: o.reason || "不感兴趣" });
+    if (o.adopt) return req("POST", "/api/v2/topics/outcome/adopt", { topicId: o.adopt, title: o.title || "", score: Number(o.score || 0) });
+    if (o.published) return req("POST", "/api/v2/topics/outcome/publish", { topicId: o.published, platform: o.platform || "", url: o.url || "" });
+    if (o.metrics) return req("POST", "/api/v2/topics/outcome/metrics", { topicId: o.metrics, views: Number(o.views || 0), likes: Number(o.likes || 0), comments: Number(o.comments || 0) });
+    if (o["outcome-stats"]) return req("GET", "/api/v2/topics/outcome/stats");
   }
 
   if (feature === "publish") {

@@ -1,6 +1,6 @@
 ---
 name: htw-media-marketing
-description: Generate e-commerce / product short-video ads (营销成片) on the HTW platform via the v2 API. Use when the user wants AI-generated marketing videos from product references — create sell points and marketing copy from a product name, then start a Seedance-powered creation session that turns ≥5 reference images (or 1 reference video) into a finished promo video with a marketing overlay.
+description: Generate e-commerce / product short-video ads (营销成片) on the HTW platform via the v2 API. Use when the user wants AI-generated marketing videos from product references — create sell points and marketing copy from a product name, then start an AI creation session that turns ≥5 reference images (or 1 reference video) into a finished promo video with a marketing overlay.
 ---
 
 # HTW Media Marketing (v2 营销成片)

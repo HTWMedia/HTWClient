@@ -1,13 +1,13 @@
 ---
 name: htw-media-shortdrama
-description: Generate short-drama videos (短剧创作) on the HTW platform via the Doubao skill gateway — plan → script → storyboard (Seedance) → final video, driven by a multi-turn conversation. Use when the user wants AI-generated short dramas / micro-films / animated shorts from a creative premise.
+description: Generate short-drama videos (短剧创作) on the HTW platform via the storyboard skill gateway — plan → script → storyboard → final video, driven by a multi-turn conversation. Use when the user wants AI-generated short dramas / micro-films / animated shorts from a creative premise.
 ---
 
 # HTW Media ShortDrama (短剧创作)
 
 Auth is via the `HTW_API_KEY` environment variable (header `AuthKey`). The
-short-drama pipeline is exposed through the **Doubao skill gateway**
-(`/api/studio/*`), which the server drives with its configured 豆包 account —
+short-drama pipeline is exposed through the **storyboard skill gateway**
+(`/api/studio/*`), where upstream credentials are resolved server-side —
 it is not part of the generic v2 creation API.
 
 ## Flow
@@ -16,7 +16,7 @@ it is not part of the generic v2 creation API.
    The first call triggers the 短剧编排 skill (规划 → 剧本 → 分镜 → 成片);
    subsequent calls reusing the returned `conversationId` refine or advance
    stages. Returns `{ text, conversation_id }`.
-2. **Storyboard (Seedance)** — continue the conversation with an instruction
+2. **Storyboard** — continue the conversation with an instruction
    like “调用 Seedance 生成分镜视频”; the skill produces storyboard clips.
 3. **Final video** — continue with “合成最终短剧成片视频”; the skill composes.
 4. **Script doc** — `GET /api/studio/doc/{conversationId}` returns the script text.
@@ -47,8 +47,8 @@ The HTW desktop client also ships a dedicated **短剧创作 ShortDrama** panel
 ## Notes
 
 - Responses use the v1 envelope `{ success, data, error }` (not the v2 `{ ok, data }`).
-- The 短剧 skill is rate-limited by the server's 豆包 account; a
+- The 短剧 skill is rate-limited server-side; a
   `success:false` with a 频繁 / 额度 message means retry later.
-- `POST /api/studio/video` is a standalone Seedance clip generator; on some
-  accounts the Seedance web skill is unavailable, so prefer driving storyboards
+- `POST /api/studio/video` is a standalone clip generator; on some
+  accounts the storyboard web skill is unavailable, so prefer driving storyboards
   through the 短剧 skill conversation above.

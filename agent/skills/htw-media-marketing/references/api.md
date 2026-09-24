@@ -9,9 +9,9 @@ Base URL: `https://htwmedia.dpdns.org` — headers: `AuthKey: <key>`.
 | POST | `/api/v2/market-video/product-info` | `text` (商品描述/名称) | `data.productName`, `data.sellPoints[]` |
 | POST | `/api/v2/market-video/generate-script` | `productName`, `sellPoints`, `ratio`(9:16/16:9), `duration`(0-15/15-30/30-60), `discountActivity`, `audienceTypes` | `data.script` |
 
-Both call DeepSeek (same model as the Web 端 `/WebAI/MarketVideo*`), but are
-exposed under `ApiKeyScheme` so a stateless client (desktop / agent) can call
-them without a session login.
+Both run the platform's server-side copywriting model (same as the Web 端
+`/WebAI/MarketVideo*`), but are exposed under `ApiKeyScheme` so a stateless
+client (desktop / agent) can call them without a session login.
 
 ## Creation session (generic v2 pipeline)
 
@@ -26,7 +26,7 @@ them without a session login.
 
 ### `creation/start` → marketing fields
 
-- `enableSeedance: true` — Seedance 生成钩子镜头分镜（见 `ProgressLogs` 中
+- `enableSeedance: true` — 为钩子镜头生成动态分镜（见 `ProgressLogs` 中
   “种子动态视频（钩子镜头 …）”）。
 - `seedanceMaxClips` — 钩子镜头数量（建议 2）。
 - `enableMarketingOverlay: true` — 叠加营销浮层。
