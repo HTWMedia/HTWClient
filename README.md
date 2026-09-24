@@ -53,10 +53,12 @@ HTW Media Client 把 **选题 → 创作 → 剪辑 → 发布** 收进同一个
 
 到 [Releases](https://github.com/HTWMedia/HTWClient/releases/latest) 下载 Windows 安装包：
 
-| 文件 | 说明 |
-| --- | --- |
-| `HTW Media Setup 0.4.0.exe` | 安装版，带开始菜单快捷方式 |
-| `HTW Media 0.4.0.exe` | 便携版，双击即用，不写注册表 |
+| 文件 | 说明 | 直接下载 |
+| --- | --- | --- |
+| `HTW.Media.Setup.0.4.0.exe` | 安装版，带开始菜单快捷方式 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.4.0/HTW.Media.Setup.0.4.0.exe) |
+| `HTW.Media.0.4.0.exe` | 便携版，双击即用，不写注册表 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.4.0/HTW.Media.0.4.0.exe) |
+
+> 注：打包产物的文件名带空格，GitHub Release 上传后会替换成点号，所以下载链接里是点号形式。
 
 启动后在左侧 **设置** 填入 `AuthKey` 即可使用全部能力。
 AuthKey 在 [HTW 媒体平台](https://htwmedia.dpdns.org) Web 端「设置」里创建，
