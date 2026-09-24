@@ -55,8 +55,8 @@ HTW Media Client 把 **选题 → 创作 → 剪辑 → 发布** 收进同一个
 
 | 文件 | 说明 |
 | --- | --- |
-| `HTW.Media.Setup.0.4.0.exe` | 安装版，带开始菜单快捷方式 |
-| `HTW.Media.0.4.0.exe` | 便携版，双击即用，不写注册表 |
+| `HTW Media Setup 0.4.0.exe` | 安装版，带开始菜单快捷方式 |
+| `HTW Media 0.4.0.exe` | 便携版，双击即用，不写注册表 |
 
 启动后在左侧 **设置** 填入 `AuthKey` 即可使用全部能力。
 AuthKey 在 [HTW 媒体平台](https://htwmedia.dpdns.org) Web 端「设置」里创建，
