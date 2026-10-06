@@ -17,6 +17,7 @@ const FEATURES = {
   publish: { skill: "htw-media-publish", aliases: ["publish", "media-publish"] },
   tools: { skill: "htw-media-tools", aliases: ["tools", "tool", "media-tools"] },
   edit: { skill: "htw-media-edit", aliases: ["edit", "media-edit"] },
+  workflow: { skill: "htw-media-workflow", aliases: ["workflow", "flow", "media-workflow"] },
 };
 
 function resolveFeature(arg) {
@@ -52,7 +53,7 @@ function usage() {
     "  install [feature]             Copy skills into ~/.agents/skills (+ ~/.claude/skills)",
     "  call <feature> [options]      Call the HTW API (add --dry-run to preview)",
     "",
-    "Features: insight | create | topics | publish | tools | edit",
+    "Features: insight | create | topics | publish | tools | edit | workflow",
     "",
     "Examples:",
     "  htw-skills list",
@@ -62,7 +63,9 @@ function usage() {
     "  htw-skills call topics --daily",
     "  htw-skills call edit --decrypt draft.json --dry-run",
     "  htw-skills call edit --draft-export draft.zip --dry-run",
-   ].join("\n");
+    "  htw-skills call workflow --topics",
+    "  htw-skills call workflow --start --auto --platforms douyin",
+  ].join("\n");
 }
 
 function guideFor(id) {
@@ -166,9 +169,22 @@ async function cmdCall(args) {
   if (!feature) { console.log(usage()); return; }
   const o = parseKeyValues(args);
 
+  // 原始位置参数（批量工作流要收集多个主题）。parseKeyValues 只认"--key value"，
+  // 裸词会被忽略，所以这里单独取一份：feature 名之后、不属于任何 --flag 值的那些。
+  const bare = [];
+  for (let i = args.indexOf(featureArg) + 1; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith("--")) {
+      // 跳过 "--key value" 里的 value，它已被 parseKeyValues 消费
+      if (args[i + 1] !== undefined && !args[i + 1].startsWith("--")) i++;
+      continue;
+    }
+    bare.push(a);
+  }
+
   if (!key() && !dry) { console.log(noKeyGuide()); return; }
 
-  const build = buildCall(feature, o, dry);
+  const build = buildCall(feature, o, dry, bare);
   if (!build) { console.log(`Invalid arguments for '${feature}'. See: htw-skills guide ${feature}`); return; }
   if (build === UPLOAD_HINT) return;
 
@@ -182,7 +198,7 @@ async function cmdCall(args) {
   printResult(await callApi(build.path, build));
 }
 
-function buildCall(feature, o, dry) {
+function buildCall(feature, o, dry, bare) {
   const req = (method, path, body, query) => ({ method, path, body, query });
 
   if (feature === "insight") {
@@ -249,6 +265,45 @@ function buildCall(feature, o, dry) {
     if (o["platform-status"]) return req("GET", "/api/v2/publish/platform-status");
   }
 
+  // 全链路工作流：一次发起，服务端把出片→包装→文案合规→发布跑完，你只管轮询与确认。
+  // ⚠️ auto-publish 刻意不暴露开关：发布用客户自己的平台凭证自动化发帖会违反平台 ToS，
+  //    最后一步必须人点（服务端也强制 autoPublish=false）。
+  if (feature === "workflow") {
+    const publishCfg = (platforms) => ({
+      platforms: String(platforms || "douyin").split(",").map((p) => p.trim()).filter(Boolean),
+      autoPublish: false,
+    });
+    if (o.topics) return req("GET", "/api/v2/workflow/topics", undefined, `count=${encodeURIComponent(o.count || 6)}`);
+    if (o["start-batch"]) {
+      const list = o["start-batch"] === true ? bare : [o["start-batch"], ...bare];
+      const topics = list.map((s) => String(s).trim()).filter(Boolean);
+      if (!topics.length) return null;
+      return req("POST", "/api/v2/workflow/create-batch", {
+        topics,
+        style: o.style || "", ratio: o.ratio || "", mode: o.mode || "",
+        length: o.length || "", voice: o.voice || "", referenceText: o.reference || "",
+        publish: publishCfg(o.platforms),
+      });
+    }
+    if (o.start) {
+      // 两种写法都认：`--start "主题"` 与 `--start --topic "主题"`。
+      // 前者更短，后者与其他 feature（--topic 是独立flag）的心智模型一致。
+      const topic = o.start === true ? (o.topic || "") : String(o.start);
+      if (!topic && !o.auto) return null;
+      return req("POST", "/api/v2/workflow/create", {
+        topic,
+        topicSource: !topic && o.auto ? "auto" : "",
+        style: o.style || "", ratio: o.ratio || "", mode: o.mode || "",
+        length: o.length || "", voice: o.voice || "", referenceText: o.reference || "",
+        publish: publishCfg(o.platforms),
+      });
+    }
+    if (o.status) return req("GET", "/api/v2/workflow/status", undefined, `workflowId=${encodeURIComponent(o.status)}`);
+    if (o.approve) return req("POST", "/api/v2/workflow/approve", { workflowId: o.approve, stage: "publish" });
+    if (o.cancel) return req("POST", "/api/v2/workflow/cancel", { workflowId: o.cancel });
+    if (o.history) return req("GET", "/api/v2/workflow/history", undefined, `limit=${encodeURIComponent(o.limit || 30)}`);
+  }
+
   if (feature === "tools") {
     if (o["audio-upload"] && o.convert) return req("POST", "/api/v2/voice/transcribe", { fileId: o["audio-upload"], format: o.format || "txt" });
     if (o["audio-upload"] && o.translate) return req("POST", "/api/v2/voice/translate", { fileId: o["audio-upload"], language: o.language || "zh-CHS" });
@@ -295,6 +350,15 @@ function buildCall(feature, o, dry) {
       const f = `-F "width=${o.width || 1708}" -F "height=${o.height || 960}"`;
       return uploadHint(o["super-res"], "/api/v2/edit/super-res", f);
     }
+    // 剪同款两步：先搜模板（只读、不扣额度），再把选中模板的 draftPackageUrl 带回提交。
+    // 先判 search，否则 --cut-same-search 会被 --cut-same 的短路吃掉（同名前缀）。
+    if (o["cut-same-search"]) {
+      return req("GET", `/api/v2/edit/cutsame/search?keyword=${encodeURIComponent(o["cut-same-search"])}&count=${o.count || 20}`);
+    }
+    if (o["cut-same"]) {
+      return uploadHint(o["cut-same"], "/api/v2/edit/cutsame/submit",
+        `-F "draftPackageUrl=${o["template-url"] || ""}"`, "videos");
+    }
     if (o.status) return req("GET", `/api/v2/edit/status/${encodeURIComponent(o.status)}`);
   }
 
@@ -304,9 +368,10 @@ function buildCall(feature, o, dry) {
 const UPLOAD_HINT = Symbol("upload-hint");
 
 // Multipart uploads (files) are not JSON — guide the user to the curl form.
-// `formFields` is an optional string of extra `-F "k=v"` segments.
-function uploadHint(filePath, path, formFields = "") {
-  console.log(`Upload via curl (multipart):\n  curl -H "AuthKey: <key>" -F "file=@${filePath}" ${formFields} ${API_BASE}${path}`);
+// `formFields` is an optional string of extra `-F "k=v"` segments;
+// `fileField` defaults to `file` (端点收取多个文件时用 `videos` 之类，且可重复)。
+function uploadHint(filePath, path, formFields = "", fileField = "file") {
+  console.log(`Upload via curl (multipart):\n  curl -H "AuthKey: <key>" -F "${fileField}=@${filePath}" ${formFields} ${API_BASE}${path}`);
   return UPLOAD_HINT;
 }
 

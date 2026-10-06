@@ -165,6 +165,90 @@
       const draftBtn = UI.el("button", { class: "btn", text: "导出草稿" });
       const draftCard = section("草稿导出 Draft-export", [draftFile], draftBtn, draftRegion, "fa-file-zipper");
 
+      // ====== 剪同款（套用剪映官方模板出片） ======
+      // 与 web 端「媒体编辑 - 剪同款」同一条链路：搜模板 → 选模板 → 上传素材 → 云端渲染出片。
+      // 桌面端之所以要单独一套接口，是因为它用 AuthKey 鉴权、不带 session cookie，走不了 MVC 端点。
+      let csSelected = null;          // 当前选中的模板
+      let csCards = [];               // [{ tpl, node }]，用于切换选中高亮
+
+      const csKeyword = UI.el("input", { type: "text", id: "edit-cutsame-keyword", value: "旅行", placeholder: "如：旅行 / 美食 / 卡点" });
+      const csSearchBtn = UI.el("button", { class: "btn", id: "edit-cutsame-search", text: "搜索模板" });
+      const csGrid = UI.el("div", { id: "edit-cutsame-grid", style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin:10px 0" });
+      const csPick = UI.el("div", { class: "detail-progress", id: "edit-cutsame-pick", text: "未选择模板" });
+      const csFile = UI.fileInput({ label: "选择视频素材（可多选）", accept: ".mp4,.mov,.m4v", multiple: true });
+      csFile.input.id = "edit-cutsame-file";
+      const csRegion = UI.el("div", { id: "edit-cutsame-result" });
+      const csBtn = UI.el("button", { class: "btn", id: "edit-cutsame-btn", text: "开始套模板" });
+      const csCard = section("剪同款 Cut-same",
+        [
+          field("模板关键词", csKeyword),
+          UI.el("div", { class: "row" }, [csSearchBtn]),
+          csGrid,
+          csPick,
+          csFile,
+        ],
+        csBtn, csRegion, "fa-clapperboard");
+      csCard.appendChild(hint("搜索模板不消耗次数；提交后才开始套模板。素材少于模板片段数时会自动循环复用，多个素材则依次填入。全程约 1-3 分钟。"));
+
+      function csCardStyle(on) {
+        return "border:2px solid " + (on ? "#3b82f6" : "#e5e7eb") + ";border-radius:8px;padding:8px;cursor:pointer;background:#fff";
+      }
+
+      function selectTemplate(tpl, node) {
+        csSelected = tpl;
+        for (const c of csCards) c.node.setAttribute("style", csCardStyle(c.node === node));
+        csPick.textContent = "已选：" + (tpl.name || "未命名模板");
+        UI.clear(csRegion);
+      }
+
+      function renderTemplates(list) {
+        UI.clear(csGrid);
+        csCards = [];
+        if (!list.length) {
+          UI.mount(csGrid, UI.el("div", { class: "detail-progress", text: "没有找到相关模板，换个关键词试试" }));
+          return;
+        }
+        for (const t of list) {
+          const usable = !!t.available;
+          const meta = (t.fragmentCount ? t.fragmentCount + " 个片段 · " : "") +
+            ((t.durationMs || 0) / 1000).toFixed(1) + "s" +
+            (t.usageAmount ? " · " + t.usageAmount + " 人用过" : "") +
+            (usable ? "" : " · 暂不可用");
+          const node = UI.el("div", { style: csCardStyle(false) }, [
+            t.coverUrl
+              ? UI.el("img", { src: t.coverUrl, style: "width:100%;height:120px;object-fit:cover;border-radius:6px;background:#f3f4f6" })
+              : UI.el("div", { style: "width:100%;height:120px;background:#f3f4f6;border-radius:6px" }),
+            UI.el("div", { text: t.name || "未命名模板", style: "font-size:13px;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" }),
+            UI.el("div", { class: "detail-progress", text: meta }),
+          ]);
+          // 付费/未解锁模板拿不到草稿包，选了也渲染不出来 —— 直接置灰并说明原因，
+          // 比让用户提交完才失败要好。
+          node.addEventListener("click", function () {
+            if (!usable) { UI.showError(csRegion, "该模板暂不可用（付费或未解锁），请换一个"); return; }
+            selectTemplate(t, node);
+          });
+          if (!usable) node.style.opacity = "0.5";
+          csCards.push({ tpl: t, node: node });
+          UI.mount(csGrid, node);
+        }
+      }
+
+      async function searchTemplates() {
+        const kw = (csKeyword.value || "").trim();
+        if (!kw) { UI.showError(csRegion, "请输入模板关键词"); return; }
+        UI.clear(csRegion);
+        UI.clear(csGrid);
+        UI.mount(csGrid, UI.el("div", { class: "detail-progress", text: "正在搜索模板…" }));
+        try {
+          const r = await API.call("GET", "/api/v2/edit/cutsame/search?keyword=" + encodeURIComponent(kw) + "&count=20");
+          if (!r.ok) { UI.clear(csGrid); UI.showError(csRegion, formatErr(r)); return; }
+          renderTemplates((r.data && r.data.templates) || []);
+        } catch (e) {
+          UI.clear(csGrid);
+          UI.showError(csRegion, "请求异常: " + (e && e.message ? e.message : String(e)));
+        }
+      }
+
       const srFile = UI.fileInput({ label: "选择视频", accept: "video/*" });
       const srW = UI.el("input", { type: "number", value: "1920", placeholder: "宽" });
       const srH = UI.el("input", { type: "number", value: "1080", placeholder: "高" });
@@ -179,7 +263,7 @@
 
       UI.mount(panel, UI.el("div", {}, [
         UI.el("h2", { text: "剪辑 Edit" }),
-        coarseCard, packCard, draftCard, srCard, decCard,
+        coarseCard, packCard, csCard, draftCard, srCard, decCard,
       ]));
 
       coarseBtn.addEventListener("click", function () {
@@ -213,6 +297,44 @@
             await runTask(files, "/api/v2/edit/smart-package", {}, "file", packRegion, "包装完成");
           } catch (e) {
             UI.showError(packRegion, "请求异常: " + (e && e.message ? e.message : String(e)));
+          }
+        });
+      });
+
+      csSearchBtn.addEventListener("click", function () {
+        UI.withLoading(csSearchBtn, searchTemplates);
+      });
+
+      csBtn.addEventListener("click", function () {
+        UI.withLoading(csBtn, async function () {
+          try {
+            if (!csSelected) { UI.showError(csRegion, "请先搜索并选择一个模板"); return; }
+            const files = await readFiles(csFile);
+            if (!files.length) { UI.showError(csRegion, "请先选择视频素材"); return; }
+            // 与 web 端同一条校验：后端也会拦，但后端要等文件传完才报错，
+            // 前端先拦一次能省掉几百 MB 的无效上传。
+            for (const f of files) {
+              if (PACK_EXTS.indexOf(extOf(f.name)) < 0) {
+                UI.showError(csRegion, "仅支持 mp4/mov/m4v 视频文件：" + f.name);
+                return;
+              }
+            }
+            if (files.length > 20) { UI.showError(csRegion, "素材最多 20 个"); return; }
+            // 多文件共用一个字段名 videos：后端 List<IFormFile> 才能全部收到
+            const up = await API.upload("POST", "/api/v2/edit/cutsame/submit", files,
+              { draftPackageUrl: csSelected.draftPackageUrl },
+              function (p) { renderUpload(csRegion, p); }, "videos");
+            if (!up.ok) { UI.showError(csRegion, formatErr(up)); return; }
+            const taskId = up.taskId || (up.data && up.data.taskId);
+            if (!taskId) { UI.showError(csRegion, "未返回 taskId: " + JSON.stringify(up.data)); return; }
+            const res = await pollEdit(taskId, csRegion);
+            if (!res.ok) { UI.showError(csRegion, formatErr(res)); return; }
+            const d = (res.data && res.data.result) || res.data;
+            const url = d && (d.downloadUrl || d.download_url);
+            if (url) showVideo(csRegion, url, "套模板完成");
+            else UI.showResult(csRegion, d);
+          } catch (e) {
+            UI.showError(csRegion, "请求异常: " + (e && e.message ? e.message : String(e)));
           }
         });
       });

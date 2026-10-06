@@ -1,5 +1,8 @@
 (function () {
-  const SKILLS = ["insight", "topics", "edit", "tools", "publish", "assistant", "create", "marketing", "shortdrama"];
+  // 面板白名单：showPanel 只给名单里的面板切active。
+  // 🔴 新增面板**必须**同时改这里——只加 index.html 的 section 与 nav 按钮的话，
+  //    点导航会"点了没反应"（面板永远不激活），而且不报任何错。
+  const SKILLS = ["insight", "topics", "edit", "tools", "publish", "assistant", "create", "marketing", "batch", "shortdrama", "workflow"];
 
   function getBaseInput() { return document.getElementById("api-base"); }
   function getKeyInput() { return document.getElementById("api-key"); }
