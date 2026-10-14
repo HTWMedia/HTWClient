@@ -186,11 +186,316 @@
       status: (t) => "/api/v2/image/status?taskId=" + encodeURIComponent(t.taskId) },
   };
 
+  /* ------------------------------------------------------------------
+   * 按域推导状态。
+   *
+   * workflow 与 batch 的状态响应里压根没有 status 字段，只把载荷喂给
+   * applyPayload 的话这两域的记录会永远停在 running（applyPayload 对缺 status
+   * 的载荷只盖 updatedAt、不动 status）。所以在进 applyPayload 之前按域折算一次，
+   * 折算出的是**服务端词表**里的词，仍由 normalizeStatus 统一落到内部词表 ——
+   * 这样粘滞终态、expired→interrupted 这些规则一条都不绕开。
+   *
+   * 这段刻意不塞进 applyPayload：那是与域无关的通用映射，塞进来会让上面两条
+   * 规则对所有域生效。
+   * ------------------------------------------------------------------ */
+
+  // workflow：状态响应是 { workflowId, stage, topic, active, ... }。
+  // 优先看 stage（completed / failed / cancelled 三个终态判得最准）；
+  // stage 缺失时退回按 active —— active 为假即视为已结束。
+  // 不能只看 active：它只在服务端自己会推的那四个 stage（produce/package/compose/
+  // publishing）上为真，awaiting-publish（成片好了、等人点确认发布）它也是假的，
+  // 而那段并没有结束。只看 active 会把一条正等用户操作的流水线直接标成已完成。
+  function deriveWorkflowStatus(payload) {
+    const p = payload || {};
+    const stage = p.stage ? String(p.stage).trim().toLowerCase() : "";
+    if (stage === "completed" || stage === "failed" || stage === "cancelled") return stage;
+    if (stage) return null;
+    if (p.active === false) return "completed";
+    return null;
+  }
+
+  // batch：状态响应是 { batchId, kind, summary: {...}, items: [...] }，
+  // 整批结局只能从 summary 数出来（js/skills/batch.js 的 isFinished 也是这么数的）。
+  // 判定顺序即优先级：
+  //   pending/running 还有 -> 还在跑
+  //   failed    > 0 -> failed     确凿的失败，先说它
+  //   cancelled > 0 -> canceled   用户主动取消，结局确定
+  //   expired   > 0 -> interrupted 见下
+  //   completed > 0 -> completed  正常收尾
+  //   其余                  -> interrupted 一条都没成功，不能报成功
+  // summary 里一个可判定的字段都没有时返回 null：宁可继续轮询，也不把「不知道」写成「已结束」。
+  //
+  // expired 这条是本文件最需要解释的判断：它是 BatchController 在成片 1 小时、
+  // 批次 6 小时后清理条目记录后留下的状态，既不是成功也不是失败，而是
+  // 「服务端已经不知道这条成片到底出没出来」，产物也一并取不回来。所以只要
+  // 出现 expired，整批就不能标成成功 —— 宁可显示「已中断」让用户知道结局不明，
+  // 也不能顶着一盏绿灯点进去发现什么都没有。它排在 failed/cancelled 之后，
+  // 是因为那两种结局是确凿的已知信息，比「不可知」更该先告诉用户。
+  function deriveBatchStatus(payload) {
+    const s = payload && payload.summary;
+    if (!s || typeof s !== "object") return null;
+    const keys = ["pending", "running", "completed", "failed", "cancelled", "expired"];
+    const has = (k) => Object.prototype.hasOwnProperty.call(s, k);
+    if (!keys.some(has)) return null;
+    const n = (k) => {
+      const v = Number(s[k]);
+      return isFinite(v) && v > 0 ? v : 0;
+    };
+    if (n("pending") + n("running") > 0) return null;   // 还在跑，交给下一次轮询
+    if (n("failed") > 0) return "failed";
+    if (n("cancelled") > 0) return "cancelled";
+    if (n("expired") > 0) return "expired";
+    return n("completed") > 0 ? "completed" : "expired";
+  }
+
+  // 返回服务端词表里的状态词；返回 null 表示这份载荷推不出结局，不该改 status。
+  function deriveStatus(domain, payload) {
+    if (domain === "workflow") return deriveWorkflowStatus(payload);
+    if (domain === "batch") return deriveBatchStatus(payload);
+    return null;
+  }
+
+  function defaultDeps() {
+    const api = (typeof window !== "undefined" && window.HTWApi) || {};
+    const htw = (typeof window !== "undefined" && window.htw) || {};
+    return {
+      api: {
+        subscribeTask: api.subscribeTask,
+        unsubscribeTask: api.unsubscribeTask,
+        call: api.call,
+        post: api.post,
+      },
+      saveJson: htw.saveJson,
+      loadJson: htw.loadJson,
+      subscribe: htw.onStreamEvent,
+      now: function () { return Date.now(); },
+      setTimeout: function (fn, ms) { return setTimeout(fn, ms); },
+      clearTimeout: function (id) { return clearTimeout(id); },
+    };
+  }
+
+  function createStore(deps) {
+    const d = deps || defaultDeps();
+    let tasks = [];
+    let saveTimer = null;
+    const unsubs = {};        // streamId -> 取消订阅函数
+    const timers = {};        // task.id -> {first, poll, reconnect}
+    const listeners = [];
+
+    function emitChange() {
+      for (let i = 0; i < listeners.length; i++) {
+        try { listeners[i](); } catch (e) { /* 单个订阅者出错不能影响其他 */ }
+      }
+    }
+
+    function writeNow() {
+      // 写盘失败只吞掉：磁盘满不该让用户正在跑的任务崩掉。
+      try {
+        const r = d.saveJson("tasks", tasks);
+        if (r && typeof r.catch === "function") r.catch(function () {});
+      } catch (e) { /* ignore */ }
+    }
+
+    // 尾随节流：一串进度帧只落一次盘。
+    // 首次登记（now）例外 —— 那是一次性事件，而且它是崩溃后唯一能恢复出来的线索，
+    // 没有理由陪着节流一起押后。
+    function persist(now) {
+      if (now) {
+        if (saveTimer != null) { try { d.clearTimeout(saveTimer); } catch (e) { /* ignore */ } saveTimer = null; }
+        writeNow();
+        return;
+      }
+      if (saveTimer) return;
+      saveTimer = d.setTimeout(function () {
+        saveTimer = null;
+        writeNow();
+      }, SAVE_DEBOUNCE_MS);
+    }
+
+    // 载荷落地：先按域折算出 status（没有的话），再走 applyPayload 的通用映射。
+    function applyFor(task, payload) {
+      if (!payload || typeof payload !== "object") return task;
+      if (payload.status === null || payload.status === undefined) {
+        const s = deriveStatus(task.domain, payload);
+        if (s) return applyPayload(task, Object.assign({}, payload, { status: s }));
+      }
+      return applyPayload(task, payload);
+    }
+
+    function stopWatch(task) {
+      const sid = task.domain + ":" + task.taskId;
+      if (unsubs[sid]) { try { unsubs[sid](); } catch (e) { /* ignore */ } delete unsubs[sid]; }
+      if (d.api && d.api.unsubscribeTask) { try { d.api.unsubscribeTask(sid); } catch (e) { /* ignore */ } }
+      const t = timers[task.id];
+      if (t) {
+        [t.first, t.poll, t.reconnect].forEach(function (id) {
+          if (id != null) { try { d.clearTimeout(id); } catch (e) { /* ignore */ } }
+        });
+        delete timers[task.id];
+      }
+    }
+
+    function finish(task) {
+      if (task.status === "running") return false;
+      stopWatch(task);
+      return true;
+    }
+
+    function schedulePoll(task) {
+      const t = timers[task.id] || (timers[task.id] = {});
+      t.poll = d.setTimeout(function () { pollOnce(task); }, POLL_MS);
+    }
+
+    async function pollOnce(task) {
+      const cfg = DOMAINS[task.domain];
+      if (!cfg || task.status !== "running") return;
+      try {
+        const r = await d.api.call("GET", cfg.status(task));
+        if (task.status !== "running") return;
+        if (r && r.ok) {
+          task.unknown = false;
+          applyFor(task, r.data || {});
+        } else if (r && r.status === 404) {
+          task.status = "interrupted";
+          task.error = "服务端已无此任务（Web 服务可能已重启）";
+          task.endedAt = d.now();
+        } else {
+          // 其它失败（网络抖动 / 401）**不判死**：只是这次没查到。
+          task.unknown = true;
+        }
+      } catch (e) {
+        task.unknown = true;
+      }
+      task.updatedAt = d.now();
+      finish(task);
+      emitChange();
+      persist();
+      if (task.status === "running") schedulePoll(task);
+    }
+
+    function onStream(task, msg) {
+      if (!msg || msg.streamId !== task.domain + ":" + task.taskId) return;
+      const t = timers[task.id] || (timers[task.id] = {});
+      // 收到第一个事件就说明连接活着，清掉首事件超时。
+      if (t.first) { try { d.clearTimeout(t.first); } catch (e) { /* ignore */ } t.first = null; }
+      if (msg.type === "error") { degrade(task); return; }
+      // 服务端发 end 但载荷始终没进终态（代理截断、终态事件丢失）：不能就此收工，
+      // 否则记录会永远停在"进行中"。降级到轮询，让它有机会自己收敛。
+      if (msg.type === "end") { if (!finish(task)) degrade(task); emitChange(); persist(); return; }
+      let payload = msg.payload;
+      if (typeof payload === "string") { try { payload = JSON.parse(payload); } catch (e) { return; } }
+      applyFor(task, payload || {});
+      finish(task);
+      emitChange();
+      persist();
+    }
+
+    // 降级是静默的：面板本来就在用自己的轮询，容器降级只是它自己从推送切回轮询。
+    function degrade(task) {
+      if (task.degraded) return;
+      task.degraded = true;
+      stopWatch(task);
+      task.transport = "poll";
+      task.updatedAt = d.now();
+      emitChange();
+      persist();
+      if (task.status === "running") schedulePoll(task);
+    }
+
+    function watch(task) {
+      const cfg = DOMAINS[task.domain];
+      if (!cfg) return;
+      if (!cfg.sse) { task.transport = "poll"; pollOnce(task); return; }
+      task.transport = "sse";
+      const sid = task.domain + ":" + task.taskId;
+      if (d.subscribe) {
+        try { unsubs[sid] = d.subscribe(function (msg) { onStream(task, msg); }) || null; } catch (e) { /* ignore */ }
+      }
+      try {
+        d.api.subscribeTask(task.domain, task.taskId);
+      } catch (e) { degrade(task); return; }
+      const t = timers[task.id] || (timers[task.id] = {});
+      // 8 秒还没收到任何事件，就当这条路不通，静默切轮询。
+      t.first = d.setTimeout(function () {
+        const tt = timers[task.id];
+        if (tt) tt.first = null;
+        if (task.transport === "sse" && task.status === "running") degrade(task);
+      }, FIRST_EVENT_TIMEOUT_MS);
+    }
+
+    const store = {
+      register: function (opts) {
+        const task = newTask(opts);
+        tasks = evict(tasks.concat([task]), MAX_RECORDS);
+        emitChange();
+        persist(true);
+        watch(task);
+        return task;
+      },
+      list: function () { return tasks.slice(); },
+      get: function (id) { return tasks.filter((t) => t.id === id)[0] || null; },
+      onChange: function (fn) {
+        listeners.push(fn);
+        return function () { const i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); };
+      },
+      clearFinished: function () {
+        tasks = tasks.filter((t) => t.status === "running");
+        emitChange();
+        persist(true);
+      },
+      cancel: function (id) {
+        const task = store.get(id);
+        if (!task) return Promise.reject(new Error("任务不存在"));
+        if (!canCancel(task.domain)) return Promise.reject(new Error("该任务不支持中途取消"));
+        const cfg = DOMAINS[task.domain];
+        return Promise.resolve(d.api.post(cfg.cancelPath, cancelBody(task.domain, task.taskId)))
+          .then(function (r) {
+            if (r && r.ok === false) throw new Error(r.message || "取消失败");
+            task.status = "canceled";
+            task.endedAt = d.now();
+            stopWatch(task);
+            emitChange();
+            persist(true);
+            return true;
+          });
+      },
+      restore: function () {
+        return Promise.resolve(d.loadJson("tasks"))
+          .then(function (saved) {
+            tasks = Array.isArray(saved) ? saved.filter((t) => t && t.id) : [];
+            const pending = tasks.filter((t) => t.status === "running");
+            // 逐个各查一次，不并发、不轮询：启动时服务端可能还没就绪。
+            return pending.reduce(function (chain, task) {
+              return chain.then(function () {
+                return pollOnce(task).then(function () {
+                  // 查完可能已经是终态了（notfound / 失败），这时再 watch 会白订阅一条流。
+                  if (task.status === "running") watch(task);
+                });
+              });
+            }, Promise.resolve());
+          })
+          .then(function () { emitChange(); persist(true); })
+          .catch(function () { emitChange(); });
+      },
+    };
+    return store;
+  }
+
+  const _singleton = createStore(null);
+
   return {
+    register: (o) => _singleton.register(o),
+    list: () => _singleton.list(),
+    get: (id) => _singleton.get(id),
+    onChange: (fn) => _singleton.onChange(fn),
+    clearFinished: () => _singleton.clearFinished(),
+    cancel: (id) => _singleton.cancel(id),
+    restore: () => _singleton.restore(),
     _internal: {
       MAX_RECORDS, POLL_MS, FIRST_EVENT_TIMEOUT_MS, RECONNECT_MS, SAVE_DEBOUNCE_MS,
       TERMINAL_STATUSES, DOMAINS,
-      isTerminal, normalizeStatus, applyPayload, evict, canCancel, cancelBody, newTask,
+      isTerminal, normalizeStatus, applyPayload, evict, canCancel, cancelBody, newTask, createStore,
+      deriveStatus, deriveWorkflowStatus, deriveBatchStatus,
     },
   };
 });
