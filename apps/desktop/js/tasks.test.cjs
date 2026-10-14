@@ -31,6 +31,88 @@ test("partial_failed 是终态 —— 它是最常见的发布结局", () => {
   assert.ok(I.isTerminal("partial_failed"));
 });
 
+test("expired 是终态 —— batch 域的任务记录被服务端清掉后写的状态", () => {
+  // BatchController.cs：任务状态先于批次记录被清理时（成片 1 小时、批次 6 小时），
+  // 条目状态回落成 expired。它是终态，漏判就会把这条记录永远留在 running。
+  assert.ok(I.isTerminal("expired"));
+  assert.strictEqual(I.normalizeStatus("expired"), "done");
+});
+
+test("normalizeStatus：服务端词表映射到内部词表", () => {
+  for (const [from, to] of [
+    ["running", "running"], ["uploading", "running"], ["pending", "running"],
+    ["success", "done"], ["completed", "done"], ["done", "done"],
+    ["DONE", "done"], ["  Completed  ", "done"],
+    ["expired", "done"], ["draft_saved", "done"], ["awaiting_manual", "done"],
+    ["failed", "failed"], ["error", "failed"], ["partial_failed", "failed"],
+    ["canceled", "canceled"], ["cancelled", "canceled"],
+    ["notfound", "interrupted"],
+  ]) {
+    assert.strictEqual(I.normalizeStatus(from), to, from + " 应映射为 " + to);
+  }
+  // 没有 status 就返回 null：「不知道」不等于「还在跑」，调用方要能分辨
+  for (const s of ["", "   ", null, undefined]) {
+    assert.strictEqual(I.normalizeStatus(s), null, JSON.stringify(s) + " 应映射为 null");
+  }
+});
+
+test("partial_failed 映射为失败，不能显示成绿色成功", () => {
+  // publish 域只有 partial_failed 这一个失败信号：FinalizeTask 只要有子任务非 success
+  // 就写它，覆盖「所有平台 cookie 全失效」和「B站成功、抖音要人工点」两种结局。
+  // 映射成 done 会让全平台失败也显示成功。
+  const t = I.newTask({ domain: "publish", taskId: "P1" });
+  I.applyPayload(t, { status: "partial_failed" });
+  assert.strictEqual(t.status, "failed");
+  assert.ok(t.endedAt, "落终态就必须记结束时间");
+});
+
+test("终态是粘滞的：迟到的 running 帧不能把已完成的任务拉回在跑", () => {
+  // SSE 会乱序/重发。若允许回退，就会出现 status=running 而 endedAt 还留着的记录 ——
+  // evict 按 status 分组，它既不显示完成、又因为算「在跑」而永远淘汰不掉。
+  const t = I.newTask({ domain: "agent", taskId: "Z1" });
+  I.applyPayload(t, { status: "completed" });
+  assert.strictEqual(t.status, "done");
+  const endedAt = t.endedAt;
+  assert.ok(endedAt);
+
+  I.applyPayload(t, { status: "running", progress: 30 });
+  assert.strictEqual(t.status, "done", "已完成的任务不能被迟到的 running 帧复活");
+  assert.strictEqual(t.endedAt, endedAt, "endedAt 不能被清掉");
+  // 进度之类仍然照常更新，只是状态不动
+  assert.strictEqual(t.progress, 30);
+
+  // 而且它必须能被淘汰掉，否则就是个永久僵尸
+  const list = I.evict([t], 0);
+  assert.strictEqual(list.length, 0, "终态记录应该被淘汰");
+});
+
+test("终态粘滞只挡回退，不挡终态之间的修正", () => {
+  const t = I.newTask({ domain: "agent", taskId: "Z2" });
+  I.applyPayload(t, { status: "completed" });
+  I.applyPayload(t, { status: "failed", error: "上传中断" });
+  assert.strictEqual(t.status, "failed");
+  assert.ok(t.endedAt);
+});
+
+test("在跑的记录仍可被非终态状态改写", () => {
+  const t = I.newTask({ domain: "agent", taskId: "Z3" });
+  I.applyPayload(t, { status: "uploading" });
+  assert.strictEqual(t.status, "running");
+  assert.strictEqual(t.endedAt, null);
+  I.applyPayload(t, { status: "running" });
+  assert.strictEqual(t.status, "running");
+});
+
+test("没有 status 的 payload 也必须盖 updatedAt", () => {
+  // /api/v2/workflow/status 与 /api/v2/batch/status 压根不返回 status 字段。
+  // 若在缺 status 时提前返回，这两个域的 updatedAt 永远不动，落盘节流就永远不触发。
+  const t = I.newTask({ domain: "workflow", taskId: "W2" });
+  t.updatedAt = 0;
+  I.applyPayload(t, { stage: "compose" });
+  assert.ok(t.updatedAt > 0, "没有 status 也要更新 updatedAt");
+  assert.strictEqual(t.status, "running", "缺 status 不等于改状态");
+});
+
 test("applyPayload: agent 域取出进度与步骤", () => {
   const t = I.newTask({ domain: "agent", taskId: "A1", panel: "shortdrama", title: "短剧" });
   I.applyPayload(t, { status: "running", progress: 62, currentStep: "合成中" });
@@ -50,6 +132,23 @@ test("applyPayload: 拿不到进度就留 null，绝不伪造 0", () => {
   I.applyPayload(t, { stage: "compose" });
   assert.strictEqual(t.progress, null, "没有进度字段时必须是 null，不是 0");
   assert.strictEqual(t.step, "compose");
+});
+
+test("applyPayload: 进度是空串也算拿不到，绝不伪造 0", () => {
+  // Number("") 是 0、空格串也是 0，而 p.progress != null 挡不住空串。
+  // 「没有进度」和「进度真的是 0」必须分得开，否则界面会跳出一个凭空的 0%。
+  for (const v of ["", "   "]) {
+    const t = I.newTask({ domain: "agent", taskId: "E" + v.length });
+    I.applyPayload(t, { status: "running", progress: v });
+    assert.strictEqual(t.progress, null, JSON.stringify(v) + " 应留 null");
+  }
+  const p = I.newTask({ domain: "agent", taskId: "EP" });
+  I.applyPayload(p, { status: "running", percent: "" });
+  assert.strictEqual(p.progress, null, "percent 为空串同样留 null");
+  // 真的 0% 还是要照实记
+  const z = I.newTask({ domain: "agent", taskId: "EZ" });
+  I.applyPayload(z, { status: "running", progress: 0 });
+  assert.strictEqual(z.progress, 0);
 });
 
 test("applyPayload: notfound 直接落终态", () => {
@@ -89,6 +188,59 @@ test("淘汰：终态不足时全部保留", () => {
     tasks.push(t);
   }
   assert.strictEqual(I.evict(tasks, 200).length, 3);
+});
+
+test("淘汰：在跑的超过预算时终态全丢，列表仍超预算", () => {
+  // 上限是给终态留位置的；在跑的永远不丢，所以它们自己就能把列表撑爆。
+  // 这时不能为了凑满上限去动在跑的，只能把终态全丢光并接受超预算。
+  const tasks = [];
+  for (let i = 0; i < 210; i++) {
+    const t = I.newTask({ domain: "agent", taskId: "R" + i });
+    t.status = "running";
+    t.createdAt = i;
+    tasks.push(t);
+  }
+  for (let i = 0; i < 5; i++) {
+    const t = I.newTask({ domain: "agent", taskId: "F" + i });
+    t.status = "done";
+    t.endedAt = i;
+    tasks.push(t);
+  }
+  const out = I.evict(tasks, 200);
+  assert.strictEqual(out.length, 210, "210 条在跑的都不该被丢，终态却一条都挤不进去");
+  assert.strictEqual(out.filter((t) => t.status === "done").length, 0);
+  assert.ok(out.every((t) => t.status === "running"));
+});
+
+test("淘汰：max 缺省用 MAX_RECORDS", () => {
+  const tasks = [];
+  for (let i = 0; i < I.MAX_RECORDS + 10; i++) {
+    const t = I.newTask({ domain: "agent", taskId: "D" + i });
+    t.status = "done";
+    t.endedAt = i;
+    tasks.push(t);
+  }
+  assert.strictEqual(I.evict(tasks).length, I.MAX_RECORDS);
+  // 不传 max 且没超上限时原样返回
+  assert.strictEqual(I.evict(tasks.slice(0, 3)).length, 3);
+});
+
+test("淘汰：两条返回路径都返回新数组，不改也不返回入参本身", () => {
+  // 调用方（Task 4）会把 store 里的数组整个换掉；混用「原地改」和「返回新数组」
+  // 会让「有没有换成功」这件事没法判断。
+  const under = [I.newTask({ domain: "agent", taskId: "U1" })];
+  assert.notStrictEqual(I.evict(under, I.MAX_RECORDS), under);
+
+  const over = [];
+  for (let i = 0; i < 5; i++) {
+    const t = I.newTask({ domain: "agent", taskId: "O" + i });
+    t.status = "done";
+    t.endedAt = i;
+    over.push(t);
+  }
+  const out = I.evict(over, 2);
+  assert.notStrictEqual(out, over);
+  assert.strictEqual(over.length, 5, "入参不该被就地改短");
 });
 
 test("取消请求体必须是 PascalCase", () => {
