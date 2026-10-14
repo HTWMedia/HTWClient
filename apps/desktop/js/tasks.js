@@ -255,19 +255,27 @@
     return null;
   }
 
+  // 全局对象在**调用时**才解析，不在模块求值那一刻做快照。
+  // 单例是在本模块求值完就建好的，而 window.HTWApi 要等 api.js 求值完才挂上：
+  // 页面里的脚本顺序一旦变成先 tasks.js 后 api.js，快照下来的 subscribeTask 就是
+  // undefined —— watch 会抛错、被 catch 吞掉、每条任务静默降级成轮询，
+  // 界面上一点症状都看不出来，只有服务器连接数对得上才想得到。
   function defaultDeps() {
-    const api = (typeof window !== "undefined" && window.HTWApi) || {};
-    const htw = (typeof window !== "undefined" && window.htw) || {};
+    const liveApi = () => ((typeof window !== "undefined" && window.HTWApi) || {});
+    const liveHtw = () => ((typeof window !== "undefined" && window.htw) || {});
     return {
       api: {
-        subscribeTask: api.subscribeTask,
-        unsubscribeTask: api.unsubscribeTask,
-        call: api.call,
-        post: api.post,
+        subscribeTask: function () { return liveApi().subscribeTask.apply(null, arguments); },
+        unsubscribeTask: function () {
+          const u = liveApi().unsubscribeTask;
+          if (typeof u === "function") return u.apply(null, arguments);
+        },
+        call: function () { return liveApi().call.apply(null, arguments); },
+        post: function () { return liveApi().post.apply(null, arguments); },
       },
-      saveJson: htw.saveJson,
-      loadJson: htw.loadJson,
-      subscribe: htw.onStreamEvent,
+      saveJson: function () { return liveHtw().saveJson.apply(null, arguments); },
+      loadJson: function () { return liveHtw().loadJson.apply(null, arguments); },
+      subscribe: function (cb) { return liveHtw().onStreamEvent(cb); },
       now: function () { return Date.now(); },
       setTimeout: function (fn, ms) { return setTimeout(fn, ms); },
       clearTimeout: function (id) { return clearTimeout(id); },
@@ -278,8 +286,13 @@
     const d = deps || defaultDeps();
     let tasks = [];
     let saveTimer = null;
-    const unsubs = {};        // streamId -> 取消订阅函数
-    const timers = {};        // task.id -> {first, poll, reconnect}
+    // 取消订阅函数按**记录 id** 存，不是按 streamId：streamId 是 "域:任务标识"，
+    // 同一个任务在进程里可能同时存在两条记录（比如用户点了两次提交），
+    // 按 streamId 存的话第二条 watch 会把第一条的退订函数覆盖掉 ——
+    // 第一条就此变成永远收不到事件的孤儿，而任意一条 stopWatch 又会拆掉另一条的回调。
+    // streamId 只在退订时要发给主进程，单独记在 timers 里。
+    const unsubs = {};        // task.id -> 取消订阅函数
+    const timers = {};        // task.id -> {first, poll, reconnect, sid}
     const listeners = [];
 
     function emitChange() {
@@ -323,10 +336,10 @@
     }
 
     function stopWatch(task) {
-      const sid = task.domain + ":" + task.taskId;
-      if (unsubs[sid]) { try { unsubs[sid](); } catch (e) { /* ignore */ } delete unsubs[sid]; }
-      if (d.api && d.api.unsubscribeTask) { try { d.api.unsubscribeTask(sid); } catch (e) { /* ignore */ } }
       const t = timers[task.id];
+      const sid = (t && t.sid) || task.domain + ":" + task.taskId;
+      if (unsubs[task.id]) { try { unsubs[task.id](); } catch (e) { /* ignore */ } delete unsubs[task.id]; }
+      if (d.api && d.api.unsubscribeTask) { try { d.api.unsubscribeTask(sid); } catch (e) { /* ignore */ } }
       if (t) {
         [t.first, t.poll, t.reconnect].forEach(function (id) {
           if (id != null) { try { d.clearTimeout(id); } catch (e) { /* ignore */ } }
@@ -341,8 +354,23 @@
       return true;
     }
 
+    // 轮询定时器是「每个任务至多一个」。恢复流程会先查一轮、再调 watch，
+    // 若 watch 不看这里再查一轮，两条链各自续命、每 tick 请求量翻倍且永不收敛。
+    function clearPoll(task) {
+      const t = timers[task.id];
+      if (t && t.poll != null) { try { d.clearTimeout(t.poll); } catch (e) { /* ignore */ } t.poll = null; }
+    }
+
+    function hasPendingPoll(task) {
+      const t = timers[task.id];
+      return !!(t && t.poll != null);
+    }
+
     function schedulePoll(task) {
       const t = timers[task.id] || (timers[task.id] = {});
+      // 先销掉上一个再挂新的：句柄被覆盖的旧定时器没人能再取消，
+      // 它照样会到点触发，于是凭空多出一条轮询链。
+      clearPoll(task);
       t.poll = d.setTimeout(function () { pollOnce(task); }, POLL_MS);
     }
 
@@ -355,7 +383,14 @@
         if (r && r.ok) {
           task.unknown = false;
           applyFor(task, r.data || {});
-        } else if (r && r.status === 404) {
+        } else if (r && (r.code === 404 || r.status === 404)) {
+          // 「服务端已经没有这条任务」和「这次没查着」必须分清：
+          // 前者说明任务真的没了（服务端重启过 / 记录被清理），落成 interrupted；
+          // 后者只是网络抖动或鉴权没过，判死就等于把一条还在跑的任务永远钉死在界面上，
+          // 用户会白等，而服务端那边它其实好好地在跑。
+          // 状态码要看 code 而不是 status：api.js 的 normalize() 返回 {ok, code, message, raw}，
+          // HTTP 状态落在 code 上（WorkflowController 的 FailApi(404, ..., 404) 会同时给出
+          // HTTP 404 与 ErrCode=404，两条路都覆盖到），status 只有直接调用的调用方才会有。
           task.status = "interrupted";
           task.error = "服务端已无此任务（Web 服务可能已重启）";
           task.endedAt = d.now();
@@ -405,16 +440,27 @@
     function watch(task) {
       const cfg = DOMAINS[task.domain];
       if (!cfg) return;
-      if (!cfg.sse) { task.transport = "poll"; pollOnce(task); return; }
+      if (!cfg.sse) {
+        task.transport = "poll";
+        // 恢复流程刚查过一轮并且已经排好了下一次，watch 不必再立刻查一遍 ——
+        // 立刻查就是第二条轮询链的起点，之后每 tick 的请求量会一直翻倍。
+        if (hasPendingPoll(task)) return;
+        pollOnce(task);
+        return;
+      }
+      // 推送域由推送驱动，不该同时挂着一个轮询定时器：恢复时的确认查询已经查完了，
+      // 剩下的交给 SSE，让它降级（订阅失败 / 超时 / end）时再自己切回轮询。
+      clearPoll(task);
       task.transport = "sse";
       const sid = task.domain + ":" + task.taskId;
       if (d.subscribe) {
-        try { unsubs[sid] = d.subscribe(function (msg) { onStream(task, msg); }) || null; } catch (e) { /* ignore */ }
+        try { unsubs[task.id] = d.subscribe(function (msg) { onStream(task, msg); }) || null; } catch (e) { /* ignore */ }
       }
       try {
         d.api.subscribeTask(task.domain, task.taskId);
       } catch (e) { degrade(task); return; }
       const t = timers[task.id] || (timers[task.id] = {});
+      t.sid = sid;
       // 8 秒还没收到任何事件，就当这条路不通，静默切轮询。
       t.first = d.setTimeout(function () {
         const tt = timers[task.id];
@@ -444,25 +490,34 @@
         persist(true);
       },
       cancel: function (id) {
-        const task = store.get(id);
-        if (!task) return Promise.reject(new Error("任务不存在"));
-        if (!canCancel(task.domain)) return Promise.reject(new Error("该任务不支持中途取消"));
-        const cfg = DOMAINS[task.domain];
-        return Promise.resolve(d.api.post(cfg.cancelPath, cancelBody(task.domain, task.taskId)))
-          .then(function (r) {
-            if (r && r.ok === false) throw new Error(r.message || "取消失败");
-            task.status = "canceled";
-            task.endedAt = d.now();
-            stopWatch(task);
-            emitChange();
-            persist(true);
-            return true;
-          });
+        // 整个流程裹进 Promise 里：d.api.post 缺失（HTWApi 还没挂上）时它会同步抛，
+        // 而调用方一律按「返回 Promise」处理，同步抛就变成了未捕获异常。
+        return Promise.resolve().then(function () {
+          const task = store.get(id);
+          if (!task) throw new Error("任务不存在");
+          // 已经出结果的任务不许再被取消：重复点击 / 迟到的取消会把一条真实的
+          // done 或 failed 改写成 canceled，用户白跑的那一趟就此从记录里消失了。
+          if (isTerminalState(task.status)) throw new Error("任务已结束，无需取消");
+          if (!canCancel(task.domain)) throw new Error("该任务不支持中途取消");
+          const cfg = DOMAINS[task.domain];
+          return Promise.resolve(d.api.post(cfg.cancelPath, cancelBody(task.domain, task.taskId)))
+            .then(function (r) {
+              if (r && r.ok === false) throw new Error(r.message || "取消失败");
+              task.status = "canceled";
+              task.endedAt = d.now();
+              stopWatch(task);
+              emitChange();
+              persist(true);
+              return true;
+            });
+        });
       },
       restore: function () {
         return Promise.resolve(d.loadJson("tasks"))
           .then(function (saved) {
-            tasks = Array.isArray(saved) ? saved.filter((t) => t && t.id) : [];
+            // 落盘文件同样要过上限：文件被手改过、或上一版写坏过，就可能比
+            // register 的预算大得多。只在 register 上设上限的话，恢复是绕过它的口子。
+            tasks = evict(Array.isArray(saved) ? saved.filter((t) => t && t.id) : [], MAX_RECORDS);
             const pending = tasks.filter((t) => t.status === "running");
             // 逐个各查一次，不并发、不轮询：启动时服务端可能还没就绪。
             return pending.reduce(function (chain, task) {

@@ -318,3 +318,198 @@ test("落盘：无 status 的载荷也要排节流写盘", async () => {
   assert.strictEqual(store.get(t.id).status, "running", "没有 status 就不许判终态");
   assert.ok(d._timers.length > before, "载荷即便没有 status 也要排上写盘");
 });
+
+/* ------------------------------------------------------------------
+ * 以下是评审后的补充用例：失效判定、单条轮询链、终态保护、恢复时的上限。
+ * ------------------------------------------------------------------ */
+
+// 手动推进的假定时器：clearTimeout 真的会销掉句柄，只有 tick() 才真的触发回调。
+// 上面那个假 setTimeout 只把回调塞进数组、从不执行也从不销句柄 —— 正好漏掉
+// 「旧句柄被覆盖成孤儿定时器」这类问题，所以计数类断言必须换这套。
+function manualTimers(d) {
+  let seq = 0;
+  const pending = new Map();
+  d.setTimeout = (fn, ms) => { const id = ++seq; pending.set(id, { fn, ms }); return id; };
+  d.clearTimeout = (id) => { pending.delete(id); };
+  d.tick = async () => {
+    const items = Array.from(pending.values());
+    pending.clear();
+    items.forEach((x) => x.fn());
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+  };
+  // 只看某个毫秒数上还挂着几个定时器（轮询是 POLL_MS，落盘节流是 SAVE_DEBOUNCE_MS）。
+  d.pendingOf = (ms) => Array.from(pending.values()).filter((x) => x.ms === ms).length;
+  return d;
+}
+
+function savedTask(id, domain, taskId, over) {
+  return Object.assign({
+    id, domain, taskId, panel: "", title: "",
+    status: "running", unknown: false, progress: null, step: null,
+    transport: "none", degraded: false, result: null, error: null,
+    createdAt: 1, updatedAt: 2, endedAt: null, type: null,
+  }, over || {});
+}
+
+test("恢复：服务端回真 HTTP 404 -> interrupted", async () => {
+  // 这一条要按 api.js 的真实形状写：normalize() 返回 {ok, code, message, raw}，
+  // HTTP 状态落在 code 上，从不产生 status 字段。WorkflowController 对消失的任务
+  // 回 FailApi(404, ..., 404)，HTTP 404 与 ErrCode=404 同时具备。
+  // 之前只认 r.status，等于分支是死代码：服务端重启后消失的任务会落进「没查着」，
+  // 永远停在 running，每 3 秒轮询一次 —— 恢复本来就是为了防这个僵尸。
+  const d = fakeDeps();
+  d.loadJson = () => Promise.resolve([savedTask("t_404", "agent", "A0")]);
+  d.api.call = async () => ({ ok: false, code: 404, message: "工作流不存在或已过期" });
+  const store = I.createStore(d);
+  await store.restore();
+  assert.strictEqual(store.get("t_404").status, "interrupted");
+  assert.strictEqual(store.get("t_404").unknown, false);
+});
+
+test("恢复：401 属「没查着」，不能判死", async () => {
+  // 404 与 401 只差「服务端到底还有没有这条任务」这一件事。
+  // 分不清的后果是对称的：判死会把一条还在跑的任务永久钉死，用户白等；
+  // 判活会让已经没了的任务永远挂着。只能认「服务端明说这条没了」这一种证据。
+  const d = fakeDeps();
+  d.loadJson = () => Promise.resolve([savedTask("t_401", "agent", "A6")]);
+  d.api.call = async () => ({ ok: false, code: 401, message: "AuthKey 无效" });
+  const store = I.createStore(d);
+  await store.restore();
+  const cur = store.get("t_401");
+  assert.strictEqual(cur.status, "running", "鉴权没过不等于任务没了");
+  assert.strictEqual(cur.unknown, true);
+});
+
+test("恢复后的轮询链只有一条，不会随 tick 翻倍", async () => {
+  // restore 先查一轮并排好下一次，watch 若又立刻查一轮，句柄被覆盖的那条链就再也
+  // 没人能取消，会和新的链一起每 3 秒各发一次请求 —— 每 tick 翻倍，且永不收敛。
+  const d = manualTimers(fakeDeps());
+  let calls = 0;
+  d.api.call = async () => { calls++; return { ok: true, data: { status: "running" } }; };
+  d.loadJson = () => Promise.resolve([savedTask("t_chain", "batch", "B7")]);
+  const store = I.createStore(d);
+  await store.restore();
+  assert.strictEqual(calls, 1, "恢复只查这一次，watch 不能再立刻查一遍");
+  assert.strictEqual(d.pendingOf(I.POLL_MS), 1, "同一个任务只允许挂一个轮询定时器");
+  await d.tick();
+  assert.strictEqual(calls, 2, "一轮 tick 一次");
+  assert.strictEqual(d.pendingOf(I.POLL_MS), 1, "旧句柄必须被销掉，不能留成孤儿");
+  await d.tick();
+  assert.strictEqual(calls, 3, "第二轮仍是一次（之前这里是 4）");
+  await d.tick();
+  assert.strictEqual(calls, 4, "第三轮仍是一次");
+});
+
+test("推送域恢复后不留轮询定时器", async () => {
+  // SSE 域由推送驱动。恢复时的确认查询已经查过一轮，剩下的交给推送，
+  // 再叠一个 3 秒轮询就是同一份状态被读两遍，与降级机制的设计正好相反。
+  const d = manualTimers(fakeDeps());
+  let calls = 0;
+  d.api.call = async () => { calls++; return { ok: true, data: { status: "running" } }; };
+  d.loadJson = () => Promise.resolve([savedTask("t_push", "agent", "A8")]);
+  const store = I.createStore(d);
+  await store.restore();
+  assert.strictEqual(store.get("t_push").transport, "sse", "推送域恢复后由推送驱动");
+  assert.strictEqual(calls, 1, "确认查询已经查过");
+  assert.strictEqual(d.pendingOf(I.POLL_MS), 0, "推送域不许同时挂一个 3 秒轮询");
+  await d.tick();
+  assert.strictEqual(calls, 1, "不能再多查");
+});
+
+test("取消：已经出结果的任务不许被改写", async () => {
+  // 重复点击或迟到的取消会把一条真实的 done / failed 改写成 canceled，
+  // 用户等出来的那一趟就此从记录里消失。
+  const d = fakeDeps();
+  let posted = 0;
+  d.api.post = async () => { posted++; return { ok: true }; };
+  const store = I.createStore(d);
+  const t = store.register({ domain: "marketvideo", taskId: "OK1" });
+  d.emit("marketvideo:OK1", "data", '{"status":"completed"}');
+  await settle();
+  assert.strictEqual(store.get(t.id).status, "done");
+  await assert.rejects(() => store.cancel(t.id));
+  assert.strictEqual(store.get(t.id).status, "done", "真实结局不能被迟到的取消覆盖");
+  assert.strictEqual(posted, 0, "已终态就不该再发取消请求");
+});
+
+test("取消：api 还没就绪时也不能同步抛出", async () => {
+  // 调用方一律按「返回 Promise」处理；同步抛出去会变成未捕获异常而不是一次拒绝。
+  const d = fakeDeps();
+  d.api = {
+    subscribeTask: () => "sid",
+    unsubscribeTask: () => {},
+    call: async () => ({ ok: true, data: { status: "running" } }),
+  };
+  const store = I.createStore(d);
+  const t = store.register({ domain: "marketvideo", taskId: "NOPOST" });
+  await settle();
+  const p = store.cancel(t.id);
+  assert.ok(p && typeof p.then === "function", "cancel 必须返回 Promise，而不是同步抛出");
+  await assert.rejects(() => p);
+});
+
+test("恢复：超上限的落盘文件照样被裁掉", async () => {
+  // 上限只在 register 上设的话，恢复就是绕过它的那道口子：文件被手改过或写坏过时，
+  // 整个列表会原样灌进来。
+  const d = fakeDeps();
+  const many = [];
+  for (let i = 0; i < 260; i++) {
+    many.push(savedTask("t_big_" + i, "batch", "B" + i, { status: "done", createdAt: i, endedAt: i }));
+  }
+  d.loadJson = () => Promise.resolve(many);
+  const store = I.createStore(d);
+  await store.restore();
+  assert.strictEqual(store.list().length, I.MAX_RECORDS, "落盘文件与 register 共用同一套预算");
+});
+
+test("同一任务的两条记录互不牵连", async () => {
+  // 退订函数按 streamId 存的话，第二条 watch 会覆盖第一条的，
+  // 于是取消任意一条都会把另一条的回调一起拆掉，那条就再也收不到推送了。
+  const d = fakeDeps();
+  const store = I.createStore(d);
+  const a = store.register({ domain: "marketvideo", taskId: "DUP" });
+  const b = store.register({ domain: "marketvideo", taskId: "DUP" });
+  await settle();
+  assert.strictEqual(d._cbs.length, 2, "两条记录各挂一个回调");
+  await store.cancel(a.id);
+  d.emit("marketvideo:DUP", "data", '{"progress":77}');
+  await settle();
+  assert.strictEqual(store.get(a.id).status, "canceled");
+  assert.strictEqual(store.get(b.id).progress, 77, "b 还活着，必须还收得到推送");
+});
+
+test("默认依赖按调用时解析：HTWApi 晚到也能订阅", async () => {
+  // window.HTWApi 是 api.js 求值完才挂上的，而单例在本模块求值时就建好了。
+  // 要是那一刻把全局快照下来，subscribeTask 会被冻成 undefined ——
+  // watch 抛错、被吞掉、每条任务静默降级成轮询，界面上一点症状都没有。
+  const MOD = require.resolve("./tasks.js");
+  const prevWindow = global.window;
+  const subs = [];
+  let streamCb = null;
+  global.window = {
+    htw: {
+      saveJson: () => Promise.resolve(true),
+      loadJson: () => Promise.resolve(null),
+      onStreamEvent: (cb) => { streamCb = cb; return function () {}; },
+    },
+  };
+  delete require.cache[MOD];
+  try {
+    const Lazy = require("./tasks.js"); // 此刻 window.HTWApi 还不存在
+    global.window.HTWApi = {
+      subscribeTask: (domain, taskId) => { subs.push(domain + ":" + taskId); return "sid"; },
+    };
+    const t = Lazy.register({ domain: "agent", taskId: "LATE" });
+    const cur = Lazy.get(t.id);
+    assert.strictEqual(cur.transport, "sse", "订阅可用就不该降级成轮询");
+    assert.strictEqual(cur.degraded, false);
+    assert.deepStrictEqual(subs, ["agent:LATE"], "订阅动作应落到后来出现的 HTWApi 上");
+    // 收尾，顺带把那条 8 秒首事件超时定时器撤掉，别把测试进程挂住
+    streamCb({ streamId: "agent:LATE", type: "data", payload: '{"status":"completed"}' });
+  } finally {
+    delete require.cache[MOD];
+    if (prevWindow === undefined) delete global.window;
+    else global.window = prevWindow;
+  }
+});
