@@ -1,8 +1,8 @@
 # 桌面端任务中心与 SSE 实时化 —— 设计文档
 
-- 日期：2026-10-14
+- 日期：2026-10-14（2026-10-14 修订：服务端 publish 域缺陷已先行修复，不再是零改动）
 - 目标仓库：`D:\HTWClient`（桌面客户端）
-- 服务端仓库：`D:\HTWCore.Web`（**本次零改动**）
+- 服务端仓库：`D:\HTWCore.Web`（仅 publish 域 SSE 终态一处修复，见 §5.3）
 
 ---
 
@@ -22,7 +22,7 @@
 ### 非目标
 
 - 不统一各面板的进度条样式，不改面板渲染逻辑。
-- 不改后端任何一行代码。
+- 不改后端出片/发布业务逻辑（仅修 publish 域 SSE 的终态缺陷）。
 - 不做任务重命名、备注、搜索、标签、多 Key 切换。
 
 ---
@@ -41,7 +41,7 @@
 
 ## 3. 架构与组件边界
 
-渲染进程新增 2 个文件、修改 1 个；主进程修改 2 个。**服务端不涉及任何改动。**
+渲染进程新增 2 个文件、修改 1 个；主进程修改 2 个。服务端仅有 §5.3 描述的一处终态修复，且已先行合入。
 
 ```
 渲染进程
@@ -172,11 +172,27 @@ watch(task)
 
 载荷中实际带有真实状态（`PublishManager.GetTaskStatus` 返回的 `task.Status`），服务端未用它判终态。
 
-**客户端应对**：终态判定必须包含「按载荷自行判定并主动断流」，不可只等 `event: end`。否则一次发布任务完成后连接仍会白挂约 58 分钟。
+**客户端应对**：终态判定必须包含「按载荷自行判定并主动断流」，不可只等 `event: end`。原因有二：publish 域的服务端缺陷（§5.3）虽已修复，但客户端不应把流的生命周期绑定在服务端实现细节上；且其余 SSE 域同样不会主动下发终态事件。
 
-**publish 子任务的非成功终态**：`draft_saved`、`awaiting_manual`、`unconfirmed` 三者在服务端 `IsTerminal`（同文件 `:236-238`）中被列为终态。它们都不是 `success`，但同样意味着「结束了」；客户端终态集合必须包含它们，否则发布流会一直挂到 60 分钟上限。
+### 5.3 服务端 publish 域缺陷（已修复，先于本设计落地）
 
-本次不修改服务端。
+原计划客户端自行规避，评审后决定直接修服务端。提交：`0942b4c`。
+
+**根因是两个缺陷叠加**，缺一不可：
+
+1. `V2StreamController.Snapshot` 的 publish 分支把「终态检测用的状态」硬编码为 `""`（原 `:169`），而 `IsTerminal("")` 恒为 false。
+2. `IsTerminal` 的列表里没有 `partial_failed`。而 `PublishManager.FinalizeTask` 的判定是「任一子任务 ≠ success 即算」，因此抖音人工发布（`awaiting_manual`）、存草稿（`draft_saved`）、未取到证据（`unconfirmed`）**全部落进 `partial_failed`** —— 也就是说最常见的发布结局都不在终态表里。
+
+`PublishTasks.Status` 的取值全集只有四个：`pending`（INSERT）、`running`（起跑 / 重试拉回）、`completed`、`partial_failed`。
+
+**修复**：
+- `PublishManager` 增加 `GetTaskStatusWithStatus`，把主任务状态与载荷一次返回（沿用同一次 `LoadTask`，不额外查库）；原 `GetTaskStatus` 改为委托，既有调用方行为不变。
+- `Snapshot` 的 publish 分支返回真实状态。
+- `IsTerminal` 补 `partial_failed`。
+
+**对客户端的影响**：客户端**仍然**必须按载荷自行判终态并主动断流（见 §5.2）。服务端修的是「服务端不再无谓挂满 60 分钟」，客户端保留自行判定是为了不让流生命周期依赖服务端实现细节 —— 两者都要，不是二选一。
+
+**回归测试**：`HTWCore.Web.Tests/Controllers/Api/V2/V2StreamPublishDomainTests.cs` —— 钉住 `partial_failed` 是终态、`pending`/`running`/`uploading` 不是、空串不是；以及 publish 分支返回真实主任务状态、越权按 notfound 处理。
 
 ---
 
@@ -312,7 +328,7 @@ parseSseChunk(remainder, chunk) -> { events, remainder }
 
 | 文件 | 覆盖内容 |
 |---|---|
-| `js/tasks.test.cjs` | 终态判定（含 publish 的三个非成功终态）；200 条淘汰且运行中任务不被淘汰；PascalCase 请求体构造；下载地址现取不缓存 |
+| `js/tasks.test.cjs` | 终态判定（含 publish 的 `partial_failed` 与三个非成功子任务终态）；200 条淘汰且运行中任务不被淘汰；PascalCase 请求体构造；下载地址现取不缓存 |
 | `js/tasks-sse.test.cjs` | `parseSseChunk` 分包边界：一个事件跨 3 个 chunk 到达；`data:` 被切在包中间；忽略 keepalive 行 |
 | `js/skills/tasks-panel.mount.test.cjs` | 对齐现有 `workflow.mount.test.cjs` 写法；mount 不抛异常；`progress: null` 时渲染不崩 |
 
