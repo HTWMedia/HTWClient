@@ -543,7 +543,54 @@
         UI.el("div", { class: "wf-title", text: w.topic || "" }),
       ];
 
+      // 标题候选（2026-10-07）：点一条即选中，确认发布时把它带上去。
+      // 为什么做成"点选"而不是 input：服务端只接受**已落库的候选**
+      // （WorkflowEngine.Approve 校验），自由输入会被 409 拒掉。
+      var picked = w.title || "";
+      var cands = Array.isArray(w.titleCandidates) ? w.titleCandidates : [];
+
       if (w.title) kids.push(UI.el("div", { class: "wf-evidence", text: "标题：" + w.title }));
+
+      if (cands.length > 0) {
+        var titleBox = UI.el("div", { class: "wf-title-cands" });
+        titleBox.appendChild(UI.el("div", {
+          class: "wf-hint",
+          text: "换个标题（点一条选中，分数是系统按长度/数字/钩子等维度算的参考分）：",
+        }));
+
+        cands.forEach(function (c) {
+          var isCurrent = c.title === picked;
+          var row = UI.el("div", {
+            class: "wf-title-cand" + (isCurrent ? " is-current" : ""),
+            onclick: function () {
+              // 幂等切换：点已选中的那条会取消选择，回到系统生成的标题
+              var next = isCurrent ? (w.title || "") : c.title;
+              picked = next;
+              Array.prototype.forEach.call(titleBox.querySelectorAll(".wf-title-cand"), function (n) {
+                n.classList.remove("is-current");
+              });
+              if (next === c.title) row.classList.add("is-current");
+              var line = titleBox.querySelector(".wf-title-picked");
+              if (line) line.textContent = next ? "将使用：" + next : "将使用系统生成的标题";
+            },
+          }, [
+            UI.el("span", { class: "wf-title-cand-text", text: c.title }),
+            UI.el("span", { class: "wf-title-cand-score", text: String(c.score == null ? "" : c.score) }),
+          ]);
+          // 分数旁边挂理由：让"为什么它排第一"可见，而不是黑盒分数
+          if (Array.isArray(c.reasons) && c.reasons.length) {
+            row.title = c.reasons.join("\n");
+          }
+          titleBox.appendChild(row);
+        });
+
+        titleBox.appendChild(UI.el("div", {
+          class: "wf-title-picked",
+          text: picked ? "将使用：" + picked : "将使用系统生成的标题",
+        }));
+        kids.push(titleBox);
+      }
+
       if (w.content) kids.push(UI.el("div", { class: "wf-content", text: w.content }));
 
       var tags = parseTags(w.tags);
@@ -575,7 +622,11 @@
       var back = UI.el("button", { class: "btn btn-ghost", text: "再等等" });
       ok.addEventListener("click", function () {
         ok.disabled = true;
-        call("POST", "/api/v2/workflow/approve", { WorkflowId: w.workflowId, Stage: "publish" })
+        // ChosenTitle 只在**用户真的改选过**时才带（与当前标题不同）。
+        // 带上原标题虽然也合法，但让请求体保持"没改就不传"更干净。
+        var approveBody = { WorkflowId: w.workflowId, Stage: "publish" };
+        if (picked && picked !== w.title) approveBody.ChosenTitle = picked;
+        call("POST", "/api/v2/workflow/approve", approveBody)
           .then(function (r) {
             ok.disabled = false;
             // 提交失败不是"内容有问题"，可能只是平台登录态失效 —— 服务端会把它留在待确认，

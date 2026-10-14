@@ -356,6 +356,14 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .wf-error { font-size: 12px; color: var(--danger); }
 .wf-ok-box { font-size: 13px; color: var(--ok); background: rgba(62, 207, 142, 0.1); border-radius: 8px; padding: 10px; white-space: pre-wrap; }
 .wf-notice { font-size: 12px; color: var(--muted); background: var(--panel-2); border-left: 2px solid var(--accent); border-radius: 6px; padding: 10px; margin-top: 10px; line-height: 1.6; }
+.wf-title-cands { margin: 10px 0; }
+.wf-title-cand { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-top: 6px; font-size: 13px; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; line-height: 1.5; }
+.wf-title-cand:hover { border-color: var(--accent); }
+.wf-title-cand.is-current { border-color: var(--accent); background: var(--panel-2); }
+.wf-title-cand-text { flex: 1; }
+.wf-title-cand-score { flex: none; min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--muted); }
+.wf-title-cand.is-current .wf-title-cand-score { color: var(--accent); }
+.wf-title-picked { margin-top: 8px; font-size: 12px; color: var(--accent); }
 .wf-review { border-color: var(--accent); }
 
 /* 自动选题候选：点一条直接填进主题 */
