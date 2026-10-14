@@ -149,6 +149,10 @@ ipcMain.handle("htw:subscribe", (e, opts) => {
     emit(sender, { streamId: streamId, type: "error", payload: { message: "STREAM_TIMEOUT" } });
     try { req.destroy(); } catch (e) { /* 已经断了 */ }
   });
+  // 必须显式结束请求：http.request 只把请求行挂起排队，不会替你把没有请求体的请求发出去，
+  // 忘了这一句服务端什么都收不到、连接只会干等到超时——看起来就像"服务端不支持推送"。
+  // http.get 之所以存在，就是因为它替你做了这一句。
+  req.end();
   streams.set(streamId, { req: req, ownerId: sender.id });
   return { ok: true };
 });
@@ -187,7 +191,7 @@ function createWindow() {
       // <a download="xxx.mp4"> 时 getFilename 已是建议名，这里只需补目录。
       item.setSavePath(path.join(app.getPath("downloads"), name));
     } catch (e) { /* 保存路径设置失败就让下载走默认行为 */ }
-});
+  });
 
   // 窗口没了，它发起的 SSE 长连接必须跟着断。macOS 上关掉最后一个窗口不会退出进程，
   // 全局兜底只剩 before-quit 那一条，等不到；连接会一直挂着、服务端还在推，
