@@ -95,6 +95,15 @@ ipcMain.handle("htw:subscribe", (e, opts) => {
 
   const sender = e.sender;
   const transport = target.protocol === "http:" ? http : https;
+  // 身份守卫：连接池按 streamId 索引，取消订阅后同名重订阅会把新连接登记到同一个键上。
+  // 旧请求被 destroy() 后，它的迟到回调（ECONNRESET、socket 超时、响应 end/error）仍会照常触发；
+  // 若不先确认"池里这条还是我自己这个 req"，旧回调就会把新连接正在用的条目删掉，
+  // 还替新订阅发出终态事件 —— 结果是一条活得好好的连接被静默杀掉，而渲染层已经降级去轮询。
+  // 所以下面每一个"删条目 / 发终态事件"的地方都要先过这一关，过不了就什么都不做。
+  const isMine = () => {
+    const cur = streams.get(streamId);
+    return !!(cur && cur.req === req);
+  };
   const req = transport.request({
     method: "GET",
     protocol: target.protocol,
@@ -110,6 +119,7 @@ ipcMain.handle("htw:subscribe", (e, opts) => {
     // 非 200 = 认证失败或任务不存在。读掉响应体并断开，让客户端降级到轮询。
     if (res.statusCode !== 200) {
       res.resume();
+      if (!isMine()) return;
       streams.delete(streamId);
       emit(sender, { streamId: streamId, type: "error", payload: { status: res.statusCode } });
       return;
@@ -117,6 +127,7 @@ ipcMain.handle("htw:subscribe", (e, opts) => {
     let remainder = "";
     res.setEncoding("utf-8");
     res.on("data", (chunk) => {
+      if (!isMine()) return;
       const r = parseSseChunk(remainder, chunk);
       remainder = r.remainder;
       for (let i = 0; i < r.events.length; i++) {
@@ -129,14 +140,20 @@ ipcMain.handle("htw:subscribe", (e, opts) => {
       }
     });
     const bail = (err) => {
+      if (!isMine()) return;
       streams.delete(streamId);
       emit(sender, { streamId: streamId, type: "error", payload: { message: String((err && err.message) || err || "") } });
     };
-    res.on("end", () => { streams.delete(streamId); emit(sender, { streamId: streamId, type: "end", payload: "" }); });
+    res.on("end", () => {
+      if (!isMine()) return;
+      streams.delete(streamId);
+      emit(sender, { streamId: streamId, type: "end", payload: "" });
+    });
     res.on("error", bail);
   });
 
   req.on("error", (err) => {
+    if (!isMine()) return;
     streams.delete(streamId);
     emit(sender, { streamId: streamId, type: "error", payload: { message: String(err.message || err) } });
   });
@@ -145,8 +162,10 @@ ipcMain.handle("htw:subscribe", (e, opts) => {
   // 所以 120 秒内一个字节都没收到就判定连接已死：销毁并按 error 通知，
   // 渲染层收到后会降级到轮询，而不是卡在"进行中"。
   req.setTimeout(120000, () => {
-    streams.delete(streamId);
-    emit(sender, { streamId: streamId, type: "error", payload: { message: "STREAM_TIMEOUT" } });
+    if (isMine()) {
+      streams.delete(streamId);
+      emit(sender, { streamId: streamId, type: "error", payload: { message: "STREAM_TIMEOUT" } });
+    }
     try { req.destroy(); } catch (e) { /* 已经断了 */ }
   });
   // 必须显式结束请求：http.request 只把请求行挂起排队，不会替你把没有请求体的请求发出去，
