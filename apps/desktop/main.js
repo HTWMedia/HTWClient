@@ -26,6 +26,14 @@ if (process.env.HTW_API_DIRECT) allowedOrigins.add(originOf(process.env.HTW_API_
 // 否则多窗口场景下会把别人正在用的连接一起断掉。
 const streams = new Map();
 
+// streams Map 在上面；这里先定义两个连接层的时限常量
+// STREAM_LIFETIME_MS：连接生命周期的硬上限。120 秒那个是**空闲**超时，
+// 服务端每秒一次的 ": ka" 心跳会把它彻底废掉，所以真正的上界必须另设一条。
+const STREAM_IDLE_TIMEOUT_MS = 120000;
+// 服务端自己封顶 60 分钟；客户端取 65 分钟，稳稳高过它，
+// 免得把服务端仍认作活着的连接提前砍掉。
+const STREAM_LIFETIME_MS = 3900000;
+
 // 持久化目录：Electron 的 app / shell 是主进程模块，preload 里取不到，
 // 因此配置的读写一律由主进程代劳，preload 只通过 IPC 调用。
 function userDir() {
@@ -173,13 +181,29 @@ ipcMain.handle("htw:subscribe", (e, opts) => {
   // 连接池条目也永远清不掉。服务端约每秒发一次 ": ka" 心跳，正常连接不可能静默这么久，
   // 所以 120 秒内一个字节都没收到就判定连接已死：销毁并按 error 通知，
   // 渲染层收到后会降级到轮询，而不是卡在"进行中"。
-  req.setTimeout(120000, () => {
+  req.setTimeout(STREAM_IDLE_TIMEOUT_MS, () => {
     if (isMine()) {
       streams.delete(streamId);
       emit(sender, { streamId: streamId, type: "error", payload: { message: "STREAM_TIMEOUT" } });
     }
     try { req.destroy(); } catch (e) { /* 已经断了 */ }
   });
+  // 120 秒是**空闲**超时，而服务端每秒一次的 ": ka" 心跳会让它永远不触发，
+  // 于是这条连接的上界只剩服务端自己的 60 分钟。对能推出终态的域无所谓（终态一到就收工），
+  // 但推送里推不出终态的域（publish 的 status 可能为空、服务端也不当它终态）
+  // 会一直挂着、记录一直显示「进行中」。所以这里再给一条生命周期上限：
+  // 65 分钟（3900000 毫秒）比服务端的 60 分钟高，绝不会砍掉服务端仍认作活着的连接；
+  // 到点销毁并按 error 通知，渲染层随即静默降级到轮询，由轮询去收敛。
+  // 过期请求不得动别人的连接池条目，仍要过 isMine()。
+  const lifetime = setTimeout(() => {
+    if (isMine()) {
+      streams.delete(streamId);
+      emit(sender, { streamId: streamId, type: "error", payload: { message: "STREAM_LIFETIME_EXCEEDED" } });
+    }
+    try { req.destroy(); } catch (e) { /* 已经断了 */ }
+  }, STREAM_LIFETIME_MS);
+  // 终态事件到达时这条上限就没用了，提前撤掉，免得白留一个 65 分钟的定时器。
+  req.on("close", () => { try { clearTimeout(lifetime); } catch (e) { /* 已触发 */ } });
   // 先入池再 end()：目前两者在同一个同步片段里，顺序看不出差别，但一旦日后有人在这里插入任何
   // 会让出事件循环的东西，注册的回调就会看到"条目不存在"，isMine() 一律为假而静默跳过工作。
   // 登记在前，setup 阶段的这个竞态就不存在了。
