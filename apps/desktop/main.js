@@ -132,11 +132,23 @@ ipcMain.handle("htw:subscribe", (e, opts) => {
       remainder = r.remainder;
       for (let i = 0; i < r.events.length; i++) {
         const ev = r.events[i];
+        const terminal = ev.event === "end";
+        // 先把终态事件发给渲染层，再释放连接，顺序不能反：反了就等于让它一直等下去。
         emit(sender, {
           streamId: streamId,
-          type: ev.event === "end" ? "end" : "data",
+          type: terminal ? "end" : "data",
           payload: ev.data,
         });
+        // 服务端发完结束事件并不会断开连接：它还有每秒一次的 ": ka" 心跳和 60 分钟的自保上限。
+        // 而 res.on("end") 只有服务端真正关闭响应才会触发，120 秒空闲超时又因为数据一直在来而永远不触发。
+        // 于是条目永久泄漏、socket 一直挂着；同一个 streamId 再次订阅还会命中复用分支，
+        // 拿到一条已经把终态事件发完的连接，订阅方从此什么都收不到、只能干等到自己那次的超时。
+        // 所以这条连接必须由我们自己来放。守卫仍要留着：过期请求不得去动别人的连接池条目。
+        if (terminal && isMine()) {
+          streams.delete(streamId);
+          try { req.destroy(); } catch (e) { /* 已经断了 */ }
+          break;
+        }
       }
     });
     const bail = (err) => {
@@ -168,11 +180,14 @@ ipcMain.handle("htw:subscribe", (e, opts) => {
     }
     try { req.destroy(); } catch (e) { /* 已经断了 */ }
   });
+  // 先入池再 end()：目前两者在同一个同步片段里，顺序看不出差别，但一旦日后有人在这里插入任何
+  // 会让出事件循环的东西，注册的回调就会看到"条目不存在"，isMine() 一律为假而静默跳过工作。
+  // 登记在前，setup 阶段的这个竞态就不存在了。
+  streams.set(streamId, { req: req, ownerId: sender.id });
   // 必须显式结束请求：http.request 只把请求行挂起排队，不会替你把没有请求体的请求发出去，
   // 忘了这一句服务端什么都收不到、连接只会干等到超时——看起来就像"服务端不支持推送"。
   // http.get 之所以存在，就是因为它替你做了这一句。
   req.end();
-  streams.set(streamId, { req: req, ownerId: sender.id });
   return { ok: true };
 });
 
