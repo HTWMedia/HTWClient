@@ -157,6 +157,11 @@
   }
 
   function mount(panel) {
+    // 先退掉上一次挂载留下的订阅：mount() 每次都新建 body 与 render，
+    // 沿用旧订阅的话它渲染的是已被 UI.clear(panel) 摘掉的旧 body ——
+    // 面板会永远停在首次挂载时的状态且毫无症状，而这恰恰是全应用唯一靠实时状态吃饭的面板。
+    if (panel._tkUnsub) { try { panel._tkUnsub(); } catch (e) { /* ignore */ } panel._tkUnsub = null; }
+    if (panel._tkProbe) { try { clearTimeout(panel._tkProbe); } catch (e) { /* ignore */ } panel._tkProbe = null; }
     UI.clear(panel);
     panel.appendChild(UI.el("h2", { text: "任务中心" }));
     const body = UI.el("div", { class: "tk-body" });
@@ -176,10 +181,22 @@
     });
     panel.appendChild(UI.el("div", { class: "row" }, [clearBtn]));
 
+    // 订阅的建立放在 render 里，而不是只在挂载那一刻建一次：
+    // 「容器缺席就提前返回」+「挂载时没有订阅」这两件事叠在一起，
+    // 会让「任务中心尚未就绪。」变成死局 —— 没有订阅就没有任何变更通知，
+    // 即便 HTWTasks 随后加载好了，面板也再没有第二次渲染的机会。
+    function ensureSub() {
+      if (panel._tkUnsub) return;
+      const s = store();
+      if (s && typeof s.onChange === "function") panel._tkUnsub = s.onChange(render) || null;
+    }
+
     function render() {
+      ensureSub();
       UI.clear(body);
       // 容器缺席时退化成一句提示即可：让它抛出去的话 mountSkills() 会把整个面板
-      // 标成「技能加载失败」，比空列表更难查。
+      // 标成「技能加载失败」，比空列表更难查。这里只画提示就返回 —— render() 每次
+      // 都重新检查容器，容器补上后的下一次渲染就会画出列表。
       if (!store()) {
         body.appendChild(UI.el("div", { class: "hint", text: "任务中心尚未就绪。" }));
         return;
@@ -200,15 +217,10 @@
 
     render();
 
-    // 重挂必须退订再重订：mount() 每次都新建 body 与 render，若沿用首次那条订阅，
-    // 它渲染的是已被 UI.clear(panel) 摘掉的旧 body —— 面板会永远停在首次挂载时的
-    // 状态且毫无症状，而这恰恰是全应用唯一靠实时状态吃饭的面板。
-    if (panel._tkUnsub) {
-      try { panel._tkUnsub(); } catch (e) { /* ignore */ }
-      panel._tkUnsub = null;
-    }
-    const s = store();
-    if (s && typeof s.onChange === "function") panel._tkUnsub = s.onChange(render) || null;
+    // 容器缺席时挂一次推迟复查：这是面板唯一还能自己重绘的机会
+    // （tasks.js 的 script 标签若晚于本面板，第一次 render 时它还不存在）。
+    // 复查一次就够了 —— 容器补上之后 ensureSub 会把订阅接上，之后靠通知驱动。
+    if (!store()) panel._tkProbe = setTimeout(function () { panel._tkProbe = null; render(); }, 0);
   }
 
   return { mount: mount };

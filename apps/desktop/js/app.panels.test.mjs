@@ -74,6 +74,17 @@ test("batch 面板三处注册齐全", () => {
   assert.match(batchJs, /mount:\s*mount/, "batch.js 未导出 mount");
 });
 
+test("tasks 面板三处注册齐全", () => {
+  // 漏 script 标签或 mount 导出时，上面那两条通用测试照样全绿（它们只查
+  // data-skill / panel 容器与 app.js 白名单），而任务中心会永久是一片空白。
+  assert.ok(indexHtml.includes('data-skill="tasks"'), "缺导航按钮");
+  assert.ok(indexHtml.includes('id="panel-tasks"'), "缺 panel 容器");
+  assert.ok(indexHtml.includes('js/skills/tasks-panel.js'), "缺 script 标签");
+  assert.ok(skillList().includes("tasks"), "缺 app.js 白名单条目");
+  const tasksPanelJs = readFileSync(join(APP, "js", "skills", "tasks-panel.js"), "utf-8");
+  assert.match(tasksPanelJs, /mount:\s*mount/, "tasks-panel.js 未导出 mount");
+});
+
 test("script 标签顺序：workflow 在 app.js 之前（app.js 要挨个 mount）", () => {
   const wf = indexHtml.indexOf("js/skills/workflow.js");
   const app = indexHtml.indexOf("js/app.js");

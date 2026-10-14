@@ -99,6 +99,11 @@ function withDom(opts, fn) {
   const prevDoc = global.document;
   const prevWin = global.window;
   const prevUI = global.UI;
+  const prevSetTimeout = global.setTimeout;
+  const timers = [];
+  // 容器缺席时面板会排一次推迟复查。这里把它抓下来手动触发：既能断言「确实排了」，
+  // 也不会让它在 withDom 之外才到点 —— 那时 global.UI 已经还原，面板会对着 undefined 报错。
+  global.setTimeout = (fn) => { timers.push(fn); return timers.length; };
   global.document = doc;
   global.window = {
     App: { showPanel: (p) => calls.shown.push(p) },
@@ -107,7 +112,9 @@ function withDom(opts, fn) {
   };
   // noStore 模拟"tasks.js 晚于 skills 加载"：面板必须退化成空状态，
   // 而不是抛出去让 mountSkills() 标成「技能加载失败」。
-  if (!o.noStore) {
+  const installStore = (list) => {
+    tasks.length = 0;
+    (list || []).forEach((t) => tasks.push(t));
     global.window.HTWTasks = {
       _internal: { canCancel: (d) => CANCELABLE.indexOf(d) >= 0 },
       list: () => tasks.slice(),
@@ -127,7 +134,9 @@ function withDom(opts, fn) {
         return o.cancel ? o.cancel(id) : Promise.resolve(true);
       },
     };
-  }
+  };
+  // 必须传副本：installStore 会先清空共享的 tasks 再灌入传入的列表
+  if (!o.noStore) installStore(tasks.slice());
   global.UI = {
     el: (tag, attrs, kids) => {
       const n = makeNode(tag);
@@ -147,6 +156,11 @@ function withDom(opts, fn) {
   const ctx = {
     calls,
     get listenerCount() { return listeners.length; },
+    // 容器后到：等价于 tasks.js 晚于本面板加载完成
+    installStore: (list) => installStore(list || []),
+    // 手动触发挂载时排下的定时器（目前只有「容器还没出现」那一次推迟复查）
+    runTimers: () => timers.splice(0).forEach((fn) => fn()),
+    get pendingTimers() { return timers.length; },
     // 换一批任务并广播：等价于 store 里 emitChange()
     setTasks(next) {
       tasks.length = 0;
@@ -158,6 +172,7 @@ function withDom(opts, fn) {
     global.document = prevDoc;
     global.window = prevWin;
     global.UI = prevUI;
+    global.setTimeout = prevSetTimeout;
   }
 }
 
@@ -290,6 +305,23 @@ test("title 与 taskId 都为空时也给出可辨认的标题", () => {
 });
 
 test("任务容器缺席时退化成空状态，不抛给 mountSkills", () => {
-  const ctx = mountIn({ noStore: true });
-  assert.ok(ctx.panel.textContent.indexOf("尚未就绪") >= 0, "容器缺席要有提示而不是抛异常");
+  // 提示之外还排了一次推迟复查（本次不触发）：否则那个定时器会在 withDom 之外到点，
+  // 那时 global.UI 已还原，面板会对着 undefined 报错。
+  mountIn({ noStore: true }, (ctx) => {
+    assert.ok(ctx.panel.textContent.indexOf("尚未就绪") >= 0, "容器缺席要有提示而不是抛异常");
+  });
+});
+
+test("容器晚到时面板自己能恢复，不能把「尚未就绪」变成死局", () => {
+  // tasks.js 晚于本面板加载时，第一次 render 里容器还不存在。原先那一刻既没有订阅、
+  // 又提前返回，于是「任务中心尚未就绪。」会永远停在那里 —— 即便容器随后加载好了，
+  // 面板也再没有任何机会重绘（唯一靠实时状态吃饭的面板被永久钉死）。
+  mountIn({ noStore: true }, (ctx) => {
+    assert.ok(ctx.panel.textContent.indexOf("尚未就绪") >= 0, "前提：容器缺席时先显示提示");
+    assert.strictEqual(ctx.pendingTimers, 1, "容器缺席时必须挂一次推迟复查，否则没有任何重绘机会");
+    ctx.installStore([makeTask({ id: "tlate", title: "晚到的短剧", panel: "shortdrama" })]);
+    ctx.runTimers();
+    assert.ok(ctx.panel.textContent.indexOf("晚到的短剧") >= 0, "容器补上后必须自己渲染出列表");
+    assert.strictEqual(ctx.listenerCount, 1, "恢复时要把订阅接上，后续变更才能继续刷新面板");
+  });
 });
