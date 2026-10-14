@@ -29,6 +29,28 @@
     done: 1, failed: 1, canceled: 1, interrupted: 1,
   };
 
+  // 「暂停等人」的状态词：创作域每一步都要人工确认，服务端在这个状态上停住。
+  //
+  // 它**刻意不在** TERMINAL_STATUSES 里，理由和 awaiting_manual 不同：
+  // awaiting_manual 是「已经做完了，只是发布这一步要人手动点一下」，
+  // 而 waiting_approval 是**做完了前一步、正卡在下一步的门口**，用户一点批准
+  // 服务端就接着往下跑。把它当终态，这条记录会永久停在等待里 —— 面板再也看不到
+  // 后续任何进展，用户在任务中心点「回到面板」也换不回任何新信息。
+  //
+  // 也不能当在跑来对待：这段时间里服务端不会有任何变化，每 3 秒问一次纯属空转，
+  // 几十条等人操作的创作会话就能把请求打满。
+  //
+  // 处置：状态词照旧是 running（不新增词表值，免得面板那边的分组认不出来），
+  // 另用一个 paused 标记把问询节奏降到 RESUME_CHECK_MS；服务端给出下一个状态后
+  // 标记自动清掉，3 秒节奏立刻恢复。
+  const PAUSED_STATUSES = { waiting_approval: 1 };
+  const RESUME_CHECK_MS = 60000;
+
+  function isPausedStatus(s) {
+    if (s === null || s === undefined) return false;
+    return !!PAUSED_STATUSES[String(s).trim().toLowerCase()];
+  }
+
   function isTerminal(status) {
     if (!status) return false;
     return !!TERMINAL_STATUSES[String(status).toLowerCase()];
@@ -80,6 +102,8 @@
       panel: opts.panel || "",
       title: opts.title || "",
       status: "running",
+      // 见 PAUSED_STATUSES：状态词仍是 running，但问询节奏要按这个标记降到慢速复查。
+      paused: false,
       unknown: false,
       progress: null,
       step: null,
@@ -122,6 +146,19 @@
     // （终态写必须与进度回调互斥），客户端是最后一跳，同一条规则必须在这里再实现一次。
     // 注意这不是「终态不可变」：迟到的另一条终态（done → failed）仍然照常覆盖。
     if (next === "running" && isTerminalState(task.status)) return task;
+
+    // 暂停标记必须从**原始**状态词判：waiting_approval 归一化之后与 running 同形，
+    // 只看 next 是分不出「真在跑」和「在等人批准」的。
+    // 只在载荷真的带了状态时更新 —— workflow / batch 的进度帧压根没有 status 字段
+    // （由 deriveStatus 折算），拿空值去覆盖会把一条正在等人的任务立刻当成恢复了。
+    if (p.status !== null && p.status !== undefined) {
+      const paused = isPausedStatus(p.status);
+      task.paused = paused;
+      // 面板把状态徽章显示成「进行中」（它只认 running/done/failed/canceled/interrupted
+      // 五个词），所以「在等人批准」这句话只能落到副标题这一行上，否则用户无从判断
+      // 为什么这条任务几分钟没动。服务端没给步骤文案时才补，不覆盖真实步骤。
+      if (paused && !task.step) task.step = "等待确认";
+    }
 
     task.status = next;
     task.endedAt = next === "running" ? null : Date.now();
@@ -366,12 +403,20 @@
       return !!(t && t.poll != null);
     }
 
-    function schedulePoll(task) {
+    function schedulePoll(task, ms) {
       const t = timers[task.id] || (timers[task.id] = {});
       // 先销掉上一个再挂新的：句柄被覆盖的旧定时器没人能再取消，
       // 它照样会到点触发，于是凭空多出一条轮询链。
       clearPoll(task);
-      t.poll = d.setTimeout(function () { pollOnce(task); }, POLL_MS);
+      t.poll = d.setTimeout(function () { pollOnce(task); }, ms || POLL_MS);
+    }
+
+    // 下一轮什么时候问：真在跑是 3 秒；等人批准时降到 1 分钟。
+    // 这段时间服务端的状态一定没变（创作域就是停在 waiting_approval 等人），
+    // 3 秒一轮只是白烧请求；而 1 分钟足够在用户批准后很快把记录带回来，
+    // 不会让任务中心看起来「卡住了」。
+    function nextDelay(task) {
+      return task.paused ? RESUME_CHECK_MS : POLL_MS;
     }
 
     async function pollOnce(task) {
@@ -405,7 +450,7 @@
       finish(task);
       emitChange();
       persist();
-      if (task.status === "running") schedulePoll(task);
+      if (task.status === "running") schedulePoll(task, nextDelay(task));
     }
 
     function onStream(task, msg) {
@@ -434,7 +479,7 @@
       task.updatedAt = d.now();
       emitChange();
       persist();
-      if (task.status === "running") schedulePoll(task);
+      if (task.status === "running") schedulePoll(task, nextDelay(task));
     }
 
     function watch(task) {
@@ -555,9 +600,9 @@
     restore: () => _singleton.restore(),
     _internal: {
       MAX_RECORDS, POLL_MS, FIRST_EVENT_TIMEOUT_MS, RECONNECT_MS, SAVE_DEBOUNCE_MS,
-      TERMINAL_STATUSES, DOMAINS,
+      TERMINAL_STATUSES, PAUSED_STATUSES, RESUME_CHECK_MS, DOMAINS,
       isTerminal, normalizeStatus, applyPayload, evict, canCancel, cancelBody, newTask, createStore,
-      deriveStatus, deriveWorkflowStatus, deriveBatchStatus,
+      deriveStatus, deriveWorkflowStatus, deriveBatchStatus, isPausedStatus,
     },
   };
 });

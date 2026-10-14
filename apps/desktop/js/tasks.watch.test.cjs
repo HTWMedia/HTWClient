@@ -513,3 +513,72 @@ test("默认依赖按调用时解析：HTWApi 晚到也能订阅", async () => {
     else global.window = prevWindow;
   }
 });
+
+/* ------------------------------------------------------------------
+ * waiting_approval：等人批准，不是终态，也不该按在跑来对待。
+ * ------------------------------------------------------------------ */
+
+test("waiting_approval 不是终态：不能判完成，也不能判死", () => {
+  // 创作域每一步都要人工确认，服务端就在这个状态上停住。若把它算进终态，
+  // 这条记录会永久停在「等待」——用户批准后它也不会再动，面板再也看不到后续进展。
+  assert.strictEqual(I.isTerminal("waiting_approval"), false, "它是暂停，绝不是做完了");
+  assert.strictEqual(I.normalizeStatus("waiting_approval"), "running");
+  assert.ok(I.isPausedStatus("waiting_approval"));
+  assert.ok(!I.isPausedStatus("running"));
+  assert.ok(!I.isPausedStatus(null));
+  // 判完之后仍能从这条记录继续推进，证明没有被写死。
+  const t = I.newTask({ domain: "creation", taskId: "V1", type: "video" });
+  I.applyPayload(t, { status: "waiting_approval" });
+  assert.strictEqual(t.status, "running");
+  assert.strictEqual(t.paused, true);
+  assert.strictEqual(t.endedAt, null, "暂停不是结束，不该盖结束时间");
+  assert.strictEqual(t.step, "等待确认", "面板的徽章只会写进行中，暂停这件事要让人看得见");
+  I.applyPayload(t, { status: "completed" });
+  assert.strictEqual(t.status, "done");
+  assert.strictEqual(t.paused, false, "状态一动，暂停标记必须自动清掉");
+});
+
+test("等人批准时不排 3 秒轮询，批准后立刻恢复", async () => {
+  // 等人的这段时间服务端不会有任何变化，每 3 秒问一次纯属空转；
+  // 但也不能彻底停掉 —— 停掉就再也没人知道用户批准了，记录会永远卡在等待里。
+  const d = manualTimers(fakeDeps());
+  const seq = [
+    { ok: true, data: { status: "waiting_approval", sessionId: "V2" } },
+    { ok: true, data: { status: "running", progress: 20 } },
+    { ok: true, data: { status: "completed" } },
+  ];
+  let k = 0;
+  d.api.call = async () => seq[Math.min(k++, seq.length - 1)];
+  const store = I.createStore(d);
+  const t = store.register({ domain: "creation", taskId: "V2", panel: "create", title: "视频创作", type: "video" });
+  await settle();
+
+  assert.strictEqual(store.get(t.id).status, "running", "等人批准期间记录仍是活的");
+  assert.strictEqual(store.get(t.id).paused, true);
+  assert.strictEqual(d.pendingOf(I.POLL_MS), 0, "等人批准时不该再挂 3 秒轮询");
+  assert.strictEqual(d.pendingOf(I.RESUME_CHECK_MS), 1, "改挂一条慢速复查，批准后才靠得住它");
+
+  await d.tick();
+  assert.strictEqual(store.get(t.id).paused, false, "服务端给出下一个状态后就不该再算暂停");
+  assert.strictEqual(store.get(t.id).progress, 20);
+  assert.strictEqual(d.pendingOf(I.POLL_MS), 1, "恢复在跑就立刻回到 3 秒节奏");
+
+  await d.tick();
+  assert.strictEqual(store.get(t.id).status, "done", "批准后要能一路走到完成");
+  assert.strictEqual(d.pendingOf(I.POLL_MS), 0, "终态不排下一轮");
+});
+
+test("恢复出来的等人任务也按慢速复查接上", async () => {
+  // 落盘文件里的 paused 标记要跟着走：重启后如果一律按 3 秒轮询接上，
+  // 等着人批准的那批会话会在用户回来之前白烧掉几万次请求。
+  const d = manualTimers(fakeDeps());
+  d.loadJson = () => Promise.resolve([
+    savedTask("t_paused", "creation", "V3", { panel: "create", title: "视频创作", type: "video", paused: true }),
+  ]);
+  d.api.call = async () => ({ ok: true, data: { status: "waiting_approval" } });
+  const store = I.createStore(d);
+  await store.restore();
+  assert.strictEqual(store.get("t_paused").paused, true);
+  assert.strictEqual(d.pendingOf(I.POLL_MS), 0);
+  assert.strictEqual(d.pendingOf(I.RESUME_CHECK_MS), 1);
+});
