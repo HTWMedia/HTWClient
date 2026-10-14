@@ -75,7 +75,7 @@ const { parseSseChunk } = require("./sse-parser.js");
  *   "data: {json}\n\n"   —— 状态快照
  *   ": ka\n\n"           —— keepalive 注释
  *   "event: end\ndata: {}\n\n"
- * 最易错的是一条 data 被 TCP 拆到两个包��，所以解析必须是无状态的
+ * 最易错的是一条 data 被 TCP 拆到两个包里，所以解析必须是无状态的
  * （靠 remainder 续接），不能假设一个 chunk 就是一个完整事件。
  */
 
