@@ -595,8 +595,8 @@ test("淘汰：只丢最旧的终态，运行中的永不淘汰", () => {
   assert.strictEqual(tasks.length, 200);
   const running = tasks.filter((t) => t.status === "running");
   assert.ok(running.length > 0, "运行中的任务不该被淘汰");
-  // 最新的那个在跑的任务必须还在
-  assert.ok(tasks.some((t) => t.taskId === "T204" && t.status === "running"));
+  // 最新的那个在跑的任务必须还在。注意生成时 i%2===0 是 done，所以最新的是 T203。
+  assert.ok(tasks.some((t) => t.taskId === "T203" && t.status === "running"));
 });
 
 test("淘汰：终态不足时全部保留", () => {
@@ -722,10 +722,15 @@ Expected: FAIL，报 `Cannot find module './tasks.js'`
     else if (p.stage) task.step = String(p.stage);
     const pr = num(p.progress != null ? p.progress : p.percent);
     if (pr != null) task.progress = Math.max(0, Math.min(100, pr));
-    if (p.fileName || p.outputFile) task.result = { fileName: String(p.fileName || p.outputFile), downloadUrl: url };
+    // 产物：地址或文件名任一存在就算有产物。agent 域的产物常常只有 cloudUrl
+  // 而没有 fileName，只认文件名会让"已完成但拿不到下载地址"。
+  if (p.fileName || p.outputFile || url) task.result = { fileName: p.fileName || p.outputFile || null, downloadUrl: url };
 
-    const s = String(p.status || "").toLowerCase();
-    if (!s) return task;
+const s = String(p.status || "").toLowerCase();
+  // updatedAt 必须在这里就打上：有些载荷（voice/subtitle 的结果快照）压根没有 status，
+  // 若只在解析状态之后才更新，落盘的尾随节流就不会被触发，进度会一直停在旧值。
+  task.updatedAt = Date.now();
+  if (!s) return task;
     if (s === "notfound") { task.status = "interrupted"; task.endedAt = Date.now(); }
     else if (isTerminal(s)) {
       task.status = (s === "canceled" || s === "cancelled") ? "canceled"
