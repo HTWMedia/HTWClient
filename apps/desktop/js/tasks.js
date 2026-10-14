@@ -6,7 +6,6 @@
   const MAX_RECORDS = 200;
   const POLL_MS = 3000;
   const FIRST_EVENT_TIMEOUT_MS = 8000;
-  const RECONNECT_MS = 2000;
   const SAVE_DEBOUNCE_MS = 2000;
 
   // 终态集合。partial_failed 必须在内：PublishManager.FinalizeTask 的判定是
@@ -348,7 +347,7 @@
     // 第一条就此变成永远收不到事件的孤儿，而任意一条 stopWatch 又会拆掉另一条的回调。
     // streamId 只在退订时要发给主进程，单独记在 timers 里。
     const unsubs = {};        // task.id -> 取消订阅函数
-    const timers = {};        // task.id -> {first, poll, reconnect, sid}
+    const timers = {};        // task.id -> {first, poll, sid}
     const listeners = [];
 
     function emitChange() {
@@ -397,7 +396,7 @@
       if (unsubs[task.id]) { try { unsubs[task.id](); } catch (e) { /* ignore */ } delete unsubs[task.id]; }
       if (d.api && d.api.unsubscribeTask) { try { d.api.unsubscribeTask(sid); } catch (e) { /* ignore */ } }
       if (t) {
-        [t.first, t.poll, t.reconnect].forEach(function (id) {
+        [t.first, t.poll].forEach(function (id) {
           if (id != null) { try { d.clearTimeout(id); } catch (e) { /* ignore */ } }
         });
         delete timers[task.id];
@@ -483,6 +482,10 @@
       if (msg.type === "end") { if (!finish(task)) degrade(task); emitChange(); persist(); return; }
       let payload = msg.payload;
       if (typeof payload === "string") { try { payload = JSON.parse(payload); } catch (e) { return; } }
+      // 一帧解析成功就说明这条路是通的，之前那次轮询失败留下的「状态未确认」必须清掉：
+      // 面板正是照着 unknown 渲染状态徽章的，不清的话，一条进度明明在动的任务会被
+      // 永久标成「状态未确认」—— 那是本分支最不该出现的一种谎报。
+      task.unknown = false;
       applyFor(task, payload || {});
       finish(task);
       emitChange();
@@ -535,6 +538,12 @@
 
     const store = {
       register: function (opts) {
+        // 未知域当场拒掉、连记录都不建：DOMAINS 里查不到的域，watch 与 pollOnce
+        // 都在开头直接返回 —— 排不出轮询、订阅不了推送、派生不出状态，也就永远进不了
+        // 淘汰名单（evict 与 clearFinished 都留着 running）。结果是任务中心里一条
+        // 永远显示「进行中」、用户又清不掉的僵尸记录。域名多半是新登记点打错字，
+        // 宁可这次登记失败（track 返回 null），也不能留下清不掉的东西。
+        if (!opts || !DOMAINS[opts.domain]) return null;
         const task = newTask(opts);
         tasks = evict(tasks.concat([task]), MAX_RECORDS);
         emitChange();
@@ -581,7 +590,17 @@
           .then(function (saved) {
             // 落盘文件同样要过上限：文件被手改过、或上一版写坏过，就可能比
             // register 的预算大得多。只在 register 上设上限的话，恢复是绕过它的口子。
-            tasks = evict(Array.isArray(saved) ? saved.filter((t) => t && t.id) : [], MAX_RECORDS);
+            // domain 也要校验：原来只按 t && t.id 过滤，一份域名写错的记录（旧版本、
+            // 手改过的文件）会被原样复活，而它在 DOMAINS 里查不到 —— 与上面那条
+            // 僵尸同理，永远查不到状态、也永远淘汰不掉。
+            tasks = evict(Array.isArray(saved)
+              ? saved.filter((t) => t && t.id && DOMAINS[t.domain])
+              : [], MAX_RECORDS);
+            // 载入结果先交出去，再去做逐条复查：app.js 是先 mountSkills() 再
+            // restore() 的，面板挂载在空列表上；而复查是串行的，服务端不可达时每条
+            // 都要等一次系统级连接超时（Windows 上约 130 秒）。不先 emit 的话，
+            // 唯一职责就是回答「什么在跑」的任务中心会一直显示「还没有任务记录。」。
+            emitChange();
             const pending = tasks.filter((t) => t.status === "running");
             // 逐个各查一次，不并发、不轮询：启动时服务端可能还没就绪。
             return pending.reduce(function (chain, task) {
@@ -618,7 +637,7 @@
     cancel: (id) => _singleton.cancel(id),
     restore: () => _singleton.restore(),
     _internal: {
-      MAX_RECORDS, POLL_MS, FIRST_EVENT_TIMEOUT_MS, RECONNECT_MS, SAVE_DEBOUNCE_MS,
+      MAX_RECORDS, POLL_MS, FIRST_EVENT_TIMEOUT_MS, SAVE_DEBOUNCE_MS,
       TERMINAL_STATUSES, PAUSED_STATUSES, RESUME_CHECK_MS, DOMAINS,
       isTerminal, normalizeStatus, applyPayload, evict, canCancel, cancelBody, newTask, createStore,
       deriveStatus, deriveWorkflowStatus, deriveBatchStatus, isPausedStatus,

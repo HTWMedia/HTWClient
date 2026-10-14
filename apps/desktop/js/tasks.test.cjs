@@ -348,3 +348,21 @@ test("八个面板的 track 调用点都必须先判空容器", () => {
   // 其余各 1）。低于这个数说明有面板被整体删掉了登记点。
   assert.ok(sites >= 20, "登记点不该少于 20 处，实际 " + sites);
 });
+
+test("track：域名字面量不认识时不登记（登记点打错字的最后一道防线）", () => {
+  // 上面那条源码扫描只保证每个登记点写了 if (window.HTWTasks)，保证不了域名本身是对的。
+  // 域名打错字时 watch / pollOnce 全都直接返回，记录就永远停在「进行中」，
+  // 用户在任务中心里既看不到进展、也清不掉 —— 所以 track 必须直接返回 null。
+  //
+  // 这个 window 替身是故意不还原的：单例的默认依赖按调用时读 window，
+  // 还原成 undefined 的话，登记万一真发生，那条 8 秒的首事件超时回调会顺着
+  // 降级 -> 轮询 -> 抛错 -> 再排轮询一路循环下去，把测试进程永久挂住。
+  // 替身里的 call 永不 resolve，正好把那条路掐断在本进程结束之前。
+  global.window = {
+    HTWApi: { subscribeTask: () => "sid", call: () => new Promise(() => {}) },
+    htw: { saveJson: () => {}, loadJson: () => Promise.resolve(null), onStreamEvent: () => () => {} },
+  };
+  const before = T.list().length;
+  assert.strictEqual(T.track({ domain: "ag", taskId: "TYPO" }), null, "未知域必须登记失败");
+  assert.strictEqual(T.list().length, before, "不该在列表里留下任何记录");
+});

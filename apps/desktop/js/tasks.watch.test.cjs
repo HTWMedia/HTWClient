@@ -612,3 +612,91 @@ test("恢复出来的等人任务也按慢速复查接上", async () => {
   assert.strictEqual(d.pendingOf(I.POLL_MS), 0);
   assert.strictEqual(d.pendingOf(I.RESUME_CHECK_MS), 1);
 });
+
+/* ------------------------------------------------------------------
+ * 以下是整分支评审后才看得见的三处：未知域留下的僵尸记录、
+ * 推送恢复后没人清的「状态未确认」、以及恢复时订阅者要等多久才看到记录。
+ * ------------------------------------------------------------------ */
+
+test("登记：未知域当场拒绝，不能留下一条永远「进行中」的僵尸", async () => {
+  // watch 与 pollOnce 都在开头按 DOMAINS 查不到就返回：排不出轮询、订阅不了推送，
+  // 派生不出状态。而 evict 留着 running、clearFinished 也只留 running —— 于是这条记录
+  // 永远淘汰不掉，任务中心里永远挂着「进行中」，用户清空记录也清不掉。
+  // 域名多半是新登记点打错字，所以要在建记录这一层就拒掉。
+  const d = fakeDeps();
+  let calls = 0, subs = 0;
+  d.api.call = async () => { calls++; return { ok: true, data: { status: "completed" } }; };
+  d.api.subscribeTask = () => { subs++; return "sid"; };
+  const store = I.createStore(d);
+  assert.strictEqual(store.register({ domain: "agnet", taskId: "TYPO" }), null, "域名拼错必须登记失败");
+  assert.strictEqual(store.list().length, 0, "不该留下任何记录");
+  await settle();
+  assert.strictEqual(calls, 0, "没有记录就不该有轮询");
+  assert.strictEqual(subs, 0, "没有记录就不该订阅推送");
+});
+
+test("恢复：落盘里域名字段不对的记录不得被复活成僵尸", async () => {
+  // 恢复原来只按 t && t.id 过滤。域名写错（打错字的旧版本、手改过的文件）的记录会被
+  // 原样灌进来，然后在 DOMAINS 里查不到 —— 与上面那条僵尸同一条死路。
+  const d = fakeDeps();
+  let calls = 0;
+  d.api.call = async () => { calls++; return { ok: true, data: { status: "completed" } }; };
+  d.loadJson = () => Promise.resolve([
+    savedTask("t_bad", "publishh", "P9"),   // 域名多打一个字母
+    savedTask("t_nodomain", null),          // 干脆没有域
+    savedTask("t_ok", "agent", "A10"),
+  ]);
+  const store = I.createStore(d);
+  await store.restore();
+  assert.deepStrictEqual(store.list().map((t) => t.id), ["t_ok"], "只有域名字段认得的记录才该被载入");
+  assert.strictEqual(calls, 1, "僵尸记录不该触发任何状态复查");
+});
+
+test("推送恢复后必须清掉「状态未确认」", async () => {
+  // 面板的状态徽章正是照着 unknown 渲染的：查不到时显示「状态未确认」。
+  // 恢复走完（此时还查不到）-> SSE 接上 -> 帧在流、进度在走，标记却没人清 ——
+  // 用户看着一条健康流式推送的任务，被告知状态不明。推送帧解析成功就是「这条路是通的」
+  // 这一条证据，够格清掉上一次轮询失败留下的标记。
+  const d = fakeDeps();
+  d.loadJson = () => Promise.resolve([savedTask("t_sse", "agent", "A11")]);
+  d.api.call = async () => { throw new Error("getaddrinfo ENOTFOUND"); };
+  const store = I.createStore(d);
+  await store.restore();
+  const before = store.get("t_sse");
+  assert.strictEqual(before.status, "running");
+  assert.strictEqual(before.unknown, true, "查不到时先标成状态未确认");
+  assert.strictEqual(before.transport, "sse", "仍在跑 -> 恢复流程会把它接上推送");
+
+  d.emit("agent:A11", "data", '{"status":"running","progress":35}');
+  await settle();
+  const after = store.get("t_sse");
+  assert.strictEqual(after.progress, 35, "前提：帧确实被收下并在推进");
+  assert.strictEqual(after.unknown, false, "推送帧一到就必须清掉未确认，否则徽章永远写「状态未确认」");
+});
+
+test("恢复：记录一载入就广播，不必等逐条状态复查走完", async () => {
+  // app.js 是先 mountSkills() 再 restore() 的，面板挂载在空列表上；
+  // 而复查是刻意保持串行的，服务端不可达时每条都要等一次系统级连接超时
+  // （Windows 上约 130 秒），一条接一条。此时唯一职责就是回答「什么在跑」的
+  // 任务中心不能一直显示「还没有任务记录。」—— 载入结果必须先交出去。
+  const d = fakeDeps();
+  d.loadJson = () => Promise.resolve([
+    savedTask("t_late", "batch", "B11"),
+    savedTask("t_late2", "batch", "B12"),
+  ]);
+  const gates = [];
+  d.api.call = () => new Promise((res) => { gates.push(() => res({ ok: true, data: { status: "running" } })); });
+  const store = I.createStore(d);
+  const seen = [];
+  store.onChange(() => { seen.push(store.list().map((t) => t.id).join(",")); });
+  const done = store.restore();
+  await settle();
+  assert.deepStrictEqual(seen, ["t_late,t_late2"],
+    "复查一次都还没返回时，载入的记录就必须已经广播给订阅者了");
+  // 放行复查，让 restore 自己收尾（串行复查本身刻意保持不变）
+  gates.splice(0).forEach((f) => f());
+  await settle();
+  gates.splice(0).forEach((f) => f());
+  await done;
+  assert.strictEqual(store.list().length, 2, "复查放行后记录一条都不该少");
+});
