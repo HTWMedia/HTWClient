@@ -568,6 +568,36 @@ test("等人批准时不排 3 秒轮询，批准后立刻恢复", async () => {
   assert.strictEqual(d.pendingOf(I.POLL_MS), 0, "终态不排下一轮");
 });
 
+test("「等待确认」不能活得比暂停久：批准之后立刻清掉", () => {
+  // 「等待确认」是 applyPayload 自己合出来的一句话，服务端从来没有说过它。
+  // 一旦状态往前走而不清它，任务中心里一条正在出片、甚至已经做完的创作任务
+  // 会在详情行上永远挂着「等待确认」—— 与这次改动要消灭的那类谎报正好相反。
+  const t = I.newTask({ domain: "creation", taskId: "V4", type: "video" });
+  I.applyPayload(t, { status: "waiting_approval" });
+  assert.strictEqual(t.step, "等待确认");
+  // 用户批准了：服务端回到 running，但这一帧没有带步骤文案。
+  // 此时不能把上一帧的合成标记当成真实步骤留下来。
+  I.applyPayload(t, { status: "running", progress: 30 });
+  assert.strictEqual(t.paused, false, "状态一动，暂停就该结束");
+  assert.strictEqual(t.progress, 30);
+  assert.strictEqual(t.step, null, "已经不在等了，详情行不能还写「等待确认」");
+});
+
+test("任务做完了也不能留着「等待确认」", () => {
+  const t = I.newTask({ domain: "creation", taskId: "V5", type: "video" });
+  I.applyPayload(t, { status: "waiting_approval" });
+  I.applyPayload(t, { status: "completed" });
+  assert.strictEqual(t.status, "done");
+  assert.strictEqual(t.paused, false);
+  assert.strictEqual(t.step, null, "已完成的记录挂着一句「等待确认」是纯误导");
+});
+
+test("暂停时服务端给了真实步骤，就不要用合成的标记盖掉它", () => {
+  const t = I.newTask({ domain: "creation", taskId: "V6", type: "video" });
+  I.applyPayload(t, { status: "waiting_approval", currentStepLabel: "等待你确认分镜" });
+  assert.strictEqual(t.step, "等待你确认分镜", "有真实文案就用真实文案");
+});
+
 test("恢复出来的等人任务也按慢速复查接上", async () => {
   // 落盘文件里的 paused 标记要跟着走：重启后如果一律按 3 秒轮询接上，
   // 等着人批准的那批会话会在用户回来之前白烧掉几万次请求。

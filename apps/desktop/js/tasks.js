@@ -46,6 +46,13 @@
   const PAUSED_STATUSES = { waiting_approval: 1 };
   const RESUME_CHECK_MS = 60000;
 
+  // 「等待确认」是客户端**自己**合出来的一句话，服务端从来没说过它
+  // （创作状态端点给的是 currentStepLabel / currentStepId）。
+  // 记下它是为了能只清自己写的那一句：状态往前走时把标记擦掉，
+  // 免得一条正在出片、甚至已经做完的记录，详情行上还挂着「等待确认」。
+  // 用常量而不是就地写字面量，是为了「补标记」和「清标记」两处必然同源。
+  const PAUSED_STEP = "等待确认";
+
   function isPausedStatus(s) {
     if (s === null || s === undefined) return false;
     return !!PAUSED_STATUSES[String(s).trim().toLowerCase()];
@@ -123,7 +130,12 @@
     const p = payload;
     const url = p.downloadUrl || p.cloudUrl || p.videoUrl || p.url || "";
     if (p.error) task.error = String(p.error);
-    if (p.currentStep || p.step) task.step = String(p.currentStep || p.step);
+    // 步骤字段各域叫法不一。创作域给的是 currentStepLabel / currentStepId
+    // （创作面板自己就是读这两个 —— create.js 的 renderDetail），
+    // 原来这里一个都不认，结果每一条创作记录的步骤行都是空的，
+    // 只有暂停时补的那句合成文案在显示。放在最前面是因为它最贴人。
+    if (p.currentStepLabel || p.currentStepId) task.step = String(p.currentStepLabel || p.currentStepId);
+    else if (p.currentStep || p.step) task.step = String(p.currentStep || p.step);
     else if (p.stage) task.step = String(p.stage);
     const pr = num(p.progress != null ? p.progress : p.percent);
     if (pr != null) task.progress = Math.max(0, Math.min(100, pr));
@@ -157,7 +169,14 @@
       // 面板把状态徽章显示成「进行中」（它只认 running/done/failed/canceled/interrupted
       // 五个词），所以「在等人批准」这句话只能落到副标题这一行上，否则用户无从判断
       // 为什么这条任务几分钟没动。服务端没给步骤文案时才补，不覆盖真实步骤。
-      if (paused && !task.step) task.step = "等待确认";
+      if (paused) {
+        if (!task.step) task.step = PAUSED_STEP;
+      } else if (task.step === PAUSED_STEP) {
+        // 标记不能活得比暂停久：用户批准之后、乃至任务做完之后，详情行还写着
+        // 「等待确认」就是在骗人 —— 它说的是上一个状态。上面那句已经先把真实
+        // 步骤写进来了，所以能走到这里的只可能是我们自己补的那句。
+        task.step = null;
+      }
     }
 
     task.status = next;

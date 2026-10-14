@@ -136,6 +136,33 @@ test("applyPayload: agent 域取出进度与步骤", () => {
   assert.strictEqual(t.status, "running");
 });
 
+test("applyPayload: 创作域的 currentStepLabel / currentStepId 要能显示出来", () => {
+  // 创作状态端点给的是这两个字段，创作面板自己也是这么读的（create.js 的 renderDetail）。
+  // store 不认它们的话，一条创作任务的详情行除了暂停时那句合成的「等待确认」之外
+  // 永远是空的 —— 缺口不只影响暂停中的那批，是**所有**创作记录。
+  const t = I.newTask({ domain: "creation", taskId: "C1", type: "video" });
+  I.applyPayload(t, { status: "running", currentStepLabel: "生成画面" });
+  assert.strictEqual(t.step, "生成画面");
+
+  // 没有文案时退回 id，总比空着强
+  const u = I.newTask({ domain: "creation", taskId: "C2", type: "video" });
+  I.applyPayload(u, { status: "running", currentStepId: "script_gen" });
+  assert.strictEqual(u.step, "script_gen");
+
+  // 两个都有时以文案为准（与创作面板同口径）
+  const v = I.newTask({ domain: "creation", taskId: "C3", type: "video" });
+  I.applyPayload(v, { status: "running", currentStepLabel: "生成画面", currentStepId: "video_gen" });
+  assert.strictEqual(v.step, "生成画面");
+
+  // 别的域的既有读法不能被挤掉
+  const w = I.newTask({ domain: "agent", taskId: "A9" });
+  I.applyPayload(w, { status: "running", currentStep: "合成中" });
+  assert.strictEqual(w.step, "合成中");
+  const x = I.newTask({ domain: "workflow", taskId: "W9" });
+  I.applyPayload(x, { stage: "compose" });
+  assert.strictEqual(x.step, "compose");
+});
+
 test("applyPayload: cloudUrl 与 downloadUrl 都能作为产物地址", () => {
   const a = I.newTask({ domain: "agent", taskId: "A2" });
   I.applyPayload(a, { status: "completed", cloudUrl: "https://cdn/x.mp4" });
