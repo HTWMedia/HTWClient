@@ -110,7 +110,12 @@
         if (!up.ok) { UI.showError(region, formatErr(up)); return; }
         const taskId = up.taskId || (up.data && up.data.taskId);
         if (!taskId) { UI.showError(region, "未返回 taskId: " + JSON.stringify(up.data)); return; }
-        window.HTWTasks.track({ domain: "edit", taskId: taskId, panel: "edit", title: "剪辑处理" });
+        // 标题沿用面板自己给这一趟定的名字（粗剪完成 / 包装完成 / 超分完成），只是去掉结尾的
+        // 「完成」：记录在跑的时候就写「完成」是自相矛盾的。这三个入口共用 runTask，
+        // 不带区分度的话任务中心里三条剪辑记录全都长一个样。
+        // 判空再调：容器缺席时静默跳过，否则这一行抛出的 TypeError 会被按钮的 catch
+        // 接成「请求异常」，一次其实已经提交成功的剪辑被报成失败。
+        if (window.HTWTasks) window.HTWTasks.track({ domain: "edit", taskId: taskId, panel: "edit", title: String(title || "剪辑处理").replace(/完成$/, "") });
         const res = await pollEdit(taskId, region);
         if (!res.ok) { UI.showError(region, formatErr(res)); return; }
         const d = (res.data && res.data.result) || res.data;
@@ -328,7 +333,7 @@
             if (!up.ok) { UI.showError(csRegion, formatErr(up)); return; }
             const taskId = up.taskId || (up.data && up.data.taskId);
             if (!taskId) { UI.showError(csRegion, "未返回 taskId: " + JSON.stringify(up.data)); return; }
-            window.HTWTasks.track({ domain: "edit", taskId: taskId, panel: "edit", title: "剪同款" });
+            if (window.HTWTasks) window.HTWTasks.track({ domain: "edit", taskId: taskId, panel: "edit", title: "剪同款" });
             const res = await pollEdit(taskId, csRegion);
             if (!res.ok) { UI.showError(csRegion, formatErr(res)); return; }
             const d = (res.data && res.data.result) || res.data;
@@ -350,7 +355,7 @@
             if (!up.ok) { UI.showError(draftRegion, formatErr(up)); return; }
             const taskId = up.taskId || (up.data && up.data.taskId);
             if (!taskId) { UI.showError(draftRegion, "未返回 taskId: " + JSON.stringify(up.data)); return; }
-            window.HTWTasks.track({ domain: "edit", taskId: taskId, panel: "edit", title: "草稿导出" });
+            if (window.HTWTasks) window.HTWTasks.track({ domain: "edit", taskId: taskId, panel: "edit", title: "草稿导出" });
             UI.showResult(draftRegion, { message: "已提交，taskId=" + taskId + "，处理中…", warnings: up.data.warnings });
             const res = await pollEdit(taskId, draftRegion);
             if (!res.ok) { UI.showError(draftRegion, formatErr(res)); return; }

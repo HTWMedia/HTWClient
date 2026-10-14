@@ -134,7 +134,11 @@ function startCreation(tab, state, root) {
     state.polling = true;
     state.lastSig = null;
     card.querySelector('#cstatus').textContent = '进行中';
-    window.HTWTasks.track({ domain: "creation", taskId: id, panel: "create", title: "创作", type: tab });
+    // 判空再调：容器缺席时静默跳过，否则这一行抛出的 TypeError 会被下面的 catch
+    // 接成「启动失败」，一次其实已经建好的创作会话被报成没起来。
+    // 标题按 tab 分开：三条创作记录都叫「创作」的话，任务中心里根本分不出
+    // 哪一条在跑；这里就是把面板自己已经知道的形态照抄成标题。
+    if (window.HTWTasks) window.HTWTasks.track({ domain: "creation", taskId: id, panel: "create", title: tab === 'image' ? "图片创作" : tab === 'article' ? "文章创作" : "视频创作", type: tab });
     poll(tab, state, root);
   }).catch(e => {
     card.querySelector('#cstatus').textContent = '启动失败：' + (e.message || e);

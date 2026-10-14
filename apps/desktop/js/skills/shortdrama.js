@@ -155,7 +155,9 @@ Skills.shortdrama = {
             if (!r.ok) { setErr("启动失败：" + formatErr(r)); restore(); return; }
             taskId = r.taskId || (r.data && (r.data.taskId || r.data.TaskId));
             if (!taskId) { setErr("未返回任务 ID：" + JSON.stringify(r.data)); restore(); return; }
-            window.HTWTasks.track({ domain: "agent", taskId: taskId, panel: "shortdrama", title: "短剧创作" });
+            // 判空再调：容器缺席必须是静默跳过，否则这一行抛出的 TypeError 会被
+            // 下面的 catch 接成「启动失败」，把一次其实已经提交成功的生成报成失败。
+            if (window.HTWTasks) window.HTWTasks.track({ domain: "agent", taskId: taskId, panel: "shortdrama", title: "短剧创作" });
             pollStatus();
           })
           .catch(function (e) { setErr("启动失败：" + (e && e.message ? e.message : e)); restore(); });
@@ -324,7 +326,14 @@ Skills.shortdrama = {
         showProgress("正在启动重新合成...");
         api.post("/api/v2/agent/recompose?taskId=" + encodeURIComponent(tid), {})
           .then(function (r) {
-            if (r.ok) pollRecompose(tid, recomposeBtn);
+            if (r.ok) {
+              // 重新合成复用的是同一个 taskId，所以任务中心里那条记录早已是终态，
+              // 而且 store 的终态粘滞守卫会（正确地）拒绝把它拉回 running ——
+              // 结果就是面板还在转，任务中心却说「已完成」。重新登记一条新记录，
+              // 用户才能看到这一趟真实在跑；旧记录仍然留着，作为上一趟的结局。
+              if (window.HTWTasks) window.HTWTasks.track({ domain: "agent", taskId: tid, panel: "shortdrama", title: "重新合成成片" });
+              pollRecompose(tid, recomposeBtn);
+            }
             else { setErr("重新合成启动失败：" + formatErr(r)); recomposeBtn.disabled = false; progressCard.style.display = "none"; }
           })
           .catch(function (e) {

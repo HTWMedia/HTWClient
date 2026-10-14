@@ -295,3 +295,29 @@ test("只有服务端已支持的六个域走 SSE", () => {
   assert.strictEqual(I.DOMAINS.edit.sse, false);
   assert.strictEqual(I.DOMAINS.image.sse, false);
 });
+
+test("八个面板的 track 调用点都必须先判空容器", () => {
+  // 容器缺席（script 标签被删、或加载顺序滑到面板之后）时，面板里直接调
+  // window.HTWTasks.track 会抛 TypeError，被面板自己的 catch 接成「启动失败」
+  // 「请求异常」：一次其实已经提交成功的任务被报成失败，面板随后也不再开始轮询。
+  // 容器自己的面板（tasks-panel.js）另用 store() 容错读取，面板侧要对齐同一套约定。
+  // 这里用源码扫描把这条约定钉住：将来新增的登记点忘了判空，套件会红。
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const dir = path.join(__dirname, "skills");
+  const panels = ["shortdrama", "marketing", "tools", "publish", "create", "workflow", "batch", "edit"];
+  const GUARD = "if (window.HTWTasks) ";
+  let sites = 0;
+  for (const name of panels) {
+    const lines = fs.readFileSync(path.join(dir, name + ".js"), "utf8").split(/\r?\n/);
+    lines.forEach((line, i) => {
+      if (line.indexOf("HTWTasks.track") < 0) return;
+      sites++;
+      assert.strictEqual(line.trim().indexOf(GUARD), 0,
+        name + ".js:" + (i + 1) + " 的 track 调用没有判空容器：" + line.trim());
+    });
+  }
+  // 数量下限：八面板当前共 20 处（tools 9 / edit 3 / workflow 2 / shortdrama 2，
+  // 其余各 1）。低于这个数说明有面板被整体删掉了登记点。
+  assert.ok(sites >= 20, "登记点不该少于 20 处，实际 " + sites);
+});
