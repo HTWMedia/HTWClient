@@ -155,6 +155,7 @@ Skills.shortdrama = {
             if (!r.ok) { setErr("启动失败：" + formatErr(r)); restore(); return; }
             taskId = r.taskId || (r.data && (r.data.taskId || r.data.TaskId));
             if (!taskId) { setErr("未返回任务 ID：" + JSON.stringify(r.data)); restore(); return; }
+            window.HTWTasks.track({ domain: "agent", taskId: taskId, panel: "shortdrama", title: "短剧创作" });
             pollStatus();
           })
           .catch(function (e) { setErr("启动失败：" + (e && e.message ? e.message : e)); restore(); });

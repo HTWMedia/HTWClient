@@ -212,6 +212,7 @@ Skills.marketing = {
           if (!taskId) { showSubmitDataError(r.data); return; }
           // 拿到 taskId 才允许取消 —— 取消接口靠它定位任务
           cancelBtn.style.display = "inline-block";
+          window.HTWTasks.track({ domain: "marketvideo", taskId: taskId, panel: "marketing", title: "营销成片" });
           pollStatus();
         })
         .catch(function (e) { showSubmitMsg("提交失败：" + (e && e.message ? e.message : e)); });

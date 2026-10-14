@@ -540,6 +540,13 @@
 
   return {
     register: (o) => _singleton.register(o),
+    // 面板里统一走这个：容器的存在与否、以及 window.htw 未就绪，都不该让面板崩掉。
+    track: function (o) {
+      try {
+        if (typeof o === "object" && o && o.domain && o.taskId) return _singleton.register(o);
+      } catch (e) { /* 登记失败绝不能影响面板自己的流程 */ }
+      return null;
+    },
     list: () => _singleton.list(),
     get: (id) => _singleton.get(id),
     onChange: (fn) => _singleton.onChange(fn),

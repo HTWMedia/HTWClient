@@ -354,6 +354,8 @@
         }).then(function (r) {
           go.disabled = false;
           if (!r || !r.ok) { msg.textContent = ""; UI.showError(msg.parentNode, explain(r)); return; }
+          var workflowId = r.taskId || (r.data && r.data.workflowId);
+          window.HTWTasks.track({ domain: "workflow", taskId: workflowId, panel: "workflow", title: "工作流" });
           // 直接切到「进行中」看进度，不在这里弹成功提示：切走时该节点会被清掉，写了也看不见。
           renderTab("running");
         }).catch(function (e) {

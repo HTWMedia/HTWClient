@@ -110,6 +110,7 @@
         if (!up.ok) { UI.showError(region, formatErr(up)); return; }
         const taskId = up.taskId || (up.data && up.data.taskId);
         if (!taskId) { UI.showError(region, "未返回 taskId: " + JSON.stringify(up.data)); return; }
+        window.HTWTasks.track({ domain: "edit", taskId: taskId, panel: "edit", title: "剪辑处理" });
         const res = await pollEdit(taskId, region);
         if (!res.ok) { UI.showError(region, formatErr(res)); return; }
         const d = (res.data && res.data.result) || res.data;
@@ -327,6 +328,7 @@
             if (!up.ok) { UI.showError(csRegion, formatErr(up)); return; }
             const taskId = up.taskId || (up.data && up.data.taskId);
             if (!taskId) { UI.showError(csRegion, "未返回 taskId: " + JSON.stringify(up.data)); return; }
+            window.HTWTasks.track({ domain: "edit", taskId: taskId, panel: "edit", title: "剪同款" });
             const res = await pollEdit(taskId, csRegion);
             if (!res.ok) { UI.showError(csRegion, formatErr(res)); return; }
             const d = (res.data && res.data.result) || res.data;
@@ -348,6 +350,7 @@
             if (!up.ok) { UI.showError(draftRegion, formatErr(up)); return; }
             const taskId = up.taskId || (up.data && up.data.taskId);
             if (!taskId) { UI.showError(draftRegion, "未返回 taskId: " + JSON.stringify(up.data)); return; }
+            window.HTWTasks.track({ domain: "edit", taskId: taskId, panel: "edit", title: "草稿导出" });
             UI.showResult(draftRegion, { message: "已提交，taskId=" + taskId + "，处理中…", warnings: up.data.warnings });
             const res = await pollEdit(taskId, draftRegion);
             if (!res.ok) { UI.showError(draftRegion, formatErr(res)); return; }

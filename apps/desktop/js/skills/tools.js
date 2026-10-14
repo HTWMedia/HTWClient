@@ -210,6 +210,7 @@
             const up = await API.call("POST", "/api/v2/voice/transcribe", { fileId: fid, format: transFmt.value, language: transLang.value, translate: transTranslate.checked, role: transRoleChk.checked, alignText: transAlignChk.checked ? transAlignText.value.trim() : "" });
             if (!up.ok) { UI.showError(transcribeRegion, formatErr(up)); return; }
             UI.showResult(transcribeRegion, { message: "已提交 taskId=" + (up.taskId || (up.data && up.data.taskId)) });
+            window.HTWTasks.track({ domain: "voice", taskId: up.taskId || (up.data && up.data.taskId), panel: "tools", title: "语音转写" });
             await pollVoiceTask(transcribeRegion, up.taskId || (up.data && up.data.taskId));
           } catch (e) { UI.showError(transcribeRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
@@ -277,6 +278,7 @@
           try {
             const up = await API.call("POST", "/api/v2/image/generate", { prompt: p, model: "v4.5", ratio: imgRatio.value, resolution: imgRes.value, negativePrompt: imgNeg.value });
             if (!up.ok) { UI.showError(imgGenRegion, formatErr(up)); return; }
+            window.HTWTasks.track({ domain: "image", taskId: up.taskId || (up.data && up.data.taskId), panel: "tools", title: "图片生成" });
             await pollImage(up.taskId || (up.data && up.data.taskId)).then(function (res) { if (!res.ok) { UI.showError(imgGenRegion, formatErr(res)); return; } UI.showResult(imgGenRegion, res.data); });
           } catch (e) { UI.showError(imgGenRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
@@ -302,6 +304,7 @@
             if (!up.ok) { UI.showError(agentRegion, formatErr(up)); return; }
             const tid = up.taskId || (up.data && up.data.taskId);
             UI.showResult(agentRegion, { message: "已提交 taskId=" + tid, statusUrl: up.data && up.data.statusUrl, streamUrl: up.data && up.data.streamUrl });
+            window.HTWTasks.track({ domain: "agent", taskId: tid, panel: "tools", title: "一键成片" });
             if (tid) { await pollAgent(tid).then(function (res) { if (!res.ok) { UI.showError(agentRegion, formatErr(res)); return; } UI.showResult(agentRegion, res.data); }); }
           } catch (e) { UI.showError(agentRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
@@ -314,6 +317,7 @@
             if (!files.length) { UI.showError(subRegion, "请选择视频"); return; }
             const up = await API.upload("POST", "/api/v2/subtitle/extract", files, { format: subFormat.value, engine: subEngine.value || "kimi" });
             if (!up.ok) { UI.showError(subRegion, formatErr(up)); return; }
+            window.HTWTasks.track({ domain: "subtitle", taskId: up.taskId || (up.data && up.data.taskId), panel: "tools", title: "字幕提取" });
             await pollSub(up.taskId || (up.data && up.data.taskId)).then(function (res) { if (!res.ok) { UI.showError(subRegion, formatErr(res)); return; } UI.showResult(subRegion, res.data); });
           } catch (e) { UI.showError(subRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });

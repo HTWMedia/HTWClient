@@ -134,6 +134,7 @@ function startCreation(tab, state, root) {
     state.polling = true;
     state.lastSig = null;
     card.querySelector('#cstatus').textContent = '进行中';
+    window.HTWTasks.track({ domain: "creation", taskId: id, panel: "create", title: "创作", type: tab });
     poll(tab, state, root);
   }).catch(e => {
     card.querySelector('#cstatus').textContent = '启动失败：' + (e.message || e);

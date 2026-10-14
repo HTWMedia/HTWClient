@@ -397,6 +397,7 @@
         var sum = submitSummary(r.data);
         if (sum.accepted > 0) {
           lastBatchId = r.data.batchId || "";
+          window.HTWTasks.track({ domain: "batch", taskId: lastBatchId, panel: "batch", title: "批量任务" });
           renderTab("status");
           return;
         }

@@ -360,6 +360,7 @@
             });
             if (!up.ok) { UI.showError(pubRegion, formatErr(up)); return; }
             UI.showResult(pubRegion, { message: "已提交发布 taskId=" + (up.taskId || (up.data && up.data.taskId)), taskId: up.taskId || (up.data && up.data.taskId) });
+            window.HTWTasks.track({ domain: "publish", taskId: up.taskId || (up.data && up.data.taskId), panel: "publish", title: "多平台发布" });
             switchTab("queue");
           } catch (e) { UI.showError(pubRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
