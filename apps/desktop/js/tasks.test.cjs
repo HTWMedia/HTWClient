@@ -35,7 +35,22 @@ test("expired 是终态 —— batch 域的任务记录被服务端清掉后写�
   // BatchController.cs：任务状态先于批次记录被清理时（成片 1 小时、批次 6 小时），
   // 条目状态回落成 expired。它是终态，漏判就会把这条记录永远留在 running。
   assert.ok(I.isTerminal("expired"));
-  assert.strictEqual(I.normalizeStatus("expired"), "done");
+  assert.strictEqual(I.normalizeStatus("expired"), "interrupted");
+});
+
+test("expired 必须映射为已中断，绝不能显示成绿色成功", () => {
+  // expired 的含义是「记录被服务端清掉了」，不是「做完了」：结局未知、产物也已不可达。
+  // 顺着兜底分支落到 done 会把一条根本没结果的记录渲染成成功，用户点进去空空如也。
+  // 与 notfound 同档 —— 两者都是「服务端那边已经没有这条任务了」。
+  assert.strictEqual(I.normalizeStatus("expired"), "interrupted");
+  assert.strictEqual(I.normalizeStatus("EXPIRED"), "interrupted");
+  assert.strictEqual(I.normalizeStatus(" expired "), "interrupted");
+  const t = I.newTask({ domain: "batch", taskId: "B1" });
+  I.applyPayload(t, { status: "expired" });
+  assert.strictEqual(t.status, "interrupted");
+  assert.ok(t.endedAt, "落终态就必须记结束时间");
+  // 它是终态，所以能被淘汰掉，不会变成永远淘汰不掉的僵尸
+  assert.strictEqual(I.evict([t], 0).length, 0);
 });
 
 test("normalizeStatus：服务端词表映射到内部词表", () => {
@@ -43,7 +58,7 @@ test("normalizeStatus：服务端词表映射到内部词表", () => {
     ["running", "running"], ["uploading", "running"], ["pending", "running"],
     ["success", "done"], ["completed", "done"], ["done", "done"],
     ["DONE", "done"], ["  Completed  ", "done"],
-    ["expired", "done"], ["draft_saved", "done"], ["awaiting_manual", "done"],
+    ["expired", "interrupted"], ["draft_saved", "done"], ["awaiting_manual", "done"],
     ["failed", "failed"], ["error", "failed"], ["partial_failed", "failed"],
     ["canceled", "canceled"], ["cancelled", "canceled"],
     ["notfound", "interrupted"],

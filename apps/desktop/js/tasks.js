@@ -46,7 +46,13 @@
     const s = String(status).trim().toLowerCase();
     if (!s) return null;
     if (!isTerminal(s)) return "running";
+    // notfound 与 expired 是同一类：服务端那边已经没有这条任务记录了。
     if (s === "notfound") return "interrupted";
+    // expired 必须单独点名、落到「已中断」，绝不能顺着结尾的兜底分支掉进 done。
+    // 它的含义是「记录已被服务端的定期清理删掉」（BatchController 对成片 1 小时、
+    // 批次 6 小时后清理，条目状态回落成 expired），不是「做完了」—— 结局未知、
+    // 产物也已不可达，显示成绿色成功等于替服务端撒谎，用户点进去只会发现什么都没有。
+    if (s === "expired") return "interrupted";
     if (s === "canceled" || s === "cancelled") return "canceled";
     // partial_failed 必须落到失败而不是成功：publish 域只有这一个失败信号
     // （FinalizeTask 一旦有子任务非 success 就写它），映射成 done 会让
