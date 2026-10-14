@@ -38,7 +38,11 @@ function isAllowedBase(u) {
 function registerBase(u) {
   const o = originOf(u);
   if (!o || !/^https?:\/\//.test(o)) return false;
-  if (BASE_ORIGINS.indexOf(o) < 0) BASE_ORIGINS.push(o);
+  if (BASE_ORIGINS.indexOf(o) < 0) {
+    BASE_ORIGINS.push(o);
+    // SSE 由主进程发起，那边有独立的一份白名单 —— 放行结果要同步过去。
+    try { ipcRenderer.send("htw:allowBase", o); } catch (e) { /* 主进程还没起来 */ }
+  }
   return true;
 }
 
@@ -97,6 +101,27 @@ contextBridge.exposeInMainWorld("htw", {
   openExternal: (url) => {
     if (!url) return;
     ipcRenderer.invoke("htw:openExternal", String(url)).catch(function () { /* ignore */ });
+  },
+  // SSE 进度订阅。渲染层连不上服务端：它是 file:// 源，Origin 为 null，
+  // 而服务端 CORS 白名单不含 file://；且 AuthKey 属非简单头会触发预检。
+  // 两条路都堵死，所以连接一律由主进程发起，这里只做转发与白名单校验。
+  subscribeTask: (streamId, domain, taskId, apiKey, baseOverride) => {
+    const base = resolveBase(baseOverride);
+    if (!isAllowedBase(base)) return Promise.resolve(baseRejected(base));
+    return ipcRenderer
+      .invoke("htw:subscribe", { streamId, domain, taskId, base, apiKey: apiKey || "" })
+      .catch((e) => ({ ok: false, errMsg: String((e && e.message) || e) }));
+  },
+  unsubscribeTask: (streamId) => {
+    try { ipcRenderer.send("htw:unsubscribe", String(streamId)); } catch (e) { /* ignore */ }
+  },
+  onStreamEvent: (cb) => {
+    if (typeof cb !== "function") return function () {};
+    const listener = (_e, msg) => { try { cb(msg); } catch (e) { /* 回调出错不能影响连接 */ } };
+    ipcRenderer.on("htw:stream-event", listener);
+    return function () {
+      try { ipcRenderer.removeListener("htw:stream-event", listener); } catch (e) { /* ignore */ }
+    };
   },
   // Generic V2 caller. `body` is optional (omitted => GET).
   // baseOverride 用于大文件直连通道（可选，需在「设置」或环境变量中配置）。
