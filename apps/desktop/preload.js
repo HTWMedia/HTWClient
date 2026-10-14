@@ -38,7 +38,11 @@ function isAllowedBase(u) {
 function registerBase(u) {
   const o = originOf(u);
   if (!o || !/^https?:\/\//.test(o)) return false;
-  if (BASE_ORIGINS.indexOf(o) < 0) BASE_ORIGINS.push(o);
+  if (BASE_ORIGINS.indexOf(o) < 0) {
+    BASE_ORIGINS.push(o);
+    // SSE 由主进程发起，那边有独立的一份白名单 —— 放行结果要同步过去。
+    try { ipcRenderer.send("htw:allowBase", o); } catch (e) { /* 主进程还没起来 */ }
+  }
   return true;
 }
 
@@ -82,6 +86,16 @@ function loadJson(name) {
   return ipcRenderer.invoke("htw:loadJson", name).catch(function () { return null; });
 }
 
+// SSE 事件的唯一分发入口。主进程推来的事件与本地合成的事件（例如地址未登记时补发的
+// error）都走这里，渲染层只认这一个通道，不用关心事件是从哪来的。
+const streamEventListeners = [];
+function dispatchStreamEvent(msg) {
+  for (let i = 0; i < streamEventListeners.length; i++) {
+    try { streamEventListeners[i](msg); } catch (e) { /* 回调出错不能影响连接 */ }
+  }
+}
+ipcRenderer.on("htw:stream-event", (_e, msg) => { dispatchStreamEvent(msg); });
+
 // Expose a minimal, safe API to the renderer. The actual request signing
 // (AuthKey header) is done by the renderer; the key never leaves the client.
 contextBridge.exposeInMainWorld("htw", {
@@ -97,6 +111,36 @@ contextBridge.exposeInMainWorld("htw", {
   openExternal: (url) => {
     if (!url) return;
     ipcRenderer.invoke("htw:openExternal", String(url)).catch(function () { /* ignore */ });
+  },
+  // SSE 进度订阅。渲染层连不上服务端：它是 file:// 源，Origin 为 null，
+  // 而服务端 CORS 白名单不含 file://；且 AuthKey 属非简单头会触发预检。
+  // 两条路都堵死，所以连接一律由主进程发起，这里只做转发与白名单校验。
+  subscribeTask: (streamId, domain, taskId, apiKey, baseOverride) => {
+    const base = resolveBase(baseOverride);
+    if (!isAllowedBase(base)) {
+      // 地址被白名单拒掉时请求根本没发出去，主进程也不会有任何回音。而 api.js 那边的
+      // subscribeTask 是即发即弃、只取 streamId 的返回值，这里 resolve 出去的错误对象
+      // 没人看 —— 不补一个 error 事件，任务就会永远停在"进行中"，连降级轮询都不会触发。
+      // 延迟一拍再合成：调用方通常是先注册 onStreamEvent 再订阅，同步派发可能早于注册。
+      setTimeout(() => {
+        dispatchStreamEvent({ streamId: String(streamId), type: "error", payload: { message: "BASE_NOT_ALLOWED", base: String(base) } });
+      }, 0);
+      return Promise.resolve(baseRejected(base));
+    }
+    return ipcRenderer
+      .invoke("htw:subscribe", { streamId, domain, taskId, base, apiKey: apiKey || "" })
+      .catch((e) => ({ ok: false, errMsg: String((e && e.message) || e) }));
+  },
+  unsubscribeTask: (streamId) => {
+    try { ipcRenderer.send("htw:unsubscribe", String(streamId)); } catch (e) { /* ignore */ }
+  },
+  onStreamEvent: (cb) => {
+    if (typeof cb !== "function") return function () {};
+    streamEventListeners.push(cb);
+    return function () {
+      const i = streamEventListeners.indexOf(cb);
+      if (i >= 0) streamEventListeners.splice(i, 1);
+    };
   },
   // Generic V2 caller. `body` is optional (omitted => GET).
   // baseOverride 用于大文件直连通道（可选，需在「设置」或环境变量中配置）。

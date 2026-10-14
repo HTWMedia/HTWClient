@@ -354,6 +354,10 @@
         }).then(function (r) {
           go.disabled = false;
           if (!r || !r.ok) { msg.textContent = ""; UI.showError(msg.parentNode, explain(r)); return; }
+          var workflowId = r.taskId || (r.data && r.data.workflowId);
+          // 判空再调：容器缺席时静默跳过，否则这一行抛出的 TypeError 会被下面的
+          // catch 接成一句提交失败，把一次其实已经起成的工作流报成没起来。
+          if (window.HTWTasks) window.HTWTasks.track({ domain: "workflow", taskId: workflowId, panel: "workflow", title: "工作流" });
           // 直接切到「进行中」看进度，不在这里弹成功提示：切走时该节点会被清掉，写了也看不见。
           renderTab("running");
         }).catch(function (e) {
@@ -382,6 +386,18 @@
           batchBtn.disabled = false;
           if (!r || !r.ok) { msg.textContent = ""; UI.showError(msg.parentNode, explain(r)); return; }
           var sum = batchSummary(r.data);
+          // 批量启动一次起了 N 条工作流，每条都要走完整条链路（出片→包装→文案→发布），
+          // 正是任务中心存在的意义，不登记的话用户只能守在这个面板上等。
+          // 标识取 items[].workflowId —— WorkflowController.CreateBatch 的响应是
+          // { total, accepted, rejected, items: [{ index, workflowId, topic }] }，
+          // 与面板自己读 accepted / rejected 同一个响应体。只登记真起来了的：
+          // rejected 的那几条服务端压根没有这条记录，登记进去就是一条永远收敛不了
+          // 的「进行中」。标题带上主题是为了在列表里能分辨是哪一条（主题截断，
+          // 免得一行标题把整个面板撑开）。
+          ((r.data && r.data.items) || []).forEach(function (it) {
+            var topic = it && it.topic ? String(it.topic).slice(0, 20) : "";
+            if (window.HTWTasks) window.HTWTasks.track({ domain: "workflow", taskId: it && it.workflowId, panel: "workflow", title: topic ? "工作流 · " + topic : "批量工作流" });
+          });
           UI.clear(msg.parentNode);
           // 部分成功时**留在本页**把明细摊开：批量最常见的就是"大部分起来了、几条没进去"
           // （速率票据按条计，免费档一分钟只放得下几条）。直接切走等于把这事藏起来，

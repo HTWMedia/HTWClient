@@ -212,6 +212,9 @@ Skills.marketing = {
           if (!taskId) { showSubmitDataError(r.data); return; }
           // 拿到 taskId 才允许取消 —— 取消接口靠它定位任务
           cancelBtn.style.display = "inline-block";
+          // 判空再调：容器缺席时静默跳过，否则这一行抛出的 TypeError 会被下面的 catch
+          // 接成「提交失败」，把一次其实已经提交成功的成片报成没起来。
+          if (window.HTWTasks) window.HTWTasks.track({ domain: "marketvideo", taskId: taskId, panel: "marketing", title: "营销成片" });
           pollStatus();
         })
         .catch(function (e) { showSubmitMsg("提交失败：" + (e && e.message ? e.message : e)); });

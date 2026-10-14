@@ -2,7 +2,7 @@
   // 面板白名单：showPanel 只给名单里的面板切active。
   // 🔴 新增面板**必须**同时改这里——只加 index.html 的 section 与 nav 按钮的话，
   //    点导航会"点了没反应"（面板永远不激活），而且不报任何错。
-  const SKILLS = ["insight", "topics", "edit", "tools", "publish", "assistant", "create", "marketing", "batch", "shortdrama", "workflow"];
+  const SKILLS = ["insight", "topics", "edit", "tools", "publish", "assistant", "create", "marketing", "batch", "shortdrama", "workflow", "tasks"];
 
   function getBaseInput() { return document.getElementById("api-base"); }
   function getKeyInput() { return document.getElementById("api-key"); }
@@ -159,6 +159,12 @@
     if (window.HTWApi && window.HTWApi.onQuotaExceeded) window.HTWApi.onQuotaExceeded(showQuotaBanner);
     wireNav();
     mountSkills();
+    // 任务恢复要等配置与 AuthKey 就绪，所以排在 mountSkills 之后。
+    // 注意面板在 mountSkills 里已经渲染过一次（那时列表还是空的）：真正把记录显示
+    // 出来的是 restore() 末尾那次 emitChange()，它通知已订阅的面板重渲染。
+    if (window.HTWTasks && window.HTWTasks.restore) {
+      try { window.HTWTasks.restore(); } catch (e) { /* 恢复失败不该挡住启动 */ }
+    }
     // README 主推的工作流从「选题」开始；默认落在「工具」会让新用户第一眼看到一堆
     // 与创作无关的卡片（此前选题面板还是坏的，更糟）。
     showPanel("topics");

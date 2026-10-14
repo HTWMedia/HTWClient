@@ -397,6 +397,8 @@
         var sum = submitSummary(r.data);
         if (sum.accepted > 0) {
           lastBatchId = r.data.batchId || "";
+          // 判空再调：容器缺席时静默跳过，登记本身不该有能力打断面板自己的流程。
+          if (window.HTWTasks) window.HTWTasks.track({ domain: "batch", taskId: lastBatchId, panel: "batch", title: "批量任务" });
           renderTab("status");
           return;
         }

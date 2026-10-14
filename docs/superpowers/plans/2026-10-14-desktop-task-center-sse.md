@@ -75,7 +75,7 @@ const { parseSseChunk } = require("./sse-parser.js");
  *   "data: {json}\n\n"   —— 状态快照
  *   ": ka\n\n"           —— keepalive 注释
  *   "event: end\ndata: {}\n\n"
- * 最易错的是一条 data 被 TCP 拆到两个包��，所以解析必须是无状态的
+ * 最易错的是一条 data 被 TCP 拆到两个包里，所以解析必须是无状态的
  * （靠 remainder 续接），不能假设一个 chunk 就是一个完整事件。
  */
 
@@ -492,7 +492,7 @@ git commit -m "桌面端：主进程新增进度推送连接池与订阅桥接"
 
 ## Task 3: 任务容器的纯逻辑
 
-记录结构、域注册表、终态判定、落盘节流、200 条淘汰。全部无 I/O，可独立单测。
+记录结构、域注册表、终态判定、状态归一、200 条淘汰。全部无 I/O，可独立单测（落盘节流与 watch 状态机在 Task 4）。
 
 **Files:**
 - Create: `apps/desktop/js/tasks.js`
@@ -509,7 +509,8 @@ git commit -m "桌面端：主进程新增进度推送连接池与订阅桥接"
   - `clearFinished() -> void`
   - `restore() -> Promise`
   - `cancel(id) -> Promise`
-  - `_internal`: `{ MAX_RECORDS, TERMINAL_STATUSES, POLL_MS, FIRST_EVENT_TIMEOUT_MS, SAVE_DEBOUNCE_MS, RECONNECT_MS, DOMAINS, isTerminal, normalizeStatus, applyPayload, evict, createStore }`
+  - `_internal`: `{ MAX_RECORDS, TERMINAL_STATUSES, POLL_MS, FIRST_EVENT_TIMEOUT_MS, SAVE_DEBOUNCE_MS, RECONNECT_MS, DOMAINS, isTerminal, normalizeStatus, applyPayload, evict, canCancel, cancelBody, newTask, createStore }`
+    （`createStore` 属 Task 4，Step 3 之前不存在；其余为 Task 3 的纯逻辑导出）
 
 - [ ] **Step 1: 写失败测试**
 
@@ -549,6 +550,103 @@ test("partial_failed 是终态 —— 它是最常见的发布结局", () => {
   assert.ok(I.isTerminal("partial_failed"));
 });
 
+test("expired 是终态 —— batch 域的任务记录被服务端清掉后写的状态", () => {
+  // BatchController.cs：任务状态先于批次记录被清理时（成片 1 小时、批次 6 小时），
+  // 条目状态回落成 expired。它是终态，漏判就会把这条记录永远留在 running。
+  assert.ok(I.isTerminal("expired"));
+  assert.strictEqual(I.normalizeStatus("expired"), "interrupted");
+});
+
+test("expired 必须映射为已中断，绝不能显示成绿色成功", () => {
+  // expired 的含义是「记录被服务端清掉了」，不是「做完了」：结局未知、产物也已不可达。
+  // 顺着兜底分支落到 done 会把一条根本没结果的记录渲染成成功，用户点进去空空如也。
+  // 与 notfound 同档 —— 两者都是「服务端那边已经没有这条任务了」。
+  assert.strictEqual(I.normalizeStatus("expired"), "interrupted");
+  assert.strictEqual(I.normalizeStatus("EXPIRED"), "interrupted");
+  assert.strictEqual(I.normalizeStatus(" expired "), "interrupted");
+  const t = I.newTask({ domain: "batch", taskId: "B1" });
+  I.applyPayload(t, { status: "expired" });
+  assert.strictEqual(t.status, "interrupted");
+  assert.ok(t.endedAt, "落终态就必须记结束时间");
+  // 它是终态，所以能被淘汰掉，不会变成永远淘汰不掉的僵尸
+  assert.strictEqual(I.evict([t], 0).length, 0);
+});
+
+test("normalizeStatus：服务端词表映射到内部词表", () => {
+  for (const [from, to] of [
+    ["running", "running"], ["uploading", "running"], ["pending", "running"],
+    ["success", "done"], ["completed", "done"], ["done", "done"],
+    ["DONE", "done"], ["  Completed  ", "done"],
+    ["expired", "interrupted"], ["draft_saved", "done"], ["awaiting_manual", "done"],
+    ["failed", "failed"], ["error", "failed"], ["partial_failed", "failed"],
+    ["canceled", "canceled"], ["cancelled", "canceled"],
+    ["notfound", "interrupted"],
+  ]) {
+    assert.strictEqual(I.normalizeStatus(from), to, from + " 应映射为 " + to);
+  }
+  // 没有 status 就返回 null：「不知道」不等于「还在跑」，调用方要能分辨
+  for (const s of ["", "   ", null, undefined]) {
+    assert.strictEqual(I.normalizeStatus(s), null, JSON.stringify(s) + " 应映射为 null");
+  }
+});
+
+test("partial_failed 映射为失败，不能显示成绿色成功", () => {
+  // publish 域只有 partial_failed 这一个失败信号：FinalizeTask 只要有子任务非 success
+  // 就写它，覆盖「所有平台 cookie 全失效」和「B站成功、抖音要人工点」两种结局。
+  // 映射成 done 会让全平台失败也显示成功。
+  const t = I.newTask({ domain: "publish", taskId: "P1" });
+  I.applyPayload(t, { status: "partial_failed" });
+  assert.strictEqual(t.status, "failed");
+  assert.ok(t.endedAt, "落终态就必须记结束时间");
+});
+
+test("终态是粘滞的：迟到的 running 帧不能把已完成的任务拉回在跑", () => {
+  // SSE 会乱序/重发。若允许回退，就会出现 status=running 而 endedAt 还留着的记录 ——
+  // evict 按 status 分组，它既不显示完成、又因为算「在跑」而永远淘汰不掉。
+  const t = I.newTask({ domain: "agent", taskId: "Z1" });
+  I.applyPayload(t, { status: "completed" });
+  assert.strictEqual(t.status, "done");
+  const endedAt = t.endedAt;
+  assert.ok(endedAt);
+
+  I.applyPayload(t, { status: "running", progress: 30 });
+  assert.strictEqual(t.status, "done", "已完成的任务不能被迟到的 running 帧复活");
+  assert.strictEqual(t.endedAt, endedAt, "endedAt 不能被清掉");
+  // 进度之类仍然照常更新，只是状态不动
+  assert.strictEqual(t.progress, 30);
+
+  // 而且它必须能被淘汰掉，否则就是个永久僵尸
+  const list = I.evict([t], 0);
+  assert.strictEqual(list.length, 0, "终态记录应该被淘汰");
+});
+
+test("终态粘滞只挡回退，不挡终态之间的修正", () => {
+  const t = I.newTask({ domain: "agent", taskId: "Z2" });
+  I.applyPayload(t, { status: "completed" });
+  I.applyPayload(t, { status: "failed", error: "上传中断" });
+  assert.strictEqual(t.status, "failed");
+  assert.ok(t.endedAt);
+});
+
+test("在跑的记录仍可被非终态状态改写", () => {
+  const t = I.newTask({ domain: "agent", taskId: "Z3" });
+  I.applyPayload(t, { status: "uploading" });
+  assert.strictEqual(t.status, "running");
+  assert.strictEqual(t.endedAt, null);
+  I.applyPayload(t, { status: "running" });
+  assert.strictEqual(t.status, "running");
+});
+
+test("没有 status 的 payload 也必须盖 updatedAt", () => {
+  // /api/v2/workflow/status 与 /api/v2/batch/status 压根不返回 status 字段。
+  // 若在缺 status 时提前返回，这两个域的 updatedAt 永远不动，落盘节流就永远不触发。
+  const t = I.newTask({ domain: "workflow", taskId: "W2" });
+  t.updatedAt = 0;
+  I.applyPayload(t, { stage: "compose" });
+  assert.ok(t.updatedAt > 0, "没有 status 也要更新 updatedAt");
+  assert.strictEqual(t.status, "running", "缺 status 不等于改状态");
+});
+
 test("applyPayload: agent 域取出进度与步骤", () => {
   const t = I.newTask({ domain: "agent", taskId: "A1", panel: "shortdrama", title: "短剧" });
   I.applyPayload(t, { status: "running", progress: 62, currentStep: "合成中" });
@@ -568,6 +666,23 @@ test("applyPayload: 拿不到进度就留 null，绝不伪造 0", () => {
   I.applyPayload(t, { stage: "compose" });
   assert.strictEqual(t.progress, null, "没有进度字段时必须是 null，不是 0");
   assert.strictEqual(t.step, "compose");
+});
+
+test("applyPayload: 进度是空串也算拿不到，绝不伪造 0", () => {
+  // Number("") 是 0、空格串也是 0，而 p.progress != null 挡不住空串。
+  // 「没有进度」和「进度真的是 0」必须分得开，否则界面会跳出一个凭空的 0%。
+  for (const v of ["", "   "]) {
+    const t = I.newTask({ domain: "agent", taskId: "E" + v.length });
+    I.applyPayload(t, { status: "running", progress: v });
+    assert.strictEqual(t.progress, null, JSON.stringify(v) + " 应留 null");
+  }
+  const p = I.newTask({ domain: "agent", taskId: "EP" });
+  I.applyPayload(p, { status: "running", percent: "" });
+  assert.strictEqual(p.progress, null, "percent 为空串同样留 null");
+  // 真的 0% 还是要照实记
+  const z = I.newTask({ domain: "agent", taskId: "EZ" });
+  I.applyPayload(z, { status: "running", progress: 0 });
+  assert.strictEqual(z.progress, 0);
 });
 
 test("applyPayload: notfound 直接落终态", () => {
@@ -595,8 +710,8 @@ test("淘汰：只丢最旧的终态，运行中的永不淘汰", () => {
   assert.strictEqual(tasks.length, 200);
   const running = tasks.filter((t) => t.status === "running");
   assert.ok(running.length > 0, "运行中的任务不该被淘汰");
-  // 最新的那个在跑的任务必须还在
-  assert.ok(tasks.some((t) => t.taskId === "T204" && t.status === "running"));
+  // 最新的那个在跑的任务必须还在（i=204 是偶数、状态为 done，在跑的是 T203）
+  assert.ok(tasks.some((t) => t.taskId === "T203" && t.status === "running"));
 });
 
 test("淘汰：终态不足时全部保留", () => {
@@ -607,6 +722,59 @@ test("淘汰：终态不足时全部保留", () => {
     tasks.push(t);
   }
   assert.strictEqual(I.evict(tasks, 200).length, 3);
+});
+
+test("淘汰：在跑的超过预算时终态全丢，列表仍超预算", () => {
+  // 上限是给终态留位置的；在跑的永远不丢，所以它们自己就能把列表撑爆。
+  // 这时不能为了凑满上限去动在跑的，只能把终态全丢光并接受超预算。
+  const tasks = [];
+  for (let i = 0; i < 210; i++) {
+    const t = I.newTask({ domain: "agent", taskId: "R" + i });
+    t.status = "running";
+    t.createdAt = i;
+    tasks.push(t);
+  }
+  for (let i = 0; i < 5; i++) {
+    const t = I.newTask({ domain: "agent", taskId: "F" + i });
+    t.status = "done";
+    t.endedAt = i;
+    tasks.push(t);
+  }
+  const out = I.evict(tasks, 200);
+  assert.strictEqual(out.length, 210, "210 条在跑的都不该被丢，终态却一条都挤不进去");
+  assert.strictEqual(out.filter((t) => t.status === "done").length, 0);
+  assert.ok(out.every((t) => t.status === "running"));
+});
+
+test("淘汰：max 缺省用 MAX_RECORDS", () => {
+  const tasks = [];
+  for (let i = 0; i < I.MAX_RECORDS + 10; i++) {
+    const t = I.newTask({ domain: "agent", taskId: "D" + i });
+    t.status = "done";
+    t.endedAt = i;
+    tasks.push(t);
+  }
+  assert.strictEqual(I.evict(tasks).length, I.MAX_RECORDS);
+  // 不传 max 且没超上限时原样返回
+  assert.strictEqual(I.evict(tasks.slice(0, 3)).length, 3);
+});
+
+test("淘汰：两条返回路径都返回新数组，不改也不返回入参本身", () => {
+  // 调用方（Task 4）会把 store 里的数组整个换掉；混用「原地改」和「返回新数组」
+  // 会让「有没有换成功」这件事没法判断。
+  const under = [I.newTask({ domain: "agent", taskId: "U1" })];
+  assert.notStrictEqual(I.evict(under, I.MAX_RECORDS), under);
+
+  const over = [];
+  for (let i = 0; i < 5; i++) {
+    const t = I.newTask({ domain: "agent", taskId: "O" + i });
+    t.status = "done";
+    t.endedAt = i;
+    over.push(t);
+  }
+  const out = I.evict(over, 2);
+  assert.notStrictEqual(out, over);
+  assert.strictEqual(over.length, 5, "入参不该被就地改短");
 });
 
 test("取消请求体必须是 PascalCase", () => {
@@ -673,10 +841,21 @@ Expected: FAIL，报 `Cannot find module './tasks.js'`
   // 终态集合。partial_failed 必须在内：PublishManager.FinalizeTask 的判定是
   // 「任一子任务非 success 即算」，抖音人工发布/存草稿/未取到证据全都归并成它 ——
   // 也就是说最常见的发布结局都在这里。
+  // expired 在内：batch 域把「任务记录已被服务端清掉」的条目写成 expired
+  // （BatchController.cs，成片 1 小时 / 批次 6 小时后清理），漏了它这条记录会被
+  // 当成在跑、永远停在 running。目前 /api/v2/batch/status 顶层还没有 status 字段，
+  // 走不到这里；但 Task 4 要从 summary/items 推导状态，那时就可达了，所以先补上。
   const TERMINAL_STATUSES = {
     success: 1, completed: 1, done: 1, failed: 1, canceled: 1, cancelled: 1,
-    error: 1, notfound: 1, partial_failed: 1,
+    error: 1, notfound: 1, partial_failed: 1, expired: 1,
     draft_saved: 1, awaiting_manual: 1, unconfirmed: 1,
+  };
+
+  // 内部状态词表（记录里 status 字段的取值）里的终态。
+  // 与服务端词表分开是因为两边的判定标准不同：服务端只要知道「结束了」，
+  // 客户端还要知道该显示成绿/红/灰/中断哪一类。
+  const INTERNAL_TERMINAL_STATUSES = {
+    done: 1, failed: 1, canceled: 1, interrupted: 1,
   };
 
   function isTerminal(status) {
@@ -684,7 +863,38 @@ Expected: FAIL，报 `Cannot find module './tasks.js'`
     return !!TERMINAL_STATUSES[String(status).toLowerCase()];
   }
 
+  function isTerminalState(status) {
+    return !!INTERNAL_TERMINAL_STATUSES[status];
+  }
+
+  // 把服务端状态映射到内部词表：running / done / failed / canceled / interrupted。
+  // payload 里没有 status 时返回 null —— 「不知道」和「还在跑」是两回事，
+  // 不能默认按在跑处理。
+  function normalizeStatus(status) {
+    if (status === null || status === undefined) return null;
+    const s = String(status).trim().toLowerCase();
+    if (!s) return null;
+    if (!isTerminal(s)) return "running";
+    // notfound 与 expired 是同一类：服务端那边已经没有这条任务记录了。
+    if (s === "notfound") return "interrupted";
+    // expired 必须单独点名、落到「已中断」，绝不能顺着结尾的兜底分支掉进 done。
+    // 它的含义是「记录已被服务端的定期清理删掉」（BatchController 对成片 1 小时、
+    // 批次 6 小时后清理，条目状态回落成 expired），不是「做完了」—— 结局未知、
+    // 产物也已不可达，显示成绿色成功等于替服务端撒谎，用户点进去只会发现什么都没有。
+    if (s === "expired") return "interrupted";
+    if (s === "canceled" || s === "cancelled") return "canceled";
+    // partial_failed 必须落到失败而不是成功：publish 域只有这一个失败信号
+    // （FinalizeTask 一旦有子任务非 success 就写它），映射成 done 会让
+    // 「所有平台都失败」「B站成功、抖音要人工点」这两种结局都显示成绿色成功。
+    if (s === "failed" || s === "error" || s === "partial_failed") return "failed";
+    return "done";
+  }
+
   function num(v) {
+    if (v === null || v === undefined) return null;
+    // Number("") 是 0、Number("  ") 也是 0。空串当进度会凭空造出一个 0%，
+    // 而「没有进度」和「进度是 0」对用户是两回事 —— 本项目的规矩是拿不到就留 null。
+    if (typeof v === "string" && v.trim() === "") return null;
     const n = Number(v);
     return isFinite(n) ? n : null;
   }
@@ -722,29 +932,43 @@ Expected: FAIL，报 `Cannot find module './tasks.js'`
     else if (p.stage) task.step = String(p.stage);
     const pr = num(p.progress != null ? p.progress : p.percent);
     if (pr != null) task.progress = Math.max(0, Math.min(100, pr));
-    if (p.fileName || p.outputFile) task.result = { fileName: String(p.fileName || p.outputFile), downloadUrl: url };
+    // 有地址就算产物：agent 域的云端产物常常只给 cloudUrl，不带文件名。
+    const name = p.fileName || p.outputFile;
+    if (name || url) task.result = { fileName: name ? String(name) : null, downloadUrl: url };
 
-    const s = String(p.status || "").toLowerCase();
-    if (!s) return task;
-    if (s === "notfound") { task.status = "interrupted"; task.endedAt = Date.now(); }
-    else if (isTerminal(s)) {
-      task.status = (s === "canceled" || s === "cancelled") ? "canceled"
-        : (s === "failed" || s === "error") ? "failed" : "done";
-      task.endedAt = Date.now();
-    } else {
-      task.status = "running";
-    }
+    // updatedAt 必须无条件盖：workflow 与 batch 的状态响应里压根没有 status 字段
+    // （/api/v2/workflow/status、/api/v2/batch/status），若在缺 status 时提前返回，
+    // 这两个域的 updatedAt 永远不动，Task 4 基于它的落盘节流就永远不会触发。
     task.updatedAt = Date.now();
+
+    const next = normalizeStatus(p.status);
+    if (!next) return task;
+
+    // 终态粘滞：已经落到终态的记录，不许被后到的一帧拉回 running。
+    // SSE 与轮询都可能乱序或重发，一旦发生就会得到「status=running 但 endedAt 还留着」
+    // 的僵尸记录 —— evict 按 status 分组，它既不显示完成、又因为算「在跑」而永远
+    // 淘汰不掉。服务端 AgentTaskManager 为了同一件事给终态写加了锁
+    // （终态写必须与进度回调互斥），客户端是最后一跳，同一条规则必须在这里再实现一次。
+    // 注意这不是「终态不可变」：迟到的另一条终态（done → failed）仍然照常覆盖。
+    if (next === "running" && isTerminalState(task.status)) return task;
+
+    task.status = next;
+    task.endedAt = next === "running" ? null : Date.now();
     return task;
   }
 
   // 超过上限时丢最旧的终态；运行中的永不丢。
+  // max 缺省为 MAX_RECORDS；两条返回路径都返回新数组 —— 调用方（Task 4）会把
+  // 传入的 store 数组整个换掉，原地改与新建混用会让「有没有换成功」没法判断。
   function evict(list, max) {
-    if (list.length <= max) return list;
-    const running = list.filter((t) => t.status === "running" || t.status === "canceled" && false);
-    const finished = list.filter((t) => !(t.status === "running"));
+    const limit = typeof max === "number" && isFinite(max) && max >= 0 ? max : MAX_RECORDS;
+    if (list.length <= limit) return list.slice();
+    const running = list.filter((t) => t.status === "running");
+    const finished = list.filter((t) => t.status !== "running");
     finished.sort((a, b) => (a.endedAt || a.createdAt) - (b.endedAt || b.createdAt));
-    const drop = finished.length - Math.max(0, max - running.length);
+    // 在跑的比预算还多时 max - running.length 为负，drop 就会等于 finished 全量：
+    // 既然一条终态都挤不进去，就全丢，宁可列表暂时超预算也不谎报完成的任务还在。
+    const drop = finished.length - Math.max(0, limit - running.length);
     const kept = finished.slice(Math.max(0, drop));
     const out = kept.concat(running);
     out.sort((a, b) => a.createdAt - b.createdAt);
@@ -795,18 +1019,13 @@ Expected: FAIL，报 `Cannot find module './tasks.js'`
     _internal: {
       MAX_RECORDS, POLL_MS, FIRST_EVENT_TIMEOUT_MS, RECONNECT_MS, SAVE_DEBOUNCE_MS,
       TERMINAL_STATUSES, DOMAINS,
-      isTerminal, applyPayload, evict, canCancel, cancelBody, newTask,
+      isTerminal, normalizeStatus, applyPayload, evict, canCancel, cancelBody, newTask,
     },
   };
 });
 ```
 
-**注意**：`evict` 里那句 `running` 的过滤写得很啰嗦，直接用下面这行替换（保持语义清晰）：
-
-```js
-    const running = list.filter((t) => t.status === "running");
-    const finished = list.filter((t) => t.status !== "running");
-```
+**注意**：`evict` 的两条返回路径都返回新数组（`list.slice()` 与重新 `concat`/`sort` 后的 `out`），不要改成「直接返回入参」——Task 4 的调用方会把 store 里的数组整个换掉，混用原地改与新建会让「有没有换成功」没法判断。另外 `max` 缺省为 `MAX_RECORDS`。
 
 - [ ] **Step 4: 运行测试，确认全绿**
 
@@ -909,7 +1128,7 @@ test("partial_failed 也要收尾（发布域最常见的结局）", async () =>
   const t = store.register({ domain: "publish", taskId: "P1" });
   d.emit("publish:P1", "data", '{"status":"partial_failed"}');
   await new Promise((r) => setImmediate(r));
-  assert.strictEqual(store.get(t.id).status, "done", "partial_failed 属终态，不能让连接白挂到 60 分钟上限");
+  assert.strictEqual(store.get(t.id).status, "failed", "partial_failed 属终态，不能让连接白挂到 60 分钟上限；且它必须落成失败而不是成功");
 });
 
 test("非 SSE 域：直接轮询，不订阅", async () => {
@@ -1281,7 +1500,7 @@ Expected: FAIL，报 `Cannot read properties of undefined (reading 'createStore'
     _internal: {
       MAX_RECORDS, POLL_MS, FIRST_EVENT_TIMEOUT_MS, RECONNECT_MS, SAVE_DEBOUNCE_MS,
       TERMINAL_STATUSES, DOMAINS,
-      isTerminal, applyPayload, evict, canCancel, cancelBody, newTask, createStore,
+      isTerminal, normalizeStatus, applyPayload, evict, canCancel, cancelBody, newTask, createStore,
     },
   };
 ```
@@ -1892,7 +2111,7 @@ git commit -m "桌面端：各面板把长任务登记进任务中心"
 - `parseSseChunk(remainder, chunk) -> {events, remainder}`：Task 1 定义，Task 2 在 `res.on("data")` 中按此调用，一致。
 - IPC `htw:subscribe` 入参 `{streamId, domain, taskId, base, apiKey}`：Task 2 的 preload 与 main 两侧字段名一致。
 - `htw:stream-event` 出参 `{streamId, type, payload}`：Task 2 主进程 `emit()` 产出，Task 4 的 `onStream()` 按 `msg.type` / `msg.payload` 消费，一致。
-- `HTWTasks.track({domain, taskId, panel, title, type})`：Task 6 全部 9 处调用与 Task 4 的 `track` 实现一致。
+- `HTWTasks.track({domain, taskId, panel, title, type})`：Task 6 全部 9 处调用，与 Task 6 Step 2 里包在 `register` 外面的 `track` 便捷方法一致（Task 4 只提供 `register`）。
 - `_internal.canCancel(domain)` / `cancelBody(domain, taskId)`：Task 3 定义，Task 4、Task 5 消费，一致。
 - `createStore(deps)` 的 deps 字段名（`api` / `saveJson` / `loadJson` / `subscribe` / `now` / `setTimeout` / `clearTimeout`）：Task 4 测试与实现一致。
 
@@ -1902,4 +2121,6 @@ git commit -m "桌面端：各面板把长任务登记进任务中心"
 2. **`restore` 会给已终态的任务白订阅一条流** —— `pollOnce` 可能已把任务置为 `interrupted`，初稿仍无条件 `watch`。已加 `if (task.status === "running")`。
 3. **服务端 `end` 但载荷未进终态时任务会永远卡住** —— 初稿 `finish(task)` 返回 false 也只是收工，记录停在「进行中」且再无任何人推进。已改为降级到轮询。
 
-另有一处笔误已就地更正：`evict` 初稿的 `running` 过滤表达式含无意义的 `|| t.status === "canceled" && false`，Task 3 Step 3 内已给出替换后的两行。
+另有一处笔误已就地更正：`evict` 初稿的 `running` 过滤表达式含无意义的 `|| t.status === "canceled" && false`；Task 3 Step 3 的代码块里已直接给出语义等价的 `t.status === "running"`。
+
+**订正记录**：Task 3 已实现并通过评审，其代码块与用例块后来被逐字替换为实际入库的 `apps/desktop/js/tasks.js` 与 `js/tasks.test.cjs`（`expired` 终态、`normalizeStatus` 的 `partial_failed → failed`、终态粘滞守卫、无条件 `updatedAt`、`num` 空串守卫、`evict` 缺省与新数组返回等差异均为实现期的修正）。Task 4 的 `partial_failed` 用例断言同步改为 `failed`。跑 Task 4 时以代码块为准。

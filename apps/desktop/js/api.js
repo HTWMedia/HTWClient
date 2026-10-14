@@ -197,6 +197,17 @@
     return res;
   }
 
+  // SSE 订阅转发。streamId 用 "域:任务标识" 作键，主进程据此去重连接。
+  function subscribeTask(domain, taskId) {
+    const streamId = domain + ":" + taskId;
+    if (!window.htw || !window.htw.subscribeTask) return null;
+    window.htw.subscribeTask(streamId, domain, taskId, _key, _base);
+    return streamId;
+  }
+  function unsubscribeTask(streamId) {
+    if (window.htw && window.htw.unsubscribeTask) window.htw.unsubscribeTask(streamId);
+  }
+
   async function pollTask(taskId, opts) {
     opts = opts || {};
     const interval = opts.interval || 2000;
@@ -221,6 +232,13 @@
 
   const get = (p) => call("GET", p);
   const post = (p, b) => call("POST", p, b);
-  return { setKey: setKey, setBase: setBase, setDirectBase: setDirectBase, hasKey: hasKey, authHeader: authHeader, call: call, get: get, post: post, upload: upload, download: download, normalize: normalize, pollTask: pollTask, onQuotaExceeded: onQuotaExceeded, get base() { return _base; }, get directBase() { return _directBase; } };
+  return {
+    setKey: setKey, setBase: setBase, setDirectBase: setDirectBase,
+    hasKey: hasKey, authHeader: authHeader,
+    call: call, get: get, post: post, upload: upload, download: download,
+    normalize: normalize, pollTask: pollTask, onQuotaExceeded: onQuotaExceeded,
+    subscribeTask: subscribeTask, unsubscribeTask: unsubscribeTask,
+    get base() { return _base; }, get directBase() { return _directBase; },
+  };
 });
 

@@ -210,6 +210,10 @@
             const up = await API.call("POST", "/api/v2/voice/transcribe", { fileId: fid, format: transFmt.value, language: transLang.value, translate: transTranslate.checked, role: transRoleChk.checked, alignText: transAlignChk.checked ? transAlignText.value.trim() : "" });
             if (!up.ok) { UI.showError(transcribeRegion, formatErr(up)); return; }
             UI.showResult(transcribeRegion, { message: "已提交 taskId=" + (up.taskId || (up.data && up.data.taskId)) });
+            // 判空再调：任务中心容器缺席（脚本没加载或顺序变了）时必须是静默跳过，
+            // 否则这一行会抛 TypeError，被下面的 catch 接成「请求异常」——
+            // 一次其实已经提交成功的任务会被报成失败，而且面板从此不再开始轮询。
+            if (window.HTWTasks) window.HTWTasks.track({ domain: "voice", taskId: up.taskId || (up.data && up.data.taskId), panel: "tools", title: "语音转写" });
             await pollVoiceTask(transcribeRegion, up.taskId || (up.data && up.data.taskId));
           } catch (e) { UI.showError(transcribeRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
@@ -221,6 +225,7 @@
             if (!fid) return;
             const up = await API.call("POST", "/api/v2/voice/translate", { fileId: fid, language: translateLang.value });
             if (!up.ok) { UI.showError(translateRegion, formatErr(up)); return; }
+            if (window.HTWTasks) window.HTWTasks.track({ domain: "voice", taskId: up.taskId || (up.data && up.data.taskId), panel: "tools", title: "语音翻译" });
             await pollVoiceTask(translateRegion, up.taskId || (up.data && up.data.taskId));
           } catch (e) { UI.showError(translateRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
@@ -232,6 +237,7 @@
             if (!fid) return;
             const up = await API.call("POST", "/api/v2/voice/summarize", { fileId: fid });
             if (!up.ok) { UI.showError(summarizeRegion, formatErr(up)); return; }
+            if (window.HTWTasks) window.HTWTasks.track({ domain: "voice", taskId: up.taskId || (up.data && up.data.taskId), panel: "tools", title: "音频内容总结" });
             await pollVoiceTask(summarizeRegion, up.taskId || (up.data && up.data.taskId));
           } catch (e) { UI.showError(summarizeRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
@@ -243,6 +249,7 @@
             if (!fid) return;
             const up = await API.call("POST", "/api/v2/voice/lyrics", { fileId: fid });
             if (!up.ok) { UI.showError(lyricsRegion, formatErr(up)); return; }
+            if (window.HTWTasks) window.HTWTasks.track({ domain: "voice", taskId: up.taskId || (up.data && up.data.taskId), panel: "tools", title: "歌词识别" });
             await pollVoiceTask(lyricsRegion, up.taskId || (up.data && up.data.taskId));
           } catch (e) { UI.showError(lyricsRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
@@ -254,6 +261,7 @@
             if (!fid) return;
             const up = await API.call("POST", "/api/v2/voice/separate", { fileId: fid, type: sepType.value });
             if (!up.ok) { UI.showError(separateRegion, formatErr(up)); return; }
+            if (window.HTWTasks) window.HTWTasks.track({ domain: "voice", taskId: up.taskId || (up.data && up.data.taskId), panel: "tools", title: "人声/伴奏分离" });
             await pollVoiceTask(separateRegion, up.taskId || (up.data && up.data.taskId));
           } catch (e) { UI.showError(separateRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
@@ -265,6 +273,7 @@
           try {
             const up = await API.call("POST", "/api/v2/voice/tts", { text: t, speaker: ttsSpeaker.value });
             if (!up.ok) { UI.showError(ttsRegion, formatErr(up)); return; }
+            if (window.HTWTasks) window.HTWTasks.track({ domain: "voice", taskId: up.taskId || (up.data && up.data.taskId), panel: "tools", title: "文本转语音" });
             await pollVoiceTask(ttsRegion, up.taskId || (up.data && up.data.taskId));
           } catch (e) { UI.showError(ttsRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
@@ -277,6 +286,7 @@
           try {
             const up = await API.call("POST", "/api/v2/image/generate", { prompt: p, model: "v4.5", ratio: imgRatio.value, resolution: imgRes.value, negativePrompt: imgNeg.value });
             if (!up.ok) { UI.showError(imgGenRegion, formatErr(up)); return; }
+            if (window.HTWTasks) window.HTWTasks.track({ domain: "image", taskId: up.taskId || (up.data && up.data.taskId), panel: "tools", title: "图片生成" });
             await pollImage(up.taskId || (up.data && up.data.taskId)).then(function (res) { if (!res.ok) { UI.showError(imgGenRegion, formatErr(res)); return; } UI.showResult(imgGenRegion, res.data); });
           } catch (e) { UI.showError(imgGenRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
@@ -302,6 +312,7 @@
             if (!up.ok) { UI.showError(agentRegion, formatErr(up)); return; }
             const tid = up.taskId || (up.data && up.data.taskId);
             UI.showResult(agentRegion, { message: "已提交 taskId=" + tid, statusUrl: up.data && up.data.statusUrl, streamUrl: up.data && up.data.streamUrl });
+            if (window.HTWTasks) window.HTWTasks.track({ domain: "agent", taskId: tid, panel: "tools", title: "一键成片" });
             if (tid) { await pollAgent(tid).then(function (res) { if (!res.ok) { UI.showError(agentRegion, formatErr(res)); return; } UI.showResult(agentRegion, res.data); }); }
           } catch (e) { UI.showError(agentRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
@@ -314,6 +325,7 @@
             if (!files.length) { UI.showError(subRegion, "请选择视频"); return; }
             const up = await API.upload("POST", "/api/v2/subtitle/extract", files, { format: subFormat.value, engine: subEngine.value || "kimi" });
             if (!up.ok) { UI.showError(subRegion, formatErr(up)); return; }
+            if (window.HTWTasks) window.HTWTasks.track({ domain: "subtitle", taskId: up.taskId || (up.data && up.data.taskId), panel: "tools", title: "字幕提取" });
             await pollSub(up.taskId || (up.data && up.data.taskId)).then(function (res) { if (!res.ok) { UI.showError(subRegion, formatErr(res)); return; } UI.showResult(subRegion, res.data); });
           } catch (e) { UI.showError(subRegion, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });

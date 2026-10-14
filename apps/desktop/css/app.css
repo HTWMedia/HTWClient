@@ -376,3 +376,12 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .wf-acct:last-child { border-bottom: none; }
 .wf-acct-name { font-size: 13px; color: var(--text); }
 .wf-acct-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* 任务中心 */
+.tk-row { margin-bottom: 10px; }
+.tk-bar { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; margin: 6px 0; }
+.tk-bar-fill { height: 6px; background: var(--accent); border-radius: 3px; }
+.tk-body { margin-bottom: 12px; }
+.badge.interrupted { background: #2f2a12; color: #d6c07a; }
+.badge.canceled { background: #26262a; color: var(--muted); }
+.badge.done { background: #14342a; color: #3ecf8e; }
