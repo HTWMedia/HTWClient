@@ -159,8 +159,9 @@
     if (window.HTWApi && window.HTWApi.onQuotaExceeded) window.HTWApi.onQuotaExceeded(showQuotaBanner);
     wireNav();
     mountSkills();
-    // 任务恢复要等配置与 AuthKey 就绪，所以排在 mountSkills 之后 —— 但要在
-    // 面板首次渲染前把记录灌进去，否则任务中心会先闪一次空列表。
+    // 任务恢复要等配置与 AuthKey 就绪，所以排在 mountSkills 之后。
+    // 注意面板在 mountSkills 里已经渲染过一次（那时列表还是空的）：真正把记录显示
+    // 出来的是 restore() 末尾那次 emitChange()，它通知已订阅的面板重渲染。
     if (window.HTWTasks && window.HTWTasks.restore) {
       try { window.HTWTasks.restore(); } catch (e) { /* 恢复失败不该挡住启动 */ }
     }

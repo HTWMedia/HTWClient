@@ -6,13 +6,55 @@
     window.Skills.tasks = mod;
   }
 })(typeof self !== "undefined" ? self : this, function () {
-  const I = (typeof window !== "undefined" && window.HTWTasks && window.HTWTasks._internal) || {};
+  // 三组之外还留了第四组「未知状态」。restore() 不校验 status，落盘文件被手改过、
+  // 或旧版本写进过词表外的值时，这条记录既不属于任何一组；静默丢掉等于让用户
+  // 以为任务从没存在过，所以宁可摊开成「未知状态」让人自己判断。
   const GROUPS = [
-    { key: "running", label: "进行中", match: (t) => t.status === "running" },
-    { key: "failed", label: "失败", match: (t) => t.status === "failed" || t.status === "interrupted", fold: true },
-    { key: "done", label: "已完成", match: (t) => t.status === "done" || t.status === "canceled", fold: true },
+    { key: "running", label: "进行中", fold: false },
+    { key: "failed", label: "失败", fold: true },
+    { key: "done", label: "已完成", fold: true },
+    { key: "other", label: "未知状态", fold: true },
   ];
   const FOLD_LIMIT = 20;
+
+  // 任务容器一律在**调用时**解析，不在模块求值那一刻做快照。
+  // 快照下来的 canCancel 一旦因为加载顺序拿不到就是 undefined：三个可取消域的
+  // 「取消」按钮会一排都不画，界面上没有任何症状 —— 这正是 tasks.js 的
+  // defaultDeps() 注释里点名要避免的那一类静默失效。
+  function store() {
+    return (typeof window !== "undefined" && window.HTWTasks) || null;
+  }
+
+  function canCancel(domain) {
+    const s = store();
+    const i = (s && s._internal) || {};
+    return typeof i.canCancel === "function" ? !!i.canCancel(domain) : false;
+  }
+
+  function listTasks() {
+    const s = store();
+    return s && typeof s.list === "function" ? (s.list() || []) : [];
+  }
+
+  // 产物地址常是带 token 的相对路径（/api/v2/...），与 batch.js / workflow.js 同法
+  // 拼上 API 基址。少了这一步，相对地址过不了 http 判定，「下载」会被悄悄改成切面板。
+  function absolute(url) {
+    const s = String(url || "");
+    if (/^https?:\/\//i.test(s)) return s;
+    const base = (window.HTWApi && window.HTWApi.base) || "";
+    if (!base) return s;
+    try { return new URL(s, base).href; } catch (e) { return s; }
+  }
+
+  function openExternal(url) {
+    if (!url) return;
+    if (window.htw && typeof window.htw.openExternal === "function") window.htw.openExternal(url);
+    else if (typeof window.open === "function") window.open(url, "_blank");
+  }
+
+  function errorLine(e) {
+    return UI.el("div", { class: "wf-error", text: String((e && e.message) || e) });
+  }
 
   function fmtTime(ms) {
     if (!ms) return "";
@@ -21,11 +63,22 @@
     return p(d.getHours()) + ":" + p(d.getMinutes());
   }
 
+  // 内部词表只有 running / done / failed / canceled / interrupted 五个词。
+  // 落盘文件里的 status 不受校验，词表外的一律归到 other，绝不悄悄从三组之间漏下去。
+  function groupOf(t) {
+    const s = t && t.status;
+    if (s === "running") return "running";
+    if (s === "failed" || s === "interrupted") return "failed";
+    if (s === "done" || s === "canceled") return "done";
+    return "other";
+  }
+
   function statusText(t) {
     if (t.status === "running") return t.unknown ? "状态未确认" : "进行中";
     if (t.status === "failed") return "失败";
     if (t.status === "interrupted") return "已中断";
     if (t.status === "canceled") return "已取消";
+    if (groupOf(t) === "other") return "未知状态";
     return "已完成";
   }
 
@@ -33,7 +86,8 @@
     const node = UI.el("div", { class: "card tk-row" });
 
     const head = UI.el("div", { class: "row" }, [
-      UI.el("strong", { text: t.title || t.taskId }),
+      // title 与 taskId 都可能为空，全空就是一行没有主语的白板，用户无从判断这是哪条任务。
+      UI.el("strong", { text: t.title || t.taskId || "未命名任务 · " + (t.domain || "未知来源") }),
       UI.el("span", { class: "badge " + t.status, text: statusText(t) }),
       // 「已降级」是排查实际降级率的唯一线索，必须显眼。
       t.degraded ? UI.el("span", { class: "badge", text: "已降级" }) : null,
@@ -57,15 +111,23 @@
         onclick: function () { window.App.showPanel(t.panel); },
       }));
     }
-    if (I.canCancel && I.canCancel(t.domain)) {
+    // 取消只在还在跑的时候给：已结束的记录点下去只会被 store 拒绝
+    // （「任务已结束，无需取消」），在一条已经做完的记录上闪一条红字纯属噪声。
+    if (t.status === "running" && canCancel(t.domain)) {
       const btn = UI.el("button", { class: "btn btn-ghost", text: "取消" });
       btn.addEventListener("click", function () {
+        const s = store();
+        if (!s || typeof s.cancel !== "function") return;
+        let pending;
+        // 包 try 是因为 store 缺席时取消是同步抛出的，直接抛进事件回调就成了未捕获异常。
+        try { pending = s.cancel(t.id); }
+        catch (e) { node.appendChild(errorLine(e)); return; }
         btn.disabled = true;
         btn.textContent = "取消中…";
-        Promise.resolve(window.HTWTasks.cancel(t.id)).catch(function (e) {
+        Promise.resolve(pending).catch(function (e) {
           btn.disabled = false;
           btn.textContent = "取消";
-          node.appendChild(UI.el("div", { class: "wf-error", text: String((e && e.message) || e) }));
+          node.appendChild(errorLine(e));
         });
       });
       acts.push(btn);
@@ -78,14 +140,15 @@
         onclick: function () { window.App.showPanel(t.panel); },
       }));
     }
-    if (t.result && t.result.fileName && t.status === "done") {
+    // 下载以 downloadUrl 为准：applyPayload 在只拿到地址、拿不到文件名时会把
+    // fileName 置空而 downloadUrl 照常填上（agent 域的云端产物常是这个形态），
+    // 拿 fileName 当门槛会让一条有产物的完成记录连按钮都没有。
+    // 没有地址就没有下载按钮 —— 绝不摆一个叫「下载」却会去切面板的按钮。
+    if (t.status === "done" && t.result && String(t.result.downloadUrl || "").trim()) {
+      const url = absolute(t.result.downloadUrl);
       acts.push(UI.el("button", {
         class: "btn btn-ghost", text: "下载",
-        onclick: function () {
-          const url = t.result.downloadUrl;
-          if (url && /^https?:/i.test(url) && window.htw && window.htw.openExternal) window.htw.openExternal(url);
-          else if (t.panel && window.App && window.App.showPanel) window.App.showPanel(t.panel);
-        },
+        onclick: function () { openExternal(url); },
       }));
     }
     if (acts.length) node.appendChild(UI.el("div", { class: "row" }, acts));
@@ -99,20 +162,31 @@
     const body = UI.el("div", { class: "tk-body" });
     panel.appendChild(body);
 
-    const clearBtn = UI.el("button", { class: "btn btn-ghost", text: "清空已完成" });
+    const clearBtn = UI.el("button", {
+      class: "btn btn-ghost",
+      // store.clearFinished() 只保留 status === "running"，也就是说失败和中断
+      // 一样被删掉，而「重试」入口恰恰只长在失败记录上。旧文案只说「已完成」，
+      // 用户不会知道这一下抹掉的是自己唯一的重试线索，所以文案必须把失败写出来。
+      text: "清空已结束记录（含失败）",
+    });
     clearBtn.addEventListener("click", function () {
-      window.HTWTasks.clearFinished();
+      const s = store();
+      if (s && typeof s.clearFinished === "function") s.clearFinished();
       render();
     });
     panel.appendChild(UI.el("div", { class: "row" }, [clearBtn]));
 
     function render() {
       UI.clear(body);
-      const all = (window.HTWTasks.list && window.HTWTasks.list()) || [];
-      const counts = {};
+      // 容器缺席时退化成一句提示即可：让它抛出去的话 mountSkills() 会把整个面板
+      // 标成「技能加载失败」，比空列表更难查。
+      if (!store()) {
+        body.appendChild(UI.el("div", { class: "hint", text: "任务中心尚未就绪。" }));
+        return;
+      }
+      const all = listTasks();
       GROUPS.forEach(function (g) {
-        const hit = all.filter(g.match);
-        counts[g.key] = hit.length;
+        const hit = all.filter((t) => groupOf(t) === g.key);
         if (!hit.length) return;
         body.appendChild(UI.el("div", { class: "section-title", text: g.label + " " + hit.length }));
         const shown = g.fold ? hit.slice(-FOLD_LIMIT) : hit;
@@ -125,12 +199,17 @@
     }
 
     render();
-    // 容器每次变更都会回调；面板重挂时用标记避免重复订阅。
-    if (!panel._tkBound && window.HTWTasks.onChange) {
-      panel._tkBound = true;
-      window.HTWTasks.onChange(render);
+
+    // 重挂必须退订再重订：mount() 每次都新建 body 与 render，若沿用首次那条订阅，
+    // 它渲染的是已被 UI.clear(panel) 摘掉的旧 body —— 面板会永远停在首次挂载时的
+    // 状态且毫无症状，而这恰恰是全应用唯一靠实时状态吃饭的面板。
+    if (panel._tkUnsub) {
+      try { panel._tkUnsub(); } catch (e) { /* ignore */ }
+      panel._tkUnsub = null;
     }
+    const s = store();
+    if (s && typeof s.onChange === "function") panel._tkUnsub = s.onChange(render) || null;
   }
 
   return { mount: mount };
-});
+});
