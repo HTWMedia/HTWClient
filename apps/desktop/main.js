@@ -21,7 +21,9 @@ function originOf(u) {
 allowedOrigins.add(originOf(process.env.HTW_API_BASE || "https://htwmedia.dpdns.org"));
 if (process.env.HTW_API_DIRECT) allowedOrigins.add(originOf(process.env.HTW_API_DIRECT));
 
-// streamId -> { req }。同一 streamId 重复订阅复用既有连接，不重复发起。
+// streamId -> { req, ownerId }。同一 streamId 重复订阅复用既有连接，不重复发起。
+// ownerId 是订阅发起方 webContents 的 id：窗口被关掉后要能只清理属于它的那几条，
+// 否则多窗口场景下会把别人正在用的连接一起断掉。
 const streams = new Map();
 
 // 持久化目录：Electron 的 app / shell 是主进程模块，preload 里取不到，
@@ -138,7 +140,16 @@ ipcMain.handle("htw:subscribe", (e, opts) => {
     streams.delete(streamId);
     emit(sender, { streamId: streamId, type: "error", payload: { message: String(err.message || err) } });
   });
-  streams.set(streamId, { req: req });
+  // 半开连接（对端不回 FIN，Cloudflare 这类前置代理后面尤其常见）会让 socket 无限期挂着，
+  // 连接池条目也永远清不掉。服务端约每秒发一次 ": ka" 心跳，正常连接不可能静默这么久，
+  // 所以 120 秒内一个字节都没收到就判定连接已死：销毁并按 error 通知，
+  // 渲染层收到后会降级到轮询，而不是卡在"进行中"。
+  req.setTimeout(120000, () => {
+    streams.delete(streamId);
+    emit(sender, { streamId: streamId, type: "error", payload: { message: "STREAM_TIMEOUT" } });
+    try { req.destroy(); } catch (e) { /* 已经断了 */ }
+  });
+  streams.set(streamId, { req: req, ownerId: sender.id });
   return { ok: true };
 });
 
@@ -176,7 +187,23 @@ function createWindow() {
       // <a download="xxx.mp4"> 时 getFilename 已是建议名，这里只需补目录。
       item.setSavePath(path.join(app.getPath("downloads"), name));
     } catch (e) { /* 保存路径设置失败就让下载走默认行为 */ }
-  });
+});
+
+  // 窗口没了，它发起的 SSE 长连接必须跟着断。macOS 上关掉最后一个窗口不会退出进程，
+  // 全局兜底只剩 before-quit 那一条，等不到；连接会一直挂着、服务端还在推，
+  // emit 每次都吞掉"Object has been destroyed"，连接池里的条目也永远清不掉。
+  // 只按 webContents id 清理属于这个窗口的连接，多窗口时不会误伤别人正在用的。
+  const wcId = win.webContents.id;
+  const dropOwnedStreams = () => {
+    streams.forEach((s, id) => {
+      if (s.ownerId !== wcId) return;
+      try { s.req.destroy(); } catch (e) { /* 已经断了 */ }
+      streams.delete(id);
+    });
+  };
+  win.on("closed", dropOwnedStreams);
+  // 渲染进程崩溃同样不会触发 closed，销毁时一并清理。
+  win.webContents.on("destroyed", dropOwnedStreams);
 
   win.loadFile(path.join(__dirname, "index.html"));
 }
