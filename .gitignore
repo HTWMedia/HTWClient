@@ -5,6 +5,7 @@ dist/
 .env
 .env.local
 .superpowers/
+docs/superpowers/
 .opencode-trace/
 .playwright-mcp/
 config.json
