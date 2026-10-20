@@ -13,6 +13,17 @@
 
   // 本地模式未配置（输入框为空）时的状态文案。
   const LOCAL_NOT_CONFIGURED = "本地模式未配置";
+  // 本地实例尚未就绪（没探活过 / 探活失败）时的提示。
+  const LOCAL_NOT_READY_TEXT = "本地实例尚未就绪，请先保存并探活。";
+  // AuthKey 没填时的提示：直接失败，不发请求。
+  const LOCAL_KEY_REQUIRED_TEXT = "请先填写 AuthKey";
+
+  // 已确认（探活通过）的本地地址缓存。
+  // 只有「保存并探活」按钮能改它 —— 输入框里还没探活过的值不算数，
+  // 否则每敲一个 AuthKey 字符都会把半截地址写进配置。
+  let confirmedLocalBase = "";
+  // 最近一次探活得到的三态（未探活 / 探活失败时为 null）。
+  let confirmedLocalState = null;
 
   function localBaseValue() {
     const input = getLocalBaseInput();
@@ -52,19 +63,17 @@
   function applyAuth() {
     const base = getBaseInput().value.trim();
     const key = getKeyInput().value;
-    saveConfigAll(localBaseValue());
+    // 本地地址只落盘"已探活确认过"的那一份：输入框里还没探活的值一律不写
+    // （这个函数绑在 AuthKey 的每次按键上，跟着输入框走等于每敲一下存一次半截地址）。
+    saveConfigAll(confirmedLocalBase);
     clearLocal();
     if (base) window.HTWApi.setBase(base);
     window.HTWApi.setKey(key);
-    // 本地地址也跟着输入框走：填了但没登记，注册表与实际请求地址会对不上。
-    const lb = localBaseValue();
-    if (window.HTWApi && window.HTWApi.setLocalBase && window.HTWApi.localBase !== lb)
-      window.HTWApi.setLocalBase(lb);
     refreshKeyUI();
   }
 
   function persistAuth() {
-    saveConfigAll(localBaseValue());
+    saveConfigAll(confirmedLocalBase);
     clearLocal();
   }
 
@@ -153,14 +162,18 @@
 
   // 探活用的传输层：HTTP 状态自己判 —— 非 2xx 一律当失败。
   // 不判的话 500 会被当成"探活成功"，状态行显示就绪，用户白高兴一场。
+  // 状态码挂在异常上（httpStatus），探活据此区分"实例回了错误"与"连不上"。
   function localTransport(localBase) {
     return {
       call: async function (method, path) {
         // 不带 AuthKey：健康检查不需要登录，也不该把云端密钥递给本机进程。
         const res = await window.htw.call(method, pathOf(path), undefined, undefined, localBase);
         const status = res ? res.status : 0;
-        if (typeof status !== "number" || status < 200 || status >= 300)
-          throw new Error("HTTP " + status);
+        if (typeof status !== "number" || status < 200 || status >= 300) {
+          const e = new Error("HTTP " + status);
+          e.httpStatus = status;
+          throw e;
+        }
         return res;
       },
     };
@@ -170,6 +183,7 @@
   async function probeLocal(localBase) {
     const Local = window.HTWLocal;
     if (!Local || typeof Local.probeHealth !== "function") {
+      confirmedLocalState = null;
       setLocalStatus("本地模式模块未加载。");
       setLocalPairEnabled(false);
       return { ok: false, state: "invalid", message: "本地模式模块未加载。" };
@@ -181,22 +195,28 @@
       r = { ok: false, state: "unreachable", message: (e && e.message) ? e.message : String(e) };
     }
     if (!r || r.ok !== true) {
+      // 探活失败 = 未就绪：配对必须被状态自检拦下。
+      confirmedLocalState = null;
       setLocalStatus((r && r.message) ? r.message : "无法连接本地实例，请先启动或检查地址。");
       setLocalPairEnabled(false);
       return r;
     }
     // 状态文案取机器契约的映射表（不在这里另造一套说法）。
     const text = (Local.STATE_TEXT && Local.STATE_TEXT[r.state]) || r.message || "";
+    confirmedLocalState = r.state;
     setLocalStatus(text);
     setLocalPairEnabled(r.state === "ready" || r.state === "pairedNotUnlocked");
     return r;
   }
 
   // 「保存并探活」：空地址 = 关闭本地模式；非空 = 登记 + 探活。
+  // 这里是唯一能把本地地址写进配置的地方：确认过的地址进缓存，缓存才落盘。
   async function applyLocal() {
     const api = window.HTWApi;
     const v = localBaseValue();
     if (!v) {
+      confirmedLocalBase = "";
+      confirmedLocalState = null;
       if (api && api.setLocalBase) api.setLocalBase("");
       saveConfigAll("");
       setLocalStatus(LOCAL_NOT_CONFIGURED);
@@ -204,6 +224,9 @@
       setLocalPairResult("");
       return { ok: false, state: "notConfigured", message: LOCAL_NOT_CONFIGURED };
     }
+    confirmedLocalBase = v;
+    // 换了地址，之前的探活结果作废（不能拿旧地址的就绪状态去配对）。
+    confirmedLocalState = null;
     if (api && api.setLocalBase) api.setLocalBase(v);
     saveConfigAll(v);
     setLocalPairResult("");
@@ -217,11 +240,25 @@
     const api = window.HTWApi;
     const localBase = (api && api.localBase) ? api.localBase : localBaseValue();
     const serverBase = getBaseInput() ? getBaseInput().value.trim() : "";
-    const key = getKeyInput() ? getKeyInput().value : "";
+    const key = getKeyInput() ? String(getKeyInput().value || "").trim() : "";
     if (!Local || typeof Local.pairFlow !== "function") {
       setLocalPairResult("本地模式模块未加载。");
       return { ok: false, message: "本地模式模块未加载。" };
     }
+    // 状态自检：按钮禁用只是界面层的兜底，流程本身也要拦一道 ——
+    // 没探活过（或探活失败）就配对，配对的其实是上一个地址。
+    if (confirmedLocalState !== "ready" && confirmedLocalState !== "pairedNotUnlocked") {
+      setLocalPairResult(LOCAL_NOT_READY_TEXT);
+      return { ok: false, message: LOCAL_NOT_READY_TEXT };
+    }
+    // key 口径：输入框为空就直接失败，不发请求 ——
+    // 否则配对体会带着空 AuthKey 出去，而登记用的却是另一个 key。
+    if (!key) {
+      setLocalPairResult(LOCAL_KEY_REQUIRED_TEXT);
+      return { ok: false, message: LOCAL_KEY_REQUIRED_TEXT };
+    }
+    // 配对体里的 AuthKey 与登记用的 key 必须同一个：输入框这份为准。
+    if (api && api.setKey) api.setKey(key);
     let r;
     try {
       r = await Local.pairFlow({
@@ -300,6 +337,8 @@
       const li = getLocalBaseInput();
       if (li) li.value = lb;
       if (window.HTWApi && window.HTWApi.setLocalBase) window.HTWApi.setLocalBase(lb);
+      // 上次确认过的地址：进缓存，applyAuth 整份写回时不能把它弄丢。
+      confirmedLocalBase = lb;
       setLocalStatus("已配置，未探活");
     }
     getBaseInput().addEventListener("change", applyAuth);

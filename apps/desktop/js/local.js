@@ -18,6 +18,7 @@
   };
 
   const UNREACHABLE_TEXT = "无法连接本地实例，请先启动或检查地址。";
+  const SERVER_ERROR_TEXT = "本地实例返回错误，请检查本地实例状态。";
   const INVALID_TEXT = "本地实例响应不可识别。";
 
   function joinBase(base, path) {
@@ -45,14 +46,29 @@
 
   // 探活本地实例。返回 { ok, state, message }：
   // - ok:true  → state 为三态之一（notPaired / pairedNotUnlocked / ready），message 为对应文案；
-  // - ok:false → state 为 server（该地址不是本地实例）/ unreachable（连不上）/ invalid（响应不可识别）。
+  // - ok:false → state 为 server（该地址不是本地实例）/ unreachable（连不上）/
+  //             serverError（实例回了错误）/ invalid（响应不可识别）。
   async function probeHealth(base, transport) {
     const call = transport && transport.call;
     let res;
     try {
       res = await call("GET", joinBase(base, HEALTH_PATH));
     } catch (e) {
+      // 传输层把 HTTP 错误也抛出来时，用 httpStatus 区分"实例回了错误"与"连不上"：
+      // 两者症状不同（一个是实例内部出错，一个是实例没起来），文案不能混成一句。
+      const st = e && e.httpStatus;
+      if (typeof st === "number" && st >= 400)
+        return { ok: false, state: "serverError", message: SERVER_ERROR_TEXT };
       return { ok: false, state: "unreachable", message: UNREACHABLE_TEXT };
+    }
+    // 传输层自己判了状态的话，错误响应会走到这里：仍然要看状态码，
+    // 否则 500 会被当成"探活成功"。
+    const status = res && res.status;
+    if (typeof status === "number") {
+      // status 0 = 请求根本没发出去（地址非法之类），按连不上处理。
+      if (status === 0) return { ok: false, state: "unreachable", message: UNREACHABLE_TEXT };
+      if (status < 200 || status >= 300)
+        return { ok: false, state: "serverError", message: SERVER_ERROR_TEXT };
     }
     const envelope = res && res.data;
     const inner = unwrapEnvelope(envelope);

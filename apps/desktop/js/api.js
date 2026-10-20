@@ -48,6 +48,19 @@
     return e;
   }
 
+  // 网络类失败的判定：连接被拒 / 超时 / fetch 本身失败。
+  // 只有这一类失败才算"本地执行不可用"；别的异常（代码错误、鉴权错误等）
+  // 一律原样抛出去 —— 吞掉的话真正的错误会被一句通用文案盖住，用户既看不到
+  // 原因，也没法自己绕开。
+  function isNetworkFailure(e) {
+    if (!e) return false;
+    // Chromium 的 fetch 失败就是 TypeError("fetch failed")。
+    if (e instanceof TypeError) return true;
+    const msg = String((e && e.message) || e || "").toLowerCase();
+    if (!msg) return false;
+    return /fetch failed|failed to fetch|econnrefused|econnreset|etimedout|ehostunreach|enetunreach|enotfound|epipe|socket hang up|network error|err_connection_refused|err_connection_reset|err_timed_out|err_name_not_resolved|err_internet_disconnected/.test(msg);
+  }
+
   async function call(method, path, body, baseOverride) {
     if (!_key) throw keyError();
     // 默认带上当前服务端地址：不传的话 preload 会退回它的内置默认值，
@@ -58,8 +71,8 @@
       res = await window.htw.call(method, path, body, _key, target);
     } catch (e) {
       // 本地基地址连不上（fetch failed / 连接被拒）与 4007 是同一个症状，
-      // 走同一个出口；其它基地址的失败原样抛出去，不被这里吞掉。
-      if (_localBase && target === _localBase)
+      // 走同一个出口；只限网络类失败，其它异常原样抛出去，不被这里吞掉。
+      if (_localBase && target === _localBase && isNetworkFailure(e))
         return { ok: false, code: LOCAL_UNAVAILABLE_CODE, localUnavailable: true,
           message: LOCAL_UNAVAILABLE_MESSAGE, raw: e };
       throw e;
@@ -225,6 +238,13 @@
     if (res.ok && ok === true) return { ok: true, data: camelize(data), taskId: taskId || null };
     if (res.ok && ok === false) return failShape(code, msg, d);
     if (!res.ok) return failShape(code || res.status, msg || ("HTTP " + res.status), d);
+    // 失败壳：没有 ok/Ok 字段，却带着 errCode/ErrCode。
+    // 本地实例的 pair 失败壳正是这个形状（{errCode, errMsg}），而且可能是
+    // HTTP 200 —— 不在这里判失败，就会落到下面的 return { ok:true }，
+    // 把一次失败当成配对成功。
+    // 只看顶层：内层 Data 里带 errCode 的正常载荷不受影响；
+    // 有 ok/Ok 字段时仍以 ok/Ok 为准（上面的分支已经先判过了）。
+    if (ok === undefined && code !== undefined) return failShape(code, msg || ("HTTP " + res.status), d);
     return { ok: true, data: camelize(data !== undefined ? data : d), taskId: taskId || null };
   }
 

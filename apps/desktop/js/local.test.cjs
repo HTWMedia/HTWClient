@@ -48,6 +48,29 @@ test("probeHealth: 连接拒绝 → unreachable", async () => {
   assert.deepStrictEqual(r, { ok: false, state: "unreachable", message: "无法连接本地实例，请先启动或检查地址。" });
 });
 
+// 实例回了错误（5xx）与连不上是两种症状，文案必须能区分开：
+// 前者是实例内部出错，后者是实例没起来。
+test("probeHealth: 实例回 500 → serverError（与 unreachable 区分）", async () => {
+  const r = await Local.probeHealth("http://127.0.0.1:51111", {
+    call: async () => ({ status: 500, ok: false, data: { errCode: 500, errMsg: "内部错误" } }),
+  });
+  assert.deepStrictEqual(r, { ok: false, state: "serverError", message: "本地实例返回错误，请检查本地实例状态。" });
+});
+
+test("probeHealth: 传输层把 HTTP 错误抛出来（带 httpStatus）→ serverError", async () => {
+  const r = await Local.probeHealth("http://127.0.0.1:51111", {
+    call: async () => { const e = new Error("HTTP 500"); e.httpStatus = 500; throw e; },
+  });
+  assert.deepStrictEqual(r, { ok: false, state: "serverError", message: "本地实例返回错误，请检查本地实例状态。" });
+});
+
+test("probeHealth: 请求根本没发出去（status 0）→ unreachable", async () => {
+  const r = await Local.probeHealth("http://127.0.0.1:51111", {
+    call: async () => ({ status: 0, ok: false, data: { errCode: 0, errMsg: "invalid url" } }),
+  });
+  assert.deepStrictEqual(r, { ok: false, state: "unreachable", message: "无法连接本地实例，请先启动或检查地址。" });
+});
+
 test("probeHealth: 非法响应（data 无 state）→ invalid", async () => {
   const r = await Local.probeHealth("http://127.0.0.1:51111", {
     call: async () => ({ status: 200, ok: true, data: { ok: true, mode: "local" } }),

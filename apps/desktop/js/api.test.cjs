@@ -154,30 +154,123 @@ test("normalize: ErrCode 4007 → localUnavailable 文案", () => {
   assert.strictEqual(r.message, "本地执行不可用，请检查网络或服务器状态。");
 });
 
-test("call: 本地基地址网络失败 → 同一出口文案", async () => {
+// 换掉全局 window 跑一枚 api.js 的新实例；跑完必须还原，
+// 否则这枚 window 会漏给后面的用例（断言中途失败时最明显）。
+async function withStubWindow(win, fn) {
   const prevWindow = global.window;
-  global.window = {
+  global.window = win;
+  delete require.cache[require.resolve("./api.js")];
+  try {
+    return await fn(require("./api.js"));
+  } finally {
+    global.window = prevWindow;
+  }
+}
+
+function stubWindow(callImpl) {
+  return {
     htw: {
       apiBase: "https://htwmedia.dpdns.org",
       localBase: "http://127.0.0.1:51111",
       registerBase: () => {},
-      call: async () => { throw new TypeError("fetch failed"); },
+      call: callImpl,
     },
   };
-  delete require.cache[require.resolve("./api.js")];
-  const localApi = require("./api.js");
-  localApi.setKey("test-key");
+}
 
-  const r = await localApi.call("POST", "/api/v2/agent/start", {}, localApi.localBase);
+test("call: 本地基地址网络失败 → 同一出口文案", async () => {
+  await withStubWindow(stubWindow(async () => { throw new TypeError("fetch failed"); }), async (localApi) => {
+    localApi.setKey("test-key");
+
+    const r = await localApi.call("POST", "/api/v2/agent/start", {}, localApi.localBase);
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.localUnavailable, true);
+    assert.strictEqual(r.message, "本地执行不可用，请检查网络或服务器状态。");
+
+    // 其它基地址的失败原样抛出去，不被本地模式这条出口吞掉。
+    await assert.rejects(
+      () => localApi.call("POST", "/api/v2/agent/start", {}, "https://other.example.com"),
+      /fetch failed/
+    );
+  });
+});
+
+// M1：只有网络类失败才算"本地执行不可用"。
+// 别的异常（代码错误、鉴权错误）原样抛出去 —— 吞掉的话真正的错误就被一句
+// "本地执行不可用"盖住了，用户既看不到原因，也没法自己绕开。
+test("call: 本地基地址的连接被拒（ECONNREFUSED）→ 同一出口文案", async () => {
+  await withStubWindow(stubWindow(async () => { throw new Error("ECONNREFUSED"); }), async (localApi) => {
+    localApi.setKey("test-key");
+    const r = await localApi.call("POST", "/api/local/pair", {}, localApi.localBase);
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.localUnavailable, true);
+    assert.strictEqual(r.message, "本地执行不可用，请检查网络或服务器状态。");
+  });
+});
+
+test("call: 本地基地址的非网络异常原样抛出，不伪装成本地不可用", async () => {
+  await withStubWindow(stubWindow(async () => { throw new Error("boom"); }), async (localApi) => {
+    localApi.setKey("test-key");
+    await assert.rejects(
+      () => localApi.call("POST", "/api/local/pair", {}, localApi.localBase),
+      /boom/
+    );
+  });
+});
+
+// ---- 失败壳判定（无 ok/Ok 字段的 {errCode, errMsg}） ----
+//
+// 本地实例的 pair 失败壳就是这个形状：只有 errCode/errMsg，没有 ok/Ok。
+// 不判它的话 normalize 会落到末尾的 return { ok:true }，把失败当成功，
+// 界面上就成了"配对成功"。
+test("normalize: HTTP 200 + 无 ok 字段的失败壳 → 判失败（本地实例 pair 失败壳）", () => {
+  const r = api.normalize({
+    ok: true,
+    status: 200,
+    data: { errCode: 403, errMsg: "本进程不是本地实例，不接受配对。" },
+  });
   assert.strictEqual(r.ok, false);
-  assert.strictEqual(r.localUnavailable, true);
-  assert.strictEqual(r.message, "本地执行不可用，请检查网络或服务器状态。");
+  assert.strictEqual(r.code, 403);
+  assert.strictEqual(r.message, "本进程不是本地实例，不接受配对。");
+});
 
-  // 其它基地址的失败原样抛出去，不被本地模式这条出口吞掉。
-  await assert.rejects(
-    () => localApi.call("POST", "/api/v2/agent/start", {}, "https://other.example.com"),
-    /fetch failed/
-  );
+test("normalize: 无 ok 字段的失败壳 PascalCase 变体（ErrCode/ErrMsg）同样判失败", () => {
+  const r = api.normalize({
+    ok: true,
+    status: 200,
+    data: { ErrCode: 403, ErrMsg: "本进程不是本地实例，不接受配对。" },
+  });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.code, 403);
+  assert.strictEqual(r.message, "本进程不是本地实例，不接受配对。");
+});
 
-  global.window = prevWindow;
+// 回归面：有 ok/Ok 字段时以它为准，errCode 不参与判定。
+test("normalize: 有 ok 字段时以 ok 为准（errCode 不改变判定）", () => {
+  const r = api.normalize({
+    ok: true,
+    status: 200,
+    data: { ok: true, errCode: 0, errMsg: null, data: { x: 1 } },
+  });
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.data, { x: 1 });
+});
+
+// 回归面：errCode 出现在内层 Data 里（不是顶层失败壳）时仍是成功。
+test("normalize: errCode 落在内层 Data 里不算失败壳", () => {
+  const r = api.normalize({
+    ok: true,
+    status: 200,
+    data: { ok: true, data: { errCode: 500, errMsg: "某个子项字段" } },
+  });
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.data, { errCode: 500, errMsg: "某个子项字段" });
+});
+
+// 回归面：HTTP 非 2xx 的判定面原样保留（壳里只有 errCode 时仍回 HTTP 状态文案）。
+test("normalize: HTTP 403 且壳里只有 errCode → 仍回 HTTP 403 文案", () => {
+  const r = api.normalize({ ok: false, status: 403, data: { errCode: 403 } });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.code, 403);
+  assert.strictEqual(r.message, "HTTP 403");
 });

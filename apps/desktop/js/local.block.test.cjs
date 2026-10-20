@@ -111,7 +111,7 @@ async function bootApp(opts) {
       apiBase: "https://htwmedia.dpdns.org",
       localBase: "",
       registerBase: () => true,
-      loadConfig: async () => ({ apiBase: els["api-base"].value, apiKey: els["api-key"].value, localBase: "" }),
+      loadConfig: async () => (opts.config || { apiBase: els["api-base"].value, apiKey: els["api-key"].value, localBase: "" }),
       saveConfig: (cfg) => { saved.push(cfg); return true; },
       call: async (method, path, body, apiKey, base) => {
         calls.push({ method: method, path: path, body: body, apiKey: apiKey, base: base });
@@ -177,7 +177,8 @@ test("本地模式块: 探活 500 → 不算就绪，状态行给失败文案，
     await app.els["local-apply"].fire("click");
 
     assert.notStrictEqual(app.els["local-status"].textContent, "本地模式就绪", "500 不能被当成探活成功");
-    assert.strictEqual(app.els["local-status"].textContent, "无法连接本地实例，请先启动或检查地址。");
+    // 500 是"实例回了错误"，不是"连不上"：两者文案必须能区分开。
+    assert.strictEqual(app.els["local-status"].textContent, "本地实例返回错误，请检查本地实例状态。");
     assert.strictEqual(app.els["local-pair"].disabled, true, "探活失败时配对按钮应保持禁用");
   } finally {
     app.restore();
@@ -249,6 +250,111 @@ test("本地模式块: 配对失败 → 结果行显示失败原文", async () =
     await app.els["local-pair"].fire("click");
 
     assert.strictEqual(app.els["local-pair-result"].textContent, "本进程不是本地实例，不接受配对。");
+  } finally {
+    app.restore();
+  }
+});
+
+// 失败壳判定（无 ok/Ok 字段的 {errCode, errMsg}）落到界面上：
+// HTTP 200 + 失败壳不能被当成"配对成功"。
+test("本地模式块: 配对返 HTTP 200 + 失败壳 → 结果行显示失败原文，不算成功", async () => {
+  const app = await bootApp({
+    route: (method, path) => {
+      if (path === "/api/v2/local/enroll")
+        return { status: 200, ok: true, data: { Ok: true, Data: { KeyMaterial: "AAAABBBBCCCCDDDD", KeyId: "aid-1", Account: "a@x.com" } } };
+      if (path === "/api/local/pair")
+        return { status: 200, ok: true, data: { errCode: 403, errMsg: "本进程不是本地实例，不接受配对。" } };
+      return READY_HEALTH;
+    },
+  });
+  try {
+    await app.els["local-apply"].fire("click");
+    await app.els["local-pair"].fire("click");
+
+    assert.notStrictEqual(app.els["local-pair-result"].textContent, "配对成功。", "失败壳不能被当成配对成功");
+    assert.strictEqual(app.els["local-pair-result"].textContent, "本进程不是本地实例，不接受配对。");
+  } finally {
+    app.restore();
+  }
+});
+
+// 地址落盘口径：只有「保存并探活」确认过的地址才算数。
+// 输入框里还没探活的值不能随着 AuthKey 的每次按键写进配置。
+test("本地模式块: 输入框里的未探活地址不随 AuthKey 按键落盘", async () => {
+  const app = await bootApp({
+    config: { apiBase: "https://htwmedia.dpdns.org", apiKey: "test-key", localBase: "http://127.0.0.1:51111" },
+  });
+  try {
+    // 启动时读回的已配置地址要被保留下来（applyAuth 整份写回时不能丢）。
+    const bootCfg = app.saved[app.saved.length - 1];
+    assert.strictEqual(bootCfg.localBase, "http://127.0.0.1:51111");
+
+    // 用户在输入框里改了一个还没探活的地址，又敲了一下 AuthKey。
+    app.els["local-base"].value = "http://127.0.0.1:52222";
+    await app.els["api-key"].fire("input");
+
+    const afterKey = app.saved[app.saved.length - 1];
+    assert.strictEqual(afterKey.localBase, "http://127.0.0.1:51111", "未探活的地址不该被写进配置");
+
+    // 「保存并探活」之后，确认过的地址才落盘。
+    await app.els["local-apply"].fire("click");
+    const afterApply = app.saved[app.saved.length - 1];
+    assert.strictEqual(afterApply.localBase, "http://127.0.0.1:52222");
+    assert.strictEqual(app.els["local-status"].textContent, "本地模式就绪");
+  } finally {
+    app.restore();
+  }
+});
+
+// 清空地址的按钮动作要把已确认的地址缓存一起清掉。
+test("本地模式块: 地址清空 → 已确认地址缓存被清空并落盘", async () => {
+  const app = await bootApp({
+    config: { apiBase: "https://htwmedia.dpdns.org", apiKey: "test-key", localBase: "http://127.0.0.1:51111" },
+  });
+  try {
+    app.els["local-base"].value = "";
+    await app.els["local-apply"].fire("click");
+
+    const cfg = app.saved[app.saved.length - 1];
+    assert.strictEqual(cfg.localBase, "");
+    assert.strictEqual(app.els["local-status"].textContent, "本地模式未配置");
+
+    // 缓存清了之后，配对要被状态自检拦下（不再拿旧地址去配对）。
+    await app.els["local-pair"].fire("click");
+    assert.strictEqual(app.els["local-pair-result"].textContent, "本地实例尚未就绪，请先保存并探活。");
+  } finally {
+    app.restore();
+  }
+});
+
+// key 口径：输入框为空就直接失败，不发请求 ——
+// 否则配对体会带着空 AuthKey 出去，而登记用的却是另一个 key。
+test("本地模式块: AuthKey 为空 → 配对直接失败，不发任何请求", async () => {
+  const app = await bootApp();
+  try {
+    await app.els["local-apply"].fire("click");
+    app.els["api-key"].value = "";
+    const before = app.calls.length;
+    await app.els["local-pair"].fire("click");
+
+    assert.strictEqual(app.els["local-pair-result"].textContent, "请先填写 AuthKey");
+    const sent = app.calls.slice(before).filter((c) => c.path === "/api/v2/local/enroll" || c.path === "/api/local/pair");
+    assert.strictEqual(sent.length, 0, "AuthKey 为空时不该发出登记或配对请求");
+  } finally {
+    app.restore();
+  }
+});
+
+// 状态自检：配对流程自己也要判状态，不能只靠按钮 disabled 兜底。
+test("本地模式块: 未探活就点配对 → 状态自检拦下，不发任何请求", async () => {
+  const app = await bootApp();
+  try {
+    const before = app.calls.length;
+    await app.els["local-pair"].fire("click");
+
+    assert.strictEqual(app.els["local-pair-result"].textContent, "本地实例尚未就绪，请先保存并探活。");
+    const sent = app.calls.slice(before).filter((c) => c.path === "/api/v2/local/enroll" || c.path === "/api/local/pair");
+    assert.strictEqual(sent.length, 0, "状态不满足时不该发出登记或配对请求");
   } finally {
     app.restore();
   }
