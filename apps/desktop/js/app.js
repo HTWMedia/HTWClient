@@ -6,6 +6,30 @@
 
   function getBaseInput() { return document.getElementById("api-base"); }
   function getKeyInput() { return document.getElementById("api-key"); }
+  function getLocalBaseInput() { return document.getElementById("local-base"); }
+  function getLocalStatusEl() { return document.getElementById("local-status"); }
+  function getLocalPairBtn() { return document.getElementById("local-pair"); }
+  function getLocalPairResultEl() { return document.getElementById("local-pair-result"); }
+
+  // 本地模式未配置（输入框为空）时的状态文案。
+  const LOCAL_NOT_CONFIGURED = "本地模式未配置";
+
+  function localBaseValue() {
+    const input = getLocalBaseInput();
+    return input ? String(input.value || "").trim() : "";
+  }
+  function setLocalStatus(text) { const el = getLocalStatusEl(); if (el) el.textContent = text; }
+  function setLocalPairResult(text) { const el = getLocalPairResultEl(); if (el) el.textContent = text; }
+  function setLocalPairEnabled(on) { const b = getLocalPairBtn(); if (b) b.disabled = !on; }
+
+  // 配置的三个键必须一起写：主进程的 saveConfig 只认 apiBase/apiKey/localBase，
+  // 少写一个键等于把另一个键清空（例如保存 AuthKey 时把本地地址抹掉）。
+  function saveConfigAll(localBase) {
+    if (!window.htw || !window.htw.saveConfig) return;
+    const base = getBaseInput() ? getBaseInput().value.trim() : "";
+    const key = getKeyInput() ? getKeyInput().value : "";
+    window.htw.saveConfig({ apiBase: base, apiKey: key, localBase: localBase == null ? "" : localBase });
+  }
 
   // AuthKey 只存主进程的 userData 文件（明文，README 已声明）。
   // 早期版本还往 localStorage 写了一份做"互为备份"，那只是把泄露面扩大了一倍
@@ -28,17 +52,19 @@
   function applyAuth() {
     const base = getBaseInput().value.trim();
     const key = getKeyInput().value;
-    if (window.htw && window.htw.saveConfig) window.htw.saveConfig({ apiBase: base, apiKey: key });
+    saveConfigAll(localBaseValue());
     clearLocal();
     if (base) window.HTWApi.setBase(base);
     window.HTWApi.setKey(key);
+    // 本地地址也跟着输入框走：填了但没登记，注册表与实际请求地址会对不上。
+    const lb = localBaseValue();
+    if (window.HTWApi && window.HTWApi.setLocalBase && window.HTWApi.localBase !== lb)
+      window.HTWApi.setLocalBase(lb);
     refreshKeyUI();
   }
 
   function persistAuth() {
-    const base = getBaseInput().value.trim();
-    const key = getKeyInput().value;
-    if (window.htw && window.htw.saveConfig) window.htw.saveConfig({ apiBase: base, apiKey: key });
+    saveConfigAll(localBaseValue());
     clearLocal();
   }
 
@@ -112,6 +138,120 @@
     banner.hidden = false;
   }
 
+  // ---- 本地模式设置块 ----
+  // 三态文案与状态判定都在 js/local.js（机器契约只在那里翻译），
+  // 这里只做接线：读地址 → 登记基地址 → 探活 → 显示状态 → 允许配对。
+
+  // 把完整 URL 拆成 path（preload 的 call 是 base + path 拼出来的，
+  // 直接把完整 URL 当 path 传过去会拼出坏地址）。
+  function pathOf(url) {
+    try {
+      const u = new URL(String(url));
+      return u.pathname + (u.search || "");
+    } catch (e) { return String(url); }
+  }
+
+  // 探活用的传输层：HTTP 状态自己判 —— 非 2xx 一律当失败。
+  // 不判的话 500 会被当成"探活成功"，状态行显示就绪，用户白高兴一场。
+  function localTransport(localBase) {
+    return {
+      call: async function (method, path) {
+        // 不带 AuthKey：健康检查不需要登录，也不该把云端密钥递给本机进程。
+        const res = await window.htw.call(method, pathOf(path), undefined, undefined, localBase);
+        const status = res ? res.status : 0;
+        if (typeof status !== "number" || status < 200 || status >= 300)
+          throw new Error("HTTP " + status);
+        return res;
+      },
+    };
+  }
+
+  // 探活并刷新状态行（探活结果只在这里翻译成界面文案）。
+  async function probeLocal(localBase) {
+    const Local = window.HTWLocal;
+    if (!Local || typeof Local.probeHealth !== "function") {
+      setLocalStatus("本地模式模块未加载。");
+      setLocalPairEnabled(false);
+      return { ok: false, state: "invalid", message: "本地模式模块未加载。" };
+    }
+    let r;
+    try {
+      r = await Local.probeHealth(localBase, localTransport(localBase));
+    } catch (e) {
+      r = { ok: false, state: "unreachable", message: (e && e.message) ? e.message : String(e) };
+    }
+    if (!r || r.ok !== true) {
+      setLocalStatus((r && r.message) ? r.message : "无法连接本地实例，请先启动或检查地址。");
+      setLocalPairEnabled(false);
+      return r;
+    }
+    // 状态文案取机器契约的映射表（不在这里另造一套说法）。
+    const text = (Local.STATE_TEXT && Local.STATE_TEXT[r.state]) || r.message || "";
+    setLocalStatus(text);
+    setLocalPairEnabled(r.state === "ready" || r.state === "pairedNotUnlocked");
+    return r;
+  }
+
+  // 「保存并探活」：空地址 = 关闭本地模式；非空 = 登记 + 探活。
+  async function applyLocal() {
+    const api = window.HTWApi;
+    const v = localBaseValue();
+    if (!v) {
+      if (api && api.setLocalBase) api.setLocalBase("");
+      saveConfigAll("");
+      setLocalStatus(LOCAL_NOT_CONFIGURED);
+      setLocalPairEnabled(false);
+      setLocalPairResult("");
+      return { ok: false, state: "notConfigured", message: LOCAL_NOT_CONFIGURED };
+    }
+    if (api && api.setLocalBase) api.setLocalBase(v);
+    saveConfigAll(v);
+    setLocalPairResult("");
+    return await probeLocal(v);
+  }
+
+  // 「一键配对」：登记材料（enroll，走服务端）→ 出示材料（pair，走本地实例）→ 比对 keyId。
+  // 账号由 enroll 响应回带，调用方不传也不猜。
+  async function pairLocal() {
+    const Local = window.HTWLocal;
+    const api = window.HTWApi;
+    const localBase = (api && api.localBase) ? api.localBase : localBaseValue();
+    const serverBase = getBaseInput() ? getBaseInput().value.trim() : "";
+    const key = getKeyInput() ? getKeyInput().value : "";
+    if (!Local || typeof Local.pairFlow !== "function") {
+      setLocalPairResult("本地模式模块未加载。");
+      return { ok: false, message: "本地模式模块未加载。" };
+    }
+    let r;
+    try {
+      r = await Local.pairFlow({
+        apiBase: serverBase,
+        localBase: localBase,
+        key: key,
+        enroll: async function () { return api.call("POST", "/api/v2/local/enroll"); },
+        pair: async function (body) { return api.call("POST", "/api/local/pair", body, localBase); },
+      });
+    } catch (e) {
+      r = { ok: false, message: (e && e.message) ? e.message : String(e) };
+    }
+    if (!r || r.ok !== true) {
+      // 失败文案逐字透传（keyId 不一致等都是流程给出的原文）。
+      setLocalPairResult((r && r.message) ? r.message : "配对失败。");
+      return r;
+    }
+    setLocalPairResult("配对成功。");
+    // 只刷新状态行，不清结果行（刚写进去的成功提示不能被自己抹掉）。
+    await probeLocal(localBase);
+    return r;
+  }
+
+  function wireLocal() {
+    const apply = document.getElementById("local-apply");
+    if (apply) apply.addEventListener("click", function () { return applyLocal(); });
+    const pair = getLocalPairBtn();
+    if (pair) pair.addEventListener("click", function () { return pairLocal(); });
+  }
+
   function wireNav() {
     document.querySelectorAll(".nav-item").forEach((b) => {
       b.addEventListener("click", () => {
@@ -153,11 +293,21 @@
     clearLocal();
     if (saved.apiBase) getBaseInput().value = saved.apiBase;
     if (saved.apiKey) getKeyInput().value = saved.apiKey;
+    // 本地地址要在 applyAuth 之前填好：applyAuth 会把配置整份写回，
+    // 顺序反了会把刚读出来的本地地址又清空。
+    if (saved.localBase) {
+      const lb = String(saved.localBase);
+      const li = getLocalBaseInput();
+      if (li) li.value = lb;
+      if (window.HTWApi && window.HTWApi.setLocalBase) window.HTWApi.setLocalBase(lb);
+      setLocalStatus("已配置，未探活");
+    }
     getBaseInput().addEventListener("change", applyAuth);
     getKeyInput().addEventListener("input", applyAuth);
     applyAuth();
     if (window.HTWApi && window.HTWApi.onQuotaExceeded) window.HTWApi.onQuotaExceeded(showQuotaBanner);
     wireNav();
+    wireLocal();
     mountSkills();
     // 任务恢复要等配置与 AuthKey 就绪，所以排在 mountSkills 之后。
     // 注意面板在 mountSkills 里已经渲染过一次（那时列表还是空的）：真正把记录显示
@@ -178,6 +328,7 @@
       console.error("boot failed", e);
       applyAuth();
       wireNav();
+      wireLocal();
       mountSkills();
       showPanel("topics");
     });
@@ -188,5 +339,12 @@
     getKey: function () { return getKeyInput().value; },
     getBase: function () { return getBaseInput().value; },
     applyAuth: applyAuth,
+    // 本地模式接线（设置块）：暴露出来便于冒烟测试直接驱动。
+    local: {
+      apply: applyLocal,
+      pair: pairLocal,
+      wire: wireLocal,
+      transport: localTransport,
+    },
   };
 })();

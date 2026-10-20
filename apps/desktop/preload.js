@@ -13,6 +13,10 @@ const API_BASE = process.env.HTW_API_BASE || "https://htwmedia.dpdns.org";
 // 自建部署若需要让大文件分片上传绕过反向代理，用环境变量 HTW_API_DIRECT 指定
 // 直连地址即可；仓库里不内置任何源站 IP / 主机名。
 const API_DIRECT = process.env.HTW_API_DIRECT || "";
+// 本地实例地址：默认关闭（空串），此时本地模式不可用。
+// 用户在「设置」里填写的地址通过 renderer 的 registerBase 登记后生效，
+// 这里的环境变量只是给自部署场景一个默认入口（与 API_DIRECT 同形）。
+const API_LOCAL = process.env.HTW_API_LOCAL || "";
 
 function originOf(u) {
   try {
@@ -25,7 +29,7 @@ function originOf(u) {
 // window.htw 对渲染层完全可见，若不做白名单，页面里任何脚本都能让 preload 带着
 // AuthKey 去连它自己指定的服务器 —— 凭据会被静默转发到第三方。
 // 只放行内置的两个来源；用户在「设置」里填的自定义地址通过 registerBase 追加。
-const BASE_ORIGINS = [originOf(API_BASE), originOf(API_DIRECT)].filter(Boolean);
+const BASE_ORIGINS = [originOf(API_BASE), originOf(API_DIRECT), originOf(API_LOCAL)].filter(Boolean);
 // 只有显式配置了直连地址、且它是 http 明文时才放宽证书校验：
 // 证书签发给域名，用 IP / 明文地址访问必然主机名不匹配。
 // 未配置直连时该值为空串，任何请求都不会命中这个豁免。
@@ -102,6 +106,7 @@ ipcRenderer.on("htw:stream-event", (_e, msg) => { dispatchStreamEvent(msg); });
 contextBridge.exposeInMainWorld("htw", {
   apiBase: API_BASE,
   directBase: API_DIRECT,
+  localBase: API_LOCAL,
   // 用户在「设置」里填写的自定义服务端地址，必须先登记才能被 call/upload/download 使用。
   registerBase: (base) => registerBase(base),
   loadConfig: loadConfig,

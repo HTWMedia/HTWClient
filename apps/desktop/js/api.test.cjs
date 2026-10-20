@@ -140,3 +140,44 @@ test("setLocalBase: 登记 preload 并生效 localBase getter", () => {
   assert.ok(reg.includes("http://127.0.0.1:51123"));
   // 单出口：localBase 请求图层拒绝网络失败时返回统一形状
 });
+
+// 4007 = 本地执行不可用（服务器侧机器契约）。客户端只显示这句中性文案，
+// 不把内部细节（额度确认之类）透给用户。
+test("normalize: ErrCode 4007 → localUnavailable 文案", () => {
+  const r = api.normalize({
+    ok: true,
+    data: { Ok: false, ErrCode: 4007, ErrMsg: "本地执行不可用：无法确认额度，请检查网络或服务器状态。" },
+  });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.code, 4007);
+  assert.strictEqual(r.localUnavailable, true);
+  assert.strictEqual(r.message, "本地执行不可用，请检查网络或服务器状态。");
+});
+
+test("call: 本地基地址网络失败 → 同一出口文案", async () => {
+  const prevWindow = global.window;
+  global.window = {
+    htw: {
+      apiBase: "https://htwmedia.dpdns.org",
+      localBase: "http://127.0.0.1:51111",
+      registerBase: () => {},
+      call: async () => { throw new TypeError("fetch failed"); },
+    },
+  };
+  delete require.cache[require.resolve("./api.js")];
+  const localApi = require("./api.js");
+  localApi.setKey("test-key");
+
+  const r = await localApi.call("POST", "/api/v2/agent/start", {}, localApi.localBase);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.localUnavailable, true);
+  assert.strictEqual(r.message, "本地执行不可用，请检查网络或服务器状态。");
+
+  // 其它基地址的失败原样抛出去，不被本地模式这条出口吞掉。
+  await assert.rejects(
+    () => localApi.call("POST", "/api/v2/agent/start", {}, "https://other.example.com"),
+    /fetch failed/
+  );
+
+  global.window = prevWindow;
+});

@@ -40,9 +40,13 @@
 
   function showError(region, message) {
     clear(region);
+    const msg = String(message || "");
+    // 本地模式不可用是独立症状：走专用块（标题固定），
+    // 详情里剥掉 "[4007] " 这类代码前缀，只留给人看的话。
+    const local = msg.indexOf("本地执行不可用") !== -1;
     mount(region, el("div", { class: "error-box" }, [
-      el("strong", { text: "出错了" }),
-      el("div", { class: "error-detail", text: String(message) }),
+      el("strong", { text: local ? "本地执行不可用" : "出错了" }),
+      el("div", { class: "error-detail", text: local ? msg.replace(/^\[\d+\]\s*/, "") : msg }),
     ]));
     return region;
   }

@@ -16,6 +16,11 @@
   let _localBase =
     (typeof window !== "undefined" && window.htw && window.htw.localBase) || "";
 
+  // 4007 = 本地执行不可用（服务器侧的机器契约）。同一症状只留一个出口：
+  // 客户端一律显示这句中性文案，内部细节（额度确认之类）不外泄给用户。
+  const LOCAL_UNAVAILABLE_CODE = 4007;
+  const LOCAL_UNAVAILABLE_MESSAGE = "本地执行不可用，请检查网络或服务器状态。";
+
   function setKey(k) { _key = k || ""; }
   // 改服务端地址必须先向 preload 登记：preload 只向白名单内的来源发请求，
   // 否则任何页面脚本都能让 preload 带着 AuthKey 去连它指定的服务器。
@@ -47,7 +52,18 @@
     if (!_key) throw keyError();
     // 默认带上当前服务端地址：不传的话 preload 会退回它的内置默认值，
     // 「设置」里改过的地址就失效了。
-    const res = await window.htw.call(method, path, body, _key, baseOverride || _base);
+    const target = baseOverride || _base;
+    let res;
+    try {
+      res = await window.htw.call(method, path, body, _key, target);
+    } catch (e) {
+      // 本地基地址连不上（fetch failed / 连接被拒）与 4007 是同一个症状，
+      // 走同一个出口；其它基地址的失败原样抛出去，不被这里吞掉。
+      if (_localBase && target === _localBase)
+        return { ok: false, code: LOCAL_UNAVAILABLE_CODE, localUnavailable: true,
+          message: LOCAL_UNAVAILABLE_MESSAGE, raw: e };
+      throw e;
+    }
     return normalize(res);
   }
 
@@ -180,6 +196,20 @@
     try { _quotaHandler({ redirectUrl: url, message: (raw && (raw.error || raw.Error)) || "" }); } catch (e) { /* ignore */ }
   }
 
+  function isLocalUnavailableCode(code) {
+    if (code === undefined || code === null || code === "") return false;
+    return Number(code) === LOCAL_UNAVAILABLE_CODE;
+  }
+
+  // 失败侧统一形状：{ ok:false, code, message, raw }。
+  // 4007 再多带一个 localUnavailable 标记，界面据此走本地模式的专用提示。
+  function failShape(code, message, raw) {
+    if (isLocalUnavailableCode(code))
+      return { ok: false, code: LOCAL_UNAVAILABLE_CODE, localUnavailable: true,
+        message: LOCAL_UNAVAILABLE_MESSAGE, raw: raw };
+    return { ok: false, code: code, message: message, raw: raw };
+  }
+
   function normalize(res) {
     const d = res.data !== undefined ? res.data : res.body;
     if (res.status === 402) fireQuotaExceeded(d);
@@ -193,8 +223,8 @@
     const msg = d.errMsg !== undefined ? d.errMsg : d.ErrMsg;
     const taskId = d.taskId !== undefined ? d.taskId : d.TaskId;
     if (res.ok && ok === true) return { ok: true, data: camelize(data), taskId: taskId || null };
-    if (res.ok && ok === false) return { ok: false, code: code, message: msg, raw: d };
-    if (!res.ok) return { ok: false, code: code || res.status, message: msg || ("HTTP " + res.status), raw: d };
+    if (res.ok && ok === false) return failShape(code, msg, d);
+    if (!res.ok) return failShape(code || res.status, msg || ("HTTP " + res.status), d);
     return { ok: true, data: camelize(data !== undefined ? data : d), taskId: taskId || null };
   }
 
@@ -246,6 +276,8 @@
     hasKey: hasKey, authHeader: authHeader,
     call: call, get: get, post: post, upload: upload, download: download,
     normalize: normalize, pollTask: pollTask, onQuotaExceeded: onQuotaExceeded,
+    LOCAL_UNAVAILABLE_CODE: LOCAL_UNAVAILABLE_CODE,
+    LOCAL_UNAVAILABLE_MESSAGE: LOCAL_UNAVAILABLE_MESSAGE,
     subscribeTask: subscribeTask, unsubscribeTask: unsubscribeTask,
     get base() { return _base; }, get directBase() { return _directBase; },
     get localBase() { return _localBase; },

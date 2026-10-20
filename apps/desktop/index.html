@@ -58,11 +58,26 @@
             <span class="hint">密钥保存在本机应用数据中（明文），重启后自动填充；换设备需重新获取。若没有 AuthKey，可在 web 端通过邮箱申请（有效期 30 天）。</span>
           </div>
         </div>
+        <!-- 本地模式：填写本地实例地址 → 探活看状态 → 需要时一键配对。 -->
+        <div class="card" id="local-card">
+          <h3>本地模式</h3>
+          <div class="field">
+            <label>本地实例地址</label>
+            <input type="text" id="local-base" placeholder="http://127.0.0.1:51xxx" />
+          </div>
+          <div class="row">
+            <button class="btn" type="button" id="local-apply">保存并探活</button>
+            <button class="btn" type="button" id="local-pair" disabled>一键配对</button>
+          </div>
+          <div class="hint" id="local-status">未配置</div>
+          <div class="hint" id="local-pair-result"></div>
+        </div>
       </section>
     </main>
   </div>
   <script src="libs/marked.min.js"></script>
   <script src="js/api.js"></script>
+  <script src="js/local.js"></script>
   <script src="js/tasks.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/skills/insight.js"></script>
