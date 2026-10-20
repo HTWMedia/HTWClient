@@ -21,6 +21,12 @@
   const LOCAL_UNAVAILABLE_CODE = 4007;
   const LOCAL_UNAVAILABLE_MESSAGE = "本地执行不可用，请检查网络或服务器状态。";
 
+  // 云端（服务器）连不上时的中性文案。
+  // 🔴 与上面那句是**两种不同的症状**，必须分开：
+  // 「本地执行不可用」说的是本机实例连不上，「无法连接服务器」说的是云端服务器连不上。
+  // 合成一句，用户既不知道该看本机还是该看网络。
+  const CLOUD_UNREACHABLE_MESSAGE = "无法连接服务器，请检查网络或服务器地址。";
+
   function setKey(k) { _key = k || ""; }
   // 改服务端地址必须先向 preload 登记：preload 只向白名单内的来源发请求，
   // 否则任何页面脚本都能让 preload 带着 AuthKey 去连它指定的服务器。
@@ -35,9 +41,35 @@
     if (window.htw && window.htw.registerBase) window.htw.registerBase(b);
     _directBase = b;
   }
+
+  // 本地实例地址的归一化：口径只有一份，在 js/local.js 的 normalizeLocalBase
+  // （去尾斜杠 + 拒绝带路径 + 强制回环）。这里不重复实现那三条规则。
+  // 载入时 window.HTWLocal 可能还没就位，那时退回「仅去尾斜杠」的最小归一化；
+  // 准入由应用层（app.js 的 applyLocal）把关 —— 两处都把关，才不会因加载顺序漏掉。
+  function normalizeLocalBaseValue(b) {
+    const L = (typeof window !== "undefined" && window.HTWLocal) || null;
+    if (L && typeof L.normalizeLocalBase === "function") return L.normalizeLocalBase(b);
+    const raw = typeof b === "string" ? b.trim() : "";
+    if (!raw) return { ok: true, base: "", empty: true };
+    return { ok: true, base: raw.replace(/\/+$/, "") };
+  }
+
+  // 保存本地实例地址。返回 { ok, base, reason? }：
+  //  - ok:true  → 已归一化、已登记到 preload 白名单、生效；
+  //  - ok:false → **没有登记、没有生效**（调用方据此不落盘，并给出明确文案）。
   function setLocalBase(b) {
-    if (window.htw && window.htw.registerBase) window.htw.registerBase(b);
-    _localBase = b;
+    const n = normalizeLocalBaseValue(b);
+    if (!n.ok) return { ok: false, base: "", reason: n.reason || "format" };
+    if (n.empty) { _localBase = ""; return { ok: true, base: "" }; }
+    if (window.htw && window.htw.registerBase) {
+      const ok = window.htw.registerBase(n.base);
+      // 🔴 registerBase 的返回值必须看：它 false 的唯一原因是地址格式非法
+      // （不是 http/https）。没被登记的地址 preload 那边会直接回 BASE_NOT_ALLOWED，
+      // 请求根本发不出去 —— 与其让用户看到一句含糊的「连不上」，不如当场说清格式不对。
+      if (ok === false) return { ok: false, base: "", reason: "format" };
+    }
+    _localBase = n.base;
+    return { ok: true, base: n.base };
   }
   function hasKey() { return !!_key; }
   function authHeader() { return { AuthKey: _key }; }
@@ -75,6 +107,14 @@
       if (_localBase && target === _localBase && isNetworkFailure(e))
         return { ok: false, code: LOCAL_UNAVAILABLE_CODE, localUnavailable: true,
           message: LOCAL_UNAVAILABLE_MESSAGE, raw: e };
+      // 云端（服务器）连不上：把英文原文（Chromium 的 "fetch failed"）换成一句中性文案。
+      // 原来这里原样抛出去，界面上就蹦出一句英文，用户既看不懂也不知道该查什么。
+      // 仍然**抛出去**（不改成返回值）：抛与不抛是调用方的既有契约，只换文案。
+      if (target !== _localBase && isNetworkFailure(e)) {
+        const err = new Error(CLOUD_UNREACHABLE_MESSAGE);
+        err.cause = e;
+        throw err;
+      }
       throw e;
     }
     return normalize(res);
@@ -253,6 +293,15 @@
     // 只看顶层：内层 Data 里带 errCode 的正常载荷不受影响；
     // 有 ok/Ok 字段时仍以 ok/Ok 为准（上面的分支已经先判过了）；
     // errCode:0 是"没有错误"，不算失败壳。
+    //
+    // 🔴 本分支依赖的不变量：**服务器今天只有两个端点产出顶层 errCode**
+    // ——api/local/pair 与 api/v2/local-materials/rotate ——而**两者的失败
+    // 都是非 2xx**（4xx/5xx）。非 2xx 会被上面那个 `if (!res.ok)` 分支先接住，
+    // **根本走不到这一段**。
+    // 所以本分支目前是**兜底**：它保的是「哪天多了一个用 200 回答失败的端点」
+    // 或者「本地实例用 200 回了失败壳」时，一次失败不会被当成成功。
+    // 反过来说：哪天有端点改成用 **HTTP 200 + 顶层 errCode** 回答失败，
+    // 这一行就是那条路上的**唯一**拦截点，删掉它失败就会变成成功。
     if (ok === undefined && isFailureShellCode(code)) return failShape(code, msg || ("HTTP " + res.status), d);
     return { ok: true, data: camelize(data !== undefined ? data : d), taskId: taskId || null };
   }

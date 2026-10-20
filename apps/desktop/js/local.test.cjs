@@ -94,6 +94,94 @@ test("STATE_TEXT / MODE_TEXT 机器契约映射", () => {
   assert.deepStrictEqual(Local.MODE_TEXT, { server: "该地址不是本地实例" });
 });
 
+// ---- 本地实例地址的归一化与准入 ----
+//
+// 这三条是硬的：配对请求会把 AuthKey + 账号级 KEK 材料发往这个地址。
+
+test("normalizeLocalBase: 合法回环根地址通过", () => {
+  assert.deepStrictEqual(Local.normalizeLocalBase("http://127.0.0.1:51111"),
+    { ok: true, base: "http://127.0.0.1:51111" });
+  assert.deepStrictEqual(Local.normalizeLocalBase("http://localhost:51111"),
+    { ok: true, base: "http://localhost:51111" });
+  assert.deepStrictEqual(Local.normalizeLocalBase("http://[::1]:51111"),
+    { ok: true, base: "http://[::1]:51111" });
+  assert.deepStrictEqual(Local.normalizeLocalBase("https://127.0.0.1"),
+    { ok: true, base: "https://127.0.0.1" });
+});
+
+test("normalizeLocalBase: 127.0.0.0/8 整段都是回环", () => {
+  assert.deepStrictEqual(Local.normalizeLocalBase("http://127.5.5.5:51111"),
+    { ok: true, base: "http://127.5.5.5:51111" });
+  assert.deepStrictEqual(Local.normalizeLocalBase("http://127.255.255.255"),
+    { ok: true, base: "http://127.255.255.255" });
+});
+
+test("normalizeLocalBase: 结尾斜杠归一化掉（preload 是 base + path 直接拼的）", () => {
+  // 尾斜杠不归一就会拼出 "//api/v2/local/health" → 404。
+  const r = Local.normalizeLocalBase("http://127.0.0.1:51111/");
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.base, "http://127.0.0.1:51111");
+  assert.ok(!r.base.endsWith("/"), "归一化后不带结尾斜杠");
+
+  // 多个尾斜杠同样归一化掉。
+  const many = Local.normalizeLocalBase("http://127.0.0.1:51111///");
+  assert.strictEqual(many.base, "http://127.0.0.1:51111");
+});
+
+test("normalizeLocalBase: FQDN 尾点形态归一化（localhost. → localhost）", () => {
+  const r = Local.normalizeLocalBase("http://localhost.:51111/");
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.base, "http://localhost:51111");
+});
+
+test("normalizeLocalBase: 带路径的地址拒绝（根地址口径）", () => {
+  // 注意："http://127.0.0.1:51111/" 的 pathname 仍是 "/"，它是**根地址**，
+  // 只是多了个尾斜杠 —— 那是归一化的事，不是拒绝的事。
+  for (const url of ["http://127.0.0.1:51111/api", "http://127.0.0.1:51111/?a=1", "http://127.0.0.1:51111#f", "http://127.0.0.1:51111/x/y"]) {
+    const r = Local.normalizeLocalBase(url);
+    assert.strictEqual(r.ok, false, url + " 不该通过");
+    assert.strictEqual(r.reason, "notRoot");
+    assert.strictEqual(r.message, "本地实例地址必须是根地址（不允许带路径）。");
+  }
+});
+
+test("normalizeLocalBase: 非回环地址拒绝（材料不能寄到第三方）", () => {
+  for (const url of ["http://example.com", "http://example.com:51111", "http://192.168.1.10:51111", "http://10.0.0.1", "http://0.0.0.0:51111", "http://128.0.0.1"]) {
+    const r = Local.normalizeLocalBase(url);
+    assert.strictEqual(r.ok, false, url + " 不该通过");
+    assert.strictEqual(r.reason, "notLoopback");
+    assert.strictEqual(r.message, "本地实例地址必须是本机回环地址。");
+  }
+});
+
+test("normalizeLocalBase: 格式非法拒绝（漏写 http:// 也要说清）", () => {
+  for (const url of ["127.0.0.1:51111", "localhost:51111", "not a url", "ftp://127.0.0.1", "htp://127.0.0.1"]) {
+    const r = Local.normalizeLocalBase(url);
+    assert.strictEqual(r.ok, false, url + " 不该通过");
+    assert.strictEqual(r.reason, "format");
+    assert.strictEqual(r.message, "地址格式无效，请以 http:// 开头填写。");
+  }
+});
+
+test("normalizeLocalBase: 空地址 = 关闭本地模式（不算错）", () => {
+  assert.deepStrictEqual(Local.normalizeLocalBase(""), { ok: true, base: "", empty: true });
+  assert.deepStrictEqual(Local.normalizeLocalBase("   "), { ok: true, base: "", empty: true });
+  assert.deepStrictEqual(Local.normalizeLocalBase(null), { ok: true, base: "", empty: true });
+});
+
+test("normalizeLocalBase: 非字符串输入按格式非法处理", () => {
+  assert.strictEqual(Local.normalizeLocalBase(123).ok, false);
+  assert.strictEqual(Local.normalizeLocalBase({}).ok, false);
+});
+
+test("LOCAL_BASE_TEXTS 文案单一出处", () => {
+  assert.deepStrictEqual(Local.LOCAL_BASE_TEXTS, {
+    format: "地址格式无效，请以 http:// 开头填写。",
+    notRoot: "本地实例地址必须是根地址（不允许带路径）。",
+    notLoopback: "本地实例地址必须是本机回环地址。",
+  });
+});
+
 // ---- 配对协议模块 ----
 
 test("validateServerUrl: 合法 https 根地址通过", () => {
@@ -360,12 +448,15 @@ test("pairFlow: 端到端 —— 小写壳原始载荷经 api.normalize 后喂�
   assert.strictEqual(r.message, "本进程不是本地实例，不接受配对。");
 });
 
-test("pairFlow: 端到端 —— enroll 成功经 api.normalize（v2 PascalCase 壳）后账号取自回带值", async () => {
+test("pairFlow: 端到端 —— enroll 成功经 api.normalize（v2 外壳 PascalCase + 内层小写）后账号取自回带值", async () => {
   const api = require("./api.js");
+  // 服务器侧 LocalEnrollController 的**真实 wire 形状**：外层是 v2 信封
+  // （PascalCase 的 Ok / Data），**内层字段是小写** { keyMaterial, keyId, account }。
+  // 夹具照抄真实形状 —— 照抄来的那一份才是能被回归钉住的形状。
   const rawEnroll = {
     status: 200,
     ok: true,
-    data: { Ok: true, Data: { KeyMaterial: "AAAABBBBCCCCDDDD", KeyId: "aid-1", Account: "srv@x.com" } },
+    data: { Ok: true, Data: { keyMaterial: "AAAABBBBCCCCDDDD", keyId: "aid-1", account: "srv@x.com" } },
   };
   const normalizedEnroll = api.normalize(rawEnroll);
   assert.strictEqual(normalizedEnroll.ok, true);

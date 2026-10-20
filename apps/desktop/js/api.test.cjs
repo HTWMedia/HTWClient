@@ -89,12 +89,14 @@ test("pollTask: timeout", async () => {
 });
 
 // 线上形状钉子（Task 3 对齐）：
-// - enroll 走 v2 信封：HTTP 200 + 外层 Ok/Data（PascalCase），成功 Data={ KeyMaterial, KeyId, Account }。
+// - enroll 走 v2 信封：HTTP 200 + 外层 Ok/Data（PascalCase），内层 Data={ keyMaterial, keyId, account }。
+//   ⚠️ 内层是**小写** —— 服务器侧 LocalEnrollController 返回的就是小写，
+//   夹具必须照抄真实形状，照抄来的那一份才是能被回归钉住的那一份。
 // - pair 失败是小写 errCode/errMsg 字面量壳（HTTP 403/401 等非 2xx），errMsg 必须逐字透传不改写。
-test("normalize: enroll 成功 v2 PascalCase 双外壳（KeyMaterial/KeyId/Account）", () => {
+test("normalize: enroll 成功 v2 外壳（PascalCase）+ 内层小写（keyMaterial/keyId/account）", () => {
   const r = api.normalize({
     ok: true,
-    data: { Ok: true, Data: { KeyMaterial: "AAAABBBBCCCCDDDD", KeyId: "aid-1", Account: "a@x.com" } },
+    data: { Ok: true, Data: { keyMaterial: "AAAABBBBCCCCDDDD", keyId: "aid-1", account: "a@x.com" } },
   });
   assert.deepStrictEqual(r, {
     ok: true,
@@ -139,6 +141,35 @@ test("setLocalBase: 登记 preload 并生效 localBase getter", async () => {
     assert.strictEqual(localApi.localBase, "http://127.0.0.1:51123");
     assert.ok(reg.includes("http://127.0.0.1:51123"));
     // 单出口：localBase 请求图层拒绝网络失败时返回统一形状
+  });
+});
+
+// 结尾斜杠必须在登记前归一化掉：preload 是 base + path 直接拼的，
+// 尾斜杠会拼出 "//api/v2/local/health" → 探活 404。
+test("setLocalBase: 结尾斜杠归一化后再登记", async () => {
+  const reg = [];
+  await withStubWindow({
+    htw: { apiBase: "", directBase: "", registerBase: (b) => { reg.push(b); return true; } },
+  }, async (localApi) => {
+    localApi.setLocalBase("http://127.0.0.1:51123/");
+    assert.strictEqual(localApi.localBase, "http://127.0.0.1:51123");
+    assert.ok(reg.includes("http://127.0.0.1:51123"), "登记的必须是归一化后的地址");
+    assert.ok(!reg.includes("http://127.0.0.1:51123/"), "尾斜杠不该被登记进去");
+  });
+});
+
+// registerBase 的返回值必须看：它 false 的唯一原因是地址格式非法。
+// 没登记的地址 preload 那边会直接回 BASE_NOT_ALLOWED，请求根本发不出去 ——
+// 与其让用户看到一句含糊的「连不上」，不如当场说清「格式无效」。
+test("setLocalBase: registerBase 拒绝 → 不生效（调用方据此不落盘）", async () => {
+  const reg = [];
+  await withStubWindow({
+    htw: { apiBase: "", directBase: "", registerBase: (b) => { reg.push(b); return false; } },
+  }, async (localApi) => {
+    const res = localApi.setLocalBase("http://127.0.0.1:51123");
+    assert.strictEqual(res.ok, false);
+    assert.strictEqual(res.reason, "format");
+    assert.strictEqual(localApi.localBase, "", "没被登记的地址不能生效");
   });
 });
 
@@ -191,11 +222,42 @@ test("call: 本地基地址网络失败 → 同一出口文案", async () => {
     assert.strictEqual(r.localUnavailable, true);
     assert.strictEqual(r.message, "本地执行不可用，请检查网络或服务器状态。");
 
-    // 其它基地址的失败原样抛出去，不被本地模式这条出口吞掉。
+    // 其它基地址（云端）的失败**不被本地模式这条出口吞掉**：仍然抛出去，
+    // 但英文原文换成一句中性文案（用户看到的是中文，不是 "fetch failed"）。
     await assert.rejects(
       () => localApi.call("POST", "/api/v2/agent/start", {}, "https://other.example.com"),
-      /fetch failed/
+      /无法连接服务器，请检查网络或服务器地址。/
     );
+  });
+});
+
+// M3：云端（服务器）连不上时，界面不能显示英文原文 "fetch failed"。
+// 症状与「本地执行不可用」**不同**（一个是云端服务器连不上，一个是本机实例连不上），
+// 两句文案必须分开，不能合成一句。
+test("call: 云端基地址网络失败 → 抛中性中文文案，不外泄英文原文", async () => {
+  await withStubWindow(stubWindow(async () => { throw new TypeError("fetch failed"); }), async (localApi) => {
+    localApi.setKey("test-key");
+    await assert.rejects(
+      () => localApi.call("POST", "/api/v2/local/enroll", {}, "https://htwmedia.dpdns.org"),
+      (e) => {
+        assert.strictEqual(e.message, "无法连接服务器，请检查网络或服务器地址。");
+        assert.ok(!/fetch failed/.test(e.message), "英文原文不该出现在给用户看的文案里");
+        // 根因仍留在 cause 里，便于排查。
+        assert.ok(e.cause, "原始异常要留在 cause 里");
+        return true;
+      }
+    );
+  });
+});
+
+// 云端失败与本地失败是**两种症状**，文案必须能分开。
+test("call: 云端失败与本地失败文案不同", async () => {
+  await withStubWindow(stubWindow(async () => { throw new TypeError("fetch failed"); }), async (localApi) => {
+    localApi.setKey("test-key");
+    const localRes = await localApi.call("POST", "/api/local/pair", {}, localApi.localBase);
+    assert.strictEqual(localRes.localUnavailable, true);
+    assert.strictEqual(localRes.message, "本地执行不可用，请检查网络或服务器状态。");
+    assert.notStrictEqual(localRes.message, "无法连接服务器，请检查网络或服务器地址。");
   });
 });
 

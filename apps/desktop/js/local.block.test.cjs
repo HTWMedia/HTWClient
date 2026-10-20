@@ -46,11 +46,19 @@ function makeNode(tag) {
       if (i >= 0) this.children.splice(i, 1);
       return child;
     },
-    addEventListener(type, fn) { this._handlers[type] = fn; },
+    addEventListener(type, fn) {
+      // 🔴 必须**追加**而不是覆盖：真实的 addEventListener 不会替换旧处理器，
+      // 而「同一个按钮被绑了两次」正是 M6 要防的那类重复绑定 ——
+      // 用覆盖式替身的话，那个 bug 在测试里根本显形不出来。
+      if (!this._handlers[type]) this._handlers[type] = [];
+      this._handlers[type].push(fn);
+    },
     fire(type) {
-      const fn = this._handlers[type];
-      if (typeof fn !== "function") return undefined;
-      return fn({ type: type, target: this });
+      const fns = this._handlers[type];
+      if (!fns || !fns.length) return undefined;
+      let out;
+      for (const fn of fns) out = fn({ type: type, target: this });
+      return out;
     },
     setAttribute(k, v) { this._attrs[k] = v; },
     getAttribute(k) { return this._attrs[k]; },
@@ -142,6 +150,8 @@ async function bootApp(opts) {
     els: els,
     calls: calls,
     saved: saved,
+    // app.js 暴露的 window.App（本地模式接线在 App.local 下）。
+    App: win.App,
     restore: function () {
       global.document = prevDoc;
       global.window = prevWin;
@@ -214,7 +224,7 @@ test("本地模式块: 一键配对成功 → 结果行提示成功，状态行�
   const app = await bootApp({
     route: (method, path) => {
       if (path === "/api/v2/local/enroll")
-        return { status: 200, ok: true, data: { Ok: true, Data: { KeyMaterial: "AAAABBBBCCCCDDDD", KeyId: "aid-1", Account: "a@x.com" } } };
+        return { status: 200, ok: true, data: { Ok: true, Data: { keyMaterial: "AAAABBBBCCCCDDDD", keyId: "aid-1", account: "a@x.com" } } };
       if (path === "/api/local/pair") {
         paired = true;
         return { status: 200, ok: true, data: { ok: true, data: { keyId: "aid-1" } } };
@@ -252,7 +262,7 @@ test("本地模式块: 配对失败 → 结果行显示失败原文", async () =
   const app = await bootApp({
     route: (method, path) => {
       if (path === "/api/v2/local/enroll")
-        return { status: 200, ok: true, data: { Ok: true, Data: { KeyMaterial: "AAAA====", KeyId: "aid-1", Account: "a@x.com" } } };
+        return { status: 200, ok: true, data: { Ok: true, Data: { keyMaterial: "AAAA====", keyId: "aid-1", account: "a@x.com" } } };
       if (path === "/api/local/pair")
         return { status: 403, ok: false, data: { errCode: 403, errMsg: "本进程不是本地实例，不接受配对。" } };
       return NOT_PAIRED_HEALTH;
@@ -274,7 +284,7 @@ test("本地模式块: 配对返 HTTP 200 + 失败壳 → 结果行显示失败�
   const app = await bootApp({
     route: (method, path) => {
       if (path === "/api/v2/local/enroll")
-        return { status: 200, ok: true, data: { Ok: true, Data: { KeyMaterial: "AAAABBBBCCCCDDDD", KeyId: "aid-1", Account: "a@x.com" } } };
+        return { status: 200, ok: true, data: { Ok: true, Data: { keyMaterial: "AAAABBBBCCCCDDDD", keyId: "aid-1", account: "a@x.com" } } };
       if (path === "/api/local/pair")
         return { status: 200, ok: true, data: { errCode: 403, errMsg: "本进程不是本地实例，不接受配对。" } };
       return NOT_PAIRED_HEALTH;
@@ -381,7 +391,7 @@ test("本地模式块: 首配对（notPaired）→ 配对按钮可用，点击�
   const app = await bootApp({
     route: (method, path) => {
       if (path === "/api/v2/local/enroll")
-        return { status: 200, ok: true, data: { Ok: true, Data: { KeyMaterial: "AAAABBBBCCCCDDDD", KeyId: "aid-1", Account: "a@x.com" } } };
+        return { status: 200, ok: true, data: { Ok: true, Data: { keyMaterial: "AAAABBBBCCCCDDDD", keyId: "aid-1", account: "a@x.com" } } };
       if (path === "/api/local/pair")
         return { status: 200, ok: true, data: { ok: true, data: { keyId: "aid-1" } } };
       return NOT_PAIRED_HEALTH;
@@ -433,7 +443,7 @@ test("本地模式块: 待解锁（pairedNotUnlocked）→ 配对按钮可用", 
   const app = await bootApp({
     route: (method, path) => {
       if (path === "/api/v2/local/enroll")
-        return { status: 200, ok: true, data: { Ok: true, Data: { KeyMaterial: "AAAABBBBCCCCDDDD", KeyId: "aid-1", Account: "a@x.com" } } };
+        return { status: 200, ok: true, data: { Ok: true, Data: { keyMaterial: "AAAABBBBCCCCDDDD", keyId: "aid-1", account: "a@x.com" } } };
       if (path === "/api/local/pair")
         return { status: 200, ok: true, data: { ok: true, data: { keyId: "aid-1" } } };
       return { status: 200, ok: true, data: { ok: true, mode: "local", state: "pairedNotUnlocked", credentialsUnlocked: false, version: "1.0.0" } };
@@ -474,6 +484,127 @@ test("本地模式块: 改了地址没保存 → 探活状态作废，配对按�
   }
 });
 
+// ---- 本地实例地址：归一化与回环限制 ----
+
+// 用户粘贴带尾斜杠的地址（从浏览器地址栏复制最常见）时，
+// preload 是 base + path 直接拼的，尾斜杠会拼出 "//api/v2/local/health" → 404。
+// 保存时必须把尾斜杠归一化掉，探活才能打到正确的路径上。
+test("本地模式块: 地址带尾斜杠 → 归一化后探活打到正确路径并到达 notPaired", async () => {
+  const app = await bootApp({ route: () => NOT_PAIRED_HEALTH });
+  try {
+    app.els["local-base"].value = "http://127.0.0.1:51111/";
+    await app.els["local-apply"].fire("click");
+
+    const health = app.calls.find((c) => c.path === "/api/v2/local/health");
+    assert.ok(health, "应发出一次探活请求");
+    // base + path 拼起来必须是单斜杠：这里钉住的是"拼出来的那一串"。
+    assert.strictEqual(health.base + health.path, "http://127.0.0.1:51111/api/v2/local/health");
+    assert.strictEqual(health.base, "http://127.0.0.1:51111", "登记/落盘的地址必须已归一化");
+
+    // 探活真的打通了：状态行显示的是实例回的三态，不是"连不上"。
+    assert.strictEqual(app.els["local-status"].textContent, "本地实例未配对");
+
+    // 落盘的也是归一化后的地址。
+    const cfg = app.saved[app.saved.length - 1];
+    assert.strictEqual(cfg.localBase, "http://127.0.0.1:51111");
+  } finally {
+    app.restore();
+  }
+});
+
+// 配对请求会把 AuthKey + 账号级 KEK 材料发往本地地址，
+// 所以本地地址**必须**是本机回环：外部地址一律拒掉，一个请求都不发。
+test("本地模式块: 非回环地址 → 拒绝，不发请求、不落盘", async () => {
+  const app = await bootApp({ route: () => NOT_PAIRED_HEALTH });
+  try {
+    app.els["local-base"].value = "http://example.com:51111";
+    await app.els["local-apply"].fire("click");
+
+    assert.strictEqual(app.els["local-status"].textContent, "本地实例地址必须是本机回环地址。");
+    assert.strictEqual(app.els["local-pair"].disabled, true, "地址不合格时不该允许配对");
+
+    // 一个请求都不该发出去（连探活都不该有）。
+    const probes = app.calls.filter((c) => c.path === "/api/v2/local/health");
+    assert.strictEqual(probes.length, 0, "非回环地址不该被探活");
+
+    // 更要紧的：这个地址不许落盘。
+    assert.ok(
+      !app.saved.some((c) => c.localBase === "http://example.com:51111"),
+      "非回环地址不该被写进配置"
+    );
+  } finally {
+    app.restore();
+  }
+});
+
+// 带路径的本地地址同样是根地址口径之外的写法：拒绝并说清原因。
+test("本地模式块: 带路径的地址 → 拒绝（根地址口径）", async () => {
+  const app = await bootApp({ route: () => NOT_PAIRED_HEALTH });
+  try {
+    app.els["local-base"].value = "http://127.0.0.1:51111/api";
+    await app.els["local-apply"].fire("click");
+
+    assert.strictEqual(app.els["local-status"].textContent, "本地实例地址必须是根地址（不允许带路径）。");
+    const probes = app.calls.filter((c) => c.path === "/api/v2/local/health");
+    assert.strictEqual(probes.length, 0, "带路径的地址不该被探活");
+    assert.ok(!app.saved.some((c) => c.localBase === "http://127.0.0.1:51111/api"));
+  } finally {
+    app.restore();
+  }
+});
+
+// M6：boot() 的成功路径与失败路径都会调 wireLocal，
+// 不加防重的话同一个按钮会绑上两个处理器 —— 点一次探活两次，
+// 而且两次是交错的异步探活，状态行显示的是后到的那次。
+test("本地模式块: 重复接线不叠加处理器 → 点一次只探活一次", async () => {
+  const app = await bootApp({ route: () => NOT_PAIRED_HEALTH });
+  try {
+    // 模拟 boot 中途抛异常后 catch 分支又调了一次 wireLocal。
+    app.App.local.wire();
+    app.App.local.wire();
+
+    await app.els["local-apply"].fire("click");
+
+    const probes = app.calls.filter((c) => c.path === "/api/v2/local/health");
+    assert.strictEqual(probes.length, 1, "一次点击只该探活一次");
+  } finally {
+    app.restore();
+  }
+});
+
+// 归一化口径要在「探活状态作废」与「配对地址自检」两处**一致**：
+// 尾斜杠只是同一个地址的另一种写法，不该让上一次的探活结果作废，
+// 也不该让配对被「地址已修改」拦下（配对必须走保存过的那个地址）。
+test("本地模式块: 保存后只多打一个尾斜杠 → 探活状态不作废，配对仍走保存过的地址", async () => {
+  const app = await bootApp({
+    route: (method, path) => {
+      if (path === "/api/v2/local/enroll")
+        return { status: 200, ok: true, data: { Ok: true, Data: { keyMaterial: "AAAABBBBCCCCDDDD", keyId: "aid-1", account: "a@x.com" } } };
+      if (path === "/api/local/pair")
+        return { status: 200, ok: true, data: { ok: true, data: { keyId: "aid-1" } } };
+      return NOT_PAIRED_HEALTH;
+    },
+  });
+  try {
+    await app.els["local-apply"].fire("click");
+    assert.strictEqual(app.els["local-status"].textContent, "本地实例未配对");
+
+    // 用户在输入框里多打了一个尾斜杠（同一个地址的另一种写法）。
+    app.els["local-base"].value = "http://127.0.0.1:51111/";
+    app.els["local-base"].fire("change");
+    assert.strictEqual(app.els["local-status"].textContent, "本地实例未配对", "写法差异不该让探活结果作废");
+
+    await app.els["local-pair"].fire("click");
+    assert.strictEqual(app.els["local-pair-result"].textContent, "配对成功。");
+
+    const pair = app.calls.find((c) => c.path === "/api/local/pair");
+    assert.ok(pair, "应发出配对请求");
+    assert.strictEqual(pair.base, "http://127.0.0.1:51111", "配对必须走保存过的（归一化后的）地址");
+  } finally {
+    app.restore();
+  }
+});
+
 // ---- 错误提示专用块 ----
 
 function withDom(fn) {
@@ -494,11 +625,15 @@ function withDom(fn) {
   }
 }
 
+// 专用块的文案口径：**客户端实际产出的那一句**。
+// 服务器侧回的是长版（"本地执行不可用：无法确认额度，请检查网络或服务器状态。"），
+// 但 api.js 的 normalize 会把它改写成短版再交给界面 —— 内部细节不外泄给用户。
+// 长版的文案由服务器侧自己的测试钉着，这里钉的是**客户端真实产出**的那一句。
 test("UI.showError: 本地执行不可用 → 专用块标题，详情剥掉代码前缀", () => {
   withDom(() => {
     const UI = require("./ui.js");
     const region = makeNode("div");
-    UI.showError(region, "[4007] 本地执行不可用：无法确认额度，请检查网络或服务器状态。");
+    UI.showError(region, "[4007] 本地执行不可用，请检查网络或服务器状态。");
 
     assert.strictEqual(region.children.length, 1);
     const box = region.children[0];
@@ -506,7 +641,7 @@ test("UI.showError: 本地执行不可用 → 专用块标题，详情剥掉代�
     assert.strictEqual(box.children[0].tagName, "STRONG");
     assert.strictEqual(box.children[0].textContent, "本地执行不可用");
     assert.strictEqual(box.children[1].className, "error-detail");
-    assert.strictEqual(box.children[1].textContent, "本地执行不可用：无法确认额度，请检查网络或服务器状态。");
+    assert.strictEqual(box.children[1].textContent, "本地执行不可用，请检查网络或服务器状态。");
   });
 });
 

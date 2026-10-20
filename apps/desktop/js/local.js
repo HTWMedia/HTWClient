@@ -21,6 +21,74 @@
   const SERVER_ERROR_TEXT = "本地实例返回错误，请检查本地实例状态。";
   const INVALID_TEXT = "本地实例响应不可识别。";
 
+  // ---- 本地实例地址：归一化与准入 ----
+  //
+  // 🔴 三条约束都是硬的，配对请求会把 **AuthKey + 账号级 KEK 材料**发往这个地址：
+  //  ① 必须是**根地址**（不带路径 / 查询 / 哈希）：路径会让拼出来的 URL 落到
+  //     不存在的路由上（探活 404），而用户看不出是自己多打了几个字。
+  //  ② 必须是**本机回环**（127.0.0.0/8 / ::1 / localhost）：本地实例只跑在这台机器上，
+  //     填一个外部地址等于把账号级材料寄到第三方。
+  //  ③ 归一化后**不带结尾斜杠**：preload 是 base + path 直接拼的，
+  //     尾斜杠会拼出双斜杠（"http://127.0.0.1:51111/" + "/api/v2/local/health"）。
+  const LOCAL_BASE_TEXTS = {
+    format: "地址格式无效，请以 http:// 开头填写。",
+    notRoot: "本地实例地址必须是根地址（不允许带路径）。",
+    notLoopback: "本地实例地址必须是本机回环地址。",
+  };
+
+  // 主机是不是本机回环。
+  // 刻意**只认三种形态**（127.0.0.0/8、::1、localhost），不做「解析后是不是本机」的判断：
+  // 那需要一次 DNS 查询，而查询结果会随时间变化（DNS rebinding），
+  // 判据必须是**字面量**。IPv6 的展开写法（0:0:0:0:0:0:0:1）一并认。
+  function isLoopbackHost(host) {
+    if (!host) return false;
+    if (host === "localhost") return true;
+    if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+    if (!m) return false;
+    for (let i = 1; i <= 4; i++) {
+      const n = Number(m[i]);
+      if (!Number.isInteger(n) || n < 0 || n > 255) return false;
+    }
+    return Number(m[1]) === 127;
+  }
+
+  // 把用户填的本地实例地址归一化成可用的基地址。
+  // 返回 { ok:true, base } 或 { ok:false, reason, message }：
+  //  - 空地址 → { ok:true, base:"", empty:true }（关闭本地模式，不算错）。
+  //  - 失败时**不给出任何"部分可用"的结果**：不合格就是不合格，
+  //    调用方据此不登记、不落盘。
+  function normalizeLocalBase(value) {
+    // null / undefined = 没填（关闭本地模式），不算错；
+    // 其它非字符串类型是调用方的错，按「格式非法」处理，不静默当成"空"。
+    if (value === null || value === undefined) return { ok: true, base: "", empty: true };
+    if (typeof value !== "string") return { ok: false, reason: "format", message: LOCAL_BASE_TEXTS.format };
+    const raw = value.trim();
+    if (!raw) return { ok: true, base: "", empty: true };
+    let u;
+    try { u = new URL(raw); }
+    catch (e) { return { ok: false, reason: "format", message: LOCAL_BASE_TEXTS.format }; }
+    if (u.protocol !== "http:" && u.protocol !== "https:")
+      return { ok: false, reason: "format", message: LOCAL_BASE_TEXTS.format };
+    // 根地址口径：pathname 是 "/"（末尾多打了几个斜杠而已，也算根）。
+    // 真正的"带路径"（"/api"、"/a/b"）一律拒绝 —— 拼出来的 URL 会落到不存在的路由上。
+    if (String(u.pathname || "").replace(/\/+$/, "") !== "")
+      return { ok: false, reason: "notRoot", message: LOCAL_BASE_TEXTS.notRoot };
+    if (u.search || u.hash)
+      return { ok: false, reason: "notRoot", message: LOCAL_BASE_TEXTS.notRoot };
+    // 回环判定前先归一主机名：剥 IPv6 方括号、去 FQDN 尾点（小写），
+    // 否则 "http://localhost." 这类尾点形态会被当成普通域名放过去。
+    const rawHost = String(u.hostname || "").toLowerCase();
+    const host = rawHost.replace(/^\[/, "").replace(/\]$/, "").replace(/\.$/, "");
+    if (!isLoopbackHost(host))
+      return { ok: false, reason: "notLoopback", message: LOCAL_BASE_TEXTS.notLoopback };
+    // 归一化输出：origin 形态（协议 + 主机 + 端口），**不带结尾斜杠**。
+    // IPv6 主机要保留方括号，否则拼出来的 URL 是非法的。
+    const outHost = rawHost.charAt(0) === "[" ? "[" + host + "]" : host;
+    const port = u.port ? ":" + u.port : "";
+    return { ok: true, base: u.protocol + "//" + outHost + port };
+  }
+
   function joinBase(base, path) {
     const b = (base || "").replace(/\/+$/, "");
     return b + path;
@@ -149,8 +217,10 @@
   return {
     probeHealth: probeHealth,
     validateServerUrl: validateServerUrl,
+    normalizeLocalBase: normalizeLocalBase,
     pairFlow: pairFlow,
     STATE_TEXT: STATE_TEXT,
     MODE_TEXT: MODE_TEXT,
+    LOCAL_BASE_TEXTS: LOCAL_BASE_TEXTS,
   };
 });

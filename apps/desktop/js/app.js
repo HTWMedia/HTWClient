@@ -34,6 +34,20 @@
     const input = getLocalBaseInput();
     return input ? String(input.value || "").trim() : "";
   }
+  // 本地地址的归一化与准入：口径只有一份，在 js/local.js 的 normalizeLocalBase
+  // （去尾斜杠 + 拒绝带路径 + 强制回环）。这里只做接线，不重复实现那三条规则。
+  function normalizeLocalBase(v) {
+    const Local = window.HTWLocal;
+    if (Local && typeof Local.normalizeLocalBase === "function") return Local.normalizeLocalBase(v);
+    return { ok: true, base: String(v || "").replace(/\/+$/, "") };
+  }
+  // 拒绝原因 → 文案。文案只有一份定义（js/local.js 的 LOCAL_BASE_TEXTS）。
+  function localBaseText(reason) {
+    const Local = window.HTWLocal;
+    const t = (Local && Local.LOCAL_BASE_TEXTS) || null;
+    if (!t) return "本地模式模块未加载。";
+    return t[reason] || t.format;
+  }
   function setLocalStatus(text) { const el = getLocalStatusEl(); if (el) el.textContent = text; }
   function setLocalPairResult(text) { const el = getLocalPairResultEl(); if (el) el.textContent = text; }
   function setLocalPairEnabled(on) { const b = getLocalPairBtn(); if (b) b.disabled = !on; }
@@ -223,13 +237,17 @@
   function onLocalBaseChanged() {
     const v = localBaseValue();
     if (v === userLocalBase) return; // 地址没变（改回原值），之前的结果仍然作数
+    // 归一化之后相同也不算改动：尾斜杠这类写法差异不该让上一次探活作废
+    // （保存时存的是归一化后的地址，用户输入框里可能还带着尾斜杠）。
+    const norm = normalizeLocalBase(v);
+    if (norm.ok && norm.base === userLocalBase) return;
     confirmedLocalState = null;
     setLocalStatus(LOCAL_BASE_CHANGED_TEXT);
     setLocalPairEnabled(false);
     setLocalPairResult("");
   }
 
-  // 「保存并探活」：空地址 = 关闭本地模式；非空 = 登记 + 探活。
+  // 「保存并探活」：空地址 = 关闭本地模式；非空 = 校验 → 登记 → 落盘 → 探活。
   // 这里是唯一能把本地地址写进配置的地方：用户保存过的地址进缓存，缓存才落盘。
   async function applyLocal() {
     const api = window.HTWApi;
@@ -244,14 +262,38 @@
       setLocalPairResult("");
       return { ok: false, state: "notConfigured", message: LOCAL_NOT_CONFIGURED };
     }
-    // 地址先落盘再探活：探活失败（实例没起来）不该把用户填的地址从配置里抹掉。
-    userLocalBase = v;
+    // 🔴 **先校验、后登记、再落盘**——顺序不能换。
+    // 校验不过的地址（带路径 / 非本机回环 / 格式非法）绝不能登记到 preload 白名单，
+    // 也不能写进配置：配对请求会把 **AuthKey + 账号级 KEK 材料**发往那个地址，
+    // 而那个地址可能根本不是本机。
+    const norm = normalizeLocalBase(v);
+    if (!norm.ok) {
+      confirmedLocalState = null;
+      setLocalStatus(norm.message);
+      setLocalPairEnabled(false);
+      setLocalPairResult("");
+      return { ok: false, state: "invalidBase", message: norm.message };
+    }
+    const base = norm.base;
+    // 归一化后的地址回填输入框：输入框与配置里存的是同一份字面量，
+    // 否则「地址已修改，请重新探活」的判定会把写法差异当成改动。
+    const li = getLocalBaseInput();
+    if (li) li.value = base;
     // 换了地址，之前的探活结果作废（不能拿旧地址的就绪状态去配对）。
     confirmedLocalState = null;
-    if (api && api.setLocalBase) api.setLocalBase(v);
-    saveConfigAll(v);
+    // 登记 = 进 preload 白名单。登记失败（地址格式非法）不落盘、不生效。
+    const res = api && api.setLocalBase ? api.setLocalBase(base) : null;
+    if (res && res.ok === false) {
+      setLocalStatus(localBaseText(res.reason));
+      setLocalPairEnabled(false);
+      setLocalPairResult("");
+      return { ok: false, state: "invalidBase", message: localBaseText(res.reason) };
+    }
+    // 地址先落盘再探活：探活失败（实例没起来）不该把用户填的地址从配置里抹掉。
+    userLocalBase = base;
+    saveConfigAll(base);
     setLocalPairResult("");
-    return await probeLocal(v);
+    return await probeLocal(base);
   }
 
   // 「一键配对」：登记材料（enroll，走服务端）→ 出示材料（pair，走本地实例）→ 比对 keyId。
@@ -268,7 +310,10 @@
     }
     // 地址自检：输入框里的地址必须还是保存过的那一份 ——
     // 改了地址没保存就配对，配对的其实是上一个地址。
-    if (userLocalBase && localBaseValue() !== userLocalBase) {
+    // 比的是**归一化之后**的地址：尾斜杠这类写法差异不是改动（与 onLocalBaseChanged 同口径）。
+    const curNorm = normalizeLocalBase(localBaseValue());
+    const curBase = curNorm.ok ? curNorm.base : localBaseValue();
+    if (userLocalBase && curBase !== userLocalBase) {
       confirmedLocalState = null;
       setLocalStatus(LOCAL_BASE_CHANGED_TEXT);
       setLocalPairEnabled(false);
@@ -318,7 +363,14 @@
     return r;
   }
 
+  // 🔴 接线**只做一次**：boot() 的成功路径与失败路径都会调 wireLocal，
+  // 不加防重的话同一个按钮会绑上两个处理器 —— 点一次「保存并探活」探活两次，
+  // 而且两次是交错的异步探活，状态行显示的是**后到**的那次，用户看到的结果
+  // 与他点的按钮对不上。
+  let localWired = false;
   function wireLocal() {
+    if (localWired) return;
+    localWired = true;
     const apply = document.getElementById("local-apply");
     if (apply) apply.addEventListener("click", function () { return applyLocal(); });
     const pair = getLocalPairBtn();
@@ -373,12 +425,26 @@
     // 顺序反了会把刚读出来的本地地址又清空。
     if (saved.localBase) {
       const lb = String(saved.localBase);
-      const li = getLocalBaseInput();
-      if (li) li.value = lb;
-      if (window.HTWApi && window.HTWApi.setLocalBase) window.HTWApi.setLocalBase(lb);
-      // 上次保存过的地址：进缓存，applyAuth 整份写回时不能把它弄丢。
-      userLocalBase = lb;
-      setLocalStatus("已配置，未探活");
+      // 🔴 配置里的地址也要过一遍准入：老版本可能存过带路径 / 非回环的地址，
+      // 而配对请求会把 **AuthKey + 账号级 KEK 材料**发往那个地址。
+      // 不合格就**不登记、不落盘**，并把原因摆在状态行上。
+      const norm = normalizeLocalBase(lb);
+      if (!norm.ok) {
+        setLocalStatus(norm.message);
+        setLocalPairEnabled(false);
+      } else {
+        const li = getLocalBaseInput();
+        if (li) li.value = norm.base;
+        const res = window.HTWApi && window.HTWApi.setLocalBase ? window.HTWApi.setLocalBase(norm.base) : null;
+        if (res && res.ok === false) {
+          setLocalStatus(localBaseText(res.reason));
+          setLocalPairEnabled(false);
+        } else {
+          // 上次保存过的地址：进缓存，applyAuth 整份写回时不能把它弄丢。
+          userLocalBase = norm.base;
+          setLocalStatus("已配置，未探活");
+        }
+      }
     }
     getBaseInput().addEventListener("change", applyAuth);
     getKeyInput().addEventListener("input", applyAuth);
