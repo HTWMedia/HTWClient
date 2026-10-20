@@ -1,6 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const api = require("./api.js");
+// 本地模式模块：地址准入的**唯一**口径在这里（去尾斜杠 + 拒绝带路径 + 强制回环）。
+// 模块缺席时准入闸门 fail-closed（见下面那条用例），所以要测「放行」的用例
+// 必须把模块装上 —— 装的是真模块，不是另造一份规则。
+const Local = require("./local.js");
 
 test("normalize: V2 ok=true", () => {
   const r = api.normalize({ ok: true, data: { ok: true, data: { x: 1 }, taskId: "T1" } });
@@ -105,6 +109,36 @@ test("normalize: enroll 成功 v2 外壳（PascalCase）+ 内层小写（keyMate
   });
 });
 
+// 🔴 形状钉子必须**不经 camelize**：上一条断言走的是 normalize 的输出，
+// 而输出的键名已经被 camelize 统一成小写开头 —— 于是夹具改成 PascalCase
+// （KeyMaterial/KeyId/Account）时，那条断言照样绿，服务器换形状它不会红。
+// 这里直接断言**原始响应体**的键名：服务器返回的内层就是小写开头。
+test("normalize: enroll 原始响应体的内层键名就是小写（不经 camelize 的形状钉子）", async () => {
+  let raw = null;
+  await withStubWindow(stubWindow(async () => {
+    raw = {
+      ok: true,
+      status: 200,
+      data: { Ok: true, Data: { keyMaterial: "AAAABBBBCCCCDDDD", keyId: "aid-1", account: "a@x.com" } },
+    };
+    return raw;
+  }), async (localApi) => {
+    localApi.setKey("test-key");
+    const r = await localApi.call("POST", "/api/v2/local/enroll", {});
+
+    // 逐字断言原始响应体的内层键名（这里没有经过 camelize）。
+    assert.ok(raw, "应当拿到原始响应体");
+    assert.deepStrictEqual(Object.keys(raw.data.Data), ["keyMaterial", "keyId", "account"]);
+    for (const k of Object.keys(raw.data.Data)) {
+      assert.strictEqual(k[0], k[0].toLowerCase(),
+        "内层键名必须是小写开头（服务器的真实形状）；PascalCase 说明服务器换了形状，这条断言就该红");
+    }
+
+    // 归一化结果与原始内层一致：对已是小写开头的键名，camelize 是恒等变换。
+    assert.deepStrictEqual(r.data, raw.data.Data);
+  });
+});
+
 test("normalize: 双外壳形状等价（PascalCase ErrCode/ErrMsg = 小写 errCode/errMsg）", () => {
   const pascal = api.normalize({ ok: true, data: { Ok: false, ErrCode: "E1", ErrMsg: "bad" } });
   const lower = api.normalize({ ok: true, data: { ok: false, errCode: "E1", errMsg: "bad" } });
@@ -135,6 +169,7 @@ test("normalize: pair 401 失败小写字面量壳逐字透传", () => {
 test("setLocalBase: 登记 preload 并生效 localBase getter", async () => {
   const reg = [];
   await withStubWindow({
+    HTWLocal: Local,
     htw: { apiBase: "", directBase: "", registerBase: (b) => reg.push(b) },
   }, async (localApi) => {
     localApi.setLocalBase("http://127.0.0.1:51123");
@@ -149,12 +184,48 @@ test("setLocalBase: 登记 preload 并生效 localBase getter", async () => {
 test("setLocalBase: 结尾斜杠归一化后再登记", async () => {
   const reg = [];
   await withStubWindow({
+    HTWLocal: Local,
     htw: { apiBase: "", directBase: "", registerBase: (b) => { reg.push(b); return true; } },
   }, async (localApi) => {
     localApi.setLocalBase("http://127.0.0.1:51123/");
     assert.strictEqual(localApi.localBase, "http://127.0.0.1:51123");
     assert.ok(reg.includes("http://127.0.0.1:51123"), "登记的必须是归一化后的地址");
     assert.ok(!reg.includes("http://127.0.0.1:51123/"), "尾斜杠不该被登记进去");
+  });
+});
+
+// 🔴 闸门 fail-closed：本地模式模块（window.HTWLocal）缺席时，地址准入必须**拒绝**。
+// 兜底分支若退回"仅去尾斜杠"，就等于跳过了「必须是本机回环」「必须是根地址」两条硬约束，
+// 于是非回环地址会被登记进 preload 白名单 —— 而配对请求会把 AuthKey + 账号级材料发往那个地址。
+// 缺模块时宁可不配置，也不放行。
+test("setLocalBase: 本地模式模块缺席 → 拒绝，不登记、不生效（fail-closed）", async () => {
+  const reg = [];
+  const win = {
+    htw: { apiBase: "", directBase: "", registerBase: (b) => { reg.push(b); return true; } },
+  };
+  assert.strictEqual(win.HTWLocal, undefined, "本用例的前提：窗口里没有本地模式模块");
+  await withStubWindow(win, async (localApi) => {
+    const res = localApi.setLocalBase("http://example.com:51111");
+    assert.strictEqual(res.ok, false, "模块缺席时不得放行");
+    assert.strictEqual(res.reason, "format");
+    assert.strictEqual(reg.length, 0, "没过准入的地址不许登记");
+    assert.strictEqual(localApi.localBase, "", "没过准入的地址不许生效");
+  });
+});
+
+// 🔴 同一闸门的另一面：**空地址 = 关闭本地模式**仍然必须放行。
+// 空地址不放行任何地址、也不登记（清空既有登记是安全的），
+// 把「关掉本地模式」也堵死的话，用户在模块异常时反而关不掉它。
+test("setLocalBase: 模块缺席时清空地址（关闭本地模式）仍然生效", async () => {
+  const reg = [];
+  await withStubWindow({
+    htw: { apiBase: "", directBase: "", registerBase: (b) => { reg.push(b); return true; } },
+  }, async (localApi) => {
+    const res = localApi.setLocalBase("");
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.base, "");
+    assert.strictEqual(reg.length, 0, "清空地址不登记任何东西");
+    assert.strictEqual(localApi.localBase, "");
   });
 });
 

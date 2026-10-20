@@ -21,6 +21,8 @@
   const LOCAL_ALREADY_READY_TEXT = "本地实例已就绪，无需配对。";
   // 地址被改动（还没保存、还没探活）时的提示：之前那次探活的结果不再作数。
   const LOCAL_BASE_CHANGED_TEXT = "地址已修改，请重新探活";
+  // 本地模式模块没就绪时的统一提示（闸门、状态行、探活、配对共用同一句）。
+  const LOCAL_MODULE_MISSING_TEXT = "本地模式组件未就绪，请重启应用后再试。";
 
   // 用户保存过的本地地址（点过「保存并探活」就落盘，探活失败也不清空 ——
   // 地址本身是用户填的，探活失败只是实例没起来，不该把地址从配置里抹掉）。
@@ -36,16 +38,24 @@
   }
   // 本地地址的归一化与准入：口径只有一份，在 js/local.js 的 normalizeLocalBase
   // （去尾斜杠 + 拒绝带路径 + 强制回环）。这里只做接线，不重复实现那三条规则。
+  //
+  // 🔴 模块（window.HTWLocal）没就位时**拒绝**，不做「仅去尾斜杠」的兜底：
+  // 兜底会跳过「必须是本机回环」「必须是根地址」这两条准入，于是非回环地址会被
+  // 登记进 preload 白名单并落盘 —— 而配对请求会把 **AuthKey + 账号级材料**发往那个地址。
+  // 这是防账号级材料外寄的闸门，所以必须 fail-closed：缺模块时宁可不配置，也不放行。
+  // （空地址是「关闭本地模式」，不放行任何地址 —— 它不是闸门放行，所以照常通过。）
   function normalizeLocalBase(v) {
     const Local = window.HTWLocal;
     if (Local && typeof Local.normalizeLocalBase === "function") return Local.normalizeLocalBase(v);
-    return { ok: true, base: String(v || "").replace(/\/+$/, "") };
+    const raw = String(v == null ? "" : v).trim();
+    if (!raw) return { ok: true, base: "", empty: true };
+    return { ok: false, reason: "format", message: LOCAL_MODULE_MISSING_TEXT };
   }
   // 拒绝原因 → 文案。文案只有一份定义（js/local.js 的 LOCAL_BASE_TEXTS）。
   function localBaseText(reason) {
     const Local = window.HTWLocal;
     const t = (Local && Local.LOCAL_BASE_TEXTS) || null;
-    if (!t) return "本地模式模块未加载。";
+    if (!t) return LOCAL_MODULE_MISSING_TEXT;
     return t[reason] || t.format;
   }
   function setLocalStatus(text) { const el = getLocalStatusEl(); if (el) el.textContent = text; }
@@ -203,9 +213,9 @@
     const Local = window.HTWLocal;
     if (!Local || typeof Local.probeHealth !== "function") {
       confirmedLocalState = null;
-      setLocalStatus("本地模式模块未加载。");
+      setLocalStatus(LOCAL_MODULE_MISSING_TEXT);
       setLocalPairEnabled(false);
-      return { ok: false, state: "invalid", message: "本地模式模块未加载。" };
+      return { ok: false, state: "invalid", message: LOCAL_MODULE_MISSING_TEXT };
     }
     let r;
     try {
@@ -275,10 +285,6 @@
       return { ok: false, state: "invalidBase", message: norm.message };
     }
     const base = norm.base;
-    // 归一化后的地址回填输入框：输入框与配置里存的是同一份字面量，
-    // 否则「地址已修改，请重新探活」的判定会把写法差异当成改动。
-    const li = getLocalBaseInput();
-    if (li) li.value = base;
     // 换了地址，之前的探活结果作废（不能拿旧地址的就绪状态去配对）。
     confirmedLocalState = null;
     // 登记 = 进 preload 白名单。登记失败（地址格式非法）不落盘、不生效。
@@ -289,6 +295,12 @@
       setLocalPairResult("");
       return { ok: false, state: "invalidBase", message: localBaseText(res.reason) };
     }
+    // 归一化后的地址回填输入框：输入框与配置里存的是同一份字面量，
+    // 否则「地址已修改，请重新探活」的判定会把写法差异当成改动。
+    // 🔴 回填必须**在登记成功之后**：登记失败时状态行说的是「这个地址不合格」，
+    // 而输入框却已经换成了另一串字面量 —— 两边对不上，用户会以为地址已经被接受。
+    const li = getLocalBaseInput();
+    if (li) li.value = base;
     // 地址先落盘再探活：探活失败（实例没起来）不该把用户填的地址从配置里抹掉。
     userLocalBase = base;
     saveConfigAll(base);
@@ -305,8 +317,8 @@
     const serverBase = getBaseInput() ? getBaseInput().value.trim() : "";
     const key = getKeyInput() ? String(getKeyInput().value || "").trim() : "";
     if (!Local || typeof Local.pairFlow !== "function") {
-      setLocalPairResult("本地模式模块未加载。");
-      return { ok: false, message: "本地模式模块未加载。" };
+      setLocalPairResult(LOCAL_MODULE_MISSING_TEXT);
+      return { ok: false, message: LOCAL_MODULE_MISSING_TEXT };
     }
     // 地址自检：输入框里的地址必须还是保存过的那一份 ——
     // 改了地址没保存就配对，配对的其实是上一个地址。

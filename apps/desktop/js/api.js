@@ -44,14 +44,18 @@
 
   // 本地实例地址的归一化：口径只有一份，在 js/local.js 的 normalizeLocalBase
   // （去尾斜杠 + 拒绝带路径 + 强制回环）。这里不重复实现那三条规则。
-  // 载入时 window.HTWLocal 可能还没就位，那时退回「仅去尾斜杠」的最小归一化；
-  // 准入由应用层（app.js 的 applyLocal）把关 —— 两处都把关，才不会因加载顺序漏掉。
+  //
+  // 🔴 载入时 window.HTWLocal 可能还没就位 —— 那时**拒绝**，不做「仅去尾斜杠」的兜底：
+  // 兜底会跳过「必须是本机回环」「必须是根地址」这两条准入，于是非回环地址会被
+  // 登记进 preload 白名单并落盘，而配对请求会把 **AuthKey + 账号级材料**发往那个地址。
+  // 这是防账号级材料外寄的闸门，所以必须 fail-closed：缺模块时宁可不配置，也不放行。
+  // （空地址是「关闭本地模式」，不放行任何地址、不登记 —— 它不是闸门放行，所以照常通过。）
   function normalizeLocalBaseValue(b) {
     const L = (typeof window !== "undefined" && window.HTWLocal) || null;
     if (L && typeof L.normalizeLocalBase === "function") return L.normalizeLocalBase(b);
     const raw = typeof b === "string" ? b.trim() : "";
     if (!raw) return { ok: true, base: "", empty: true };
-    return { ok: true, base: raw.replace(/\/+$/, "") };
+    return { ok: false, reason: "format" };
   }
 
   // 保存本地实例地址。返回 { ok, base, reason? }：
@@ -294,13 +298,15 @@
     // 有 ok/Ok 字段时仍以 ok/Ok 为准（上面的分支已经先判过了）；
     // errCode:0 是"没有错误"，不算失败壳。
     //
-    // 🔴 本分支依赖的不变量：**服务器今天只有两个端点产出顶层 errCode**
-    // ——api/local/pair 与 api/v2/local-materials/rotate ——而**两者的失败
-    // 都是非 2xx**（4xx/5xx）。非 2xx 会被上面那个 `if (!res.ok)` 分支先接住，
-    // **根本走不到这一段**。
+    // 🔴 本分支依赖的不变量：**只有 pair 与材料轮换两个端点会产出缺少 ok/Ok 字段的
+    // 顶层 errCode**（v2 信封 ApiResult 对所有 v2 端点都带顶层 ErrCode，所以
+    // 「有顶层 errCode」本身不是这两个端点的特征，真正的特征是
+    // **顶层有 errCode、却没有 ok/Ok**）—— 而**两者的失败都是非 2xx**（4xx/5xx）。
+    // 非 2xx 会被上面那个 `if (!res.ok)` 分支先接住，**根本走不到这一段**；
+    // 别的 v2 端点因为带着 ok/Ok，判定条件 `ok === undefined` 也不成立，同样走不到。
     // 所以本分支目前是**兜底**：它保的是「哪天多了一个用 200 回答失败的端点」
     // 或者「本地实例用 200 回了失败壳」时，一次失败不会被当成成功。
-    // 反过来说：哪天有端点改成用 **HTTP 200 + 顶层 errCode** 回答失败，
+    // 反过来说：哪天有端点改成用 **HTTP 200 + 顶层 errCode（且无 ok/Ok）** 回答失败，
     // 这一行就是那条路上的**唯一**拦截点，删掉它失败就会变成成功。
     if (ok === undefined && isFailureShellCode(code)) return failShape(code, msg || ("HTTP " + res.status), d);
     return { ok: true, data: camelize(data !== undefined ? data : d), taskId: taskId || null };

@@ -107,6 +107,7 @@ async function bootApp(opts) {
   const els = opts.els || makeLocalEls();
   const calls = [];
   const saved = [];
+  const registered = [];
   const route = opts.route || (() => READY_HEALTH);
 
   const docHandlers = {};
@@ -121,11 +122,13 @@ async function bootApp(opts) {
 
   const win = {
     HTWApi: api,
-    HTWLocal: Local,
     htw: {
       apiBase: "https://htwmedia.dpdns.org",
       localBase: "",
-      registerBase: () => true,
+      registerBase: (b) => {
+        registered.push(b);
+        return opts.registerBase ? opts.registerBase(b) : true;
+      },
       loadConfig: async () => (opts.config || { apiBase: els["api-base"].value, apiKey: els["api-key"].value, localBase: "" }),
       saveConfig: (cfg) => { saved.push(cfg); return true; },
       call: async (method, path, body, apiKey, base) => {
@@ -135,6 +138,8 @@ async function bootApp(opts) {
     },
     addEventListener: () => {},
   };
+  // omitLocal：窗口里**没有**本地模式模块（模拟模块没加载 / 加载顺序不对）。
+  if (!opts.omitLocal) win.HTWLocal = Local;
 
   const prevDoc = global.document;
   const prevWin = global.window;
@@ -150,6 +155,8 @@ async function bootApp(opts) {
     els: els,
     calls: calls,
     saved: saved,
+    // 登记进 preload 白名单的地址（闸门放行的那些）。
+    registered: registered,
     // app.js 暴露的 window.App（本地模式接线在 App.local 下）。
     App: win.App,
     restore: function () {
@@ -548,6 +555,64 @@ test("本地模式块: 带路径的地址 → 拒绝（根地址口径）", asyn
     const probes = app.calls.filter((c) => c.path === "/api/v2/local/health");
     assert.strictEqual(probes.length, 0, "带路径的地址不该被探活");
     assert.ok(!app.saved.some((c) => c.localBase === "http://127.0.0.1:51111/api"));
+  } finally {
+    app.restore();
+  }
+});
+
+// 🔴 闸门 fail-closed（安全面）：本地模式模块没就位时，地址准入必须**拒绝**。
+// 兜底分支若只去尾斜杠就放行，就跳过了「必须是本机回环」「必须是根地址」两条硬约束 ——
+// 于是外部地址会被登记进 preload 白名单，而配对请求会把 AuthKey + 账号级材料发往那个地址。
+// 缺模块时宁可不配置，也不放行：不登记、不落盘、连探活都不发。
+test("本地模式块: 模块未就绪 → 非回环地址被拒，不登记、不落盘、不探活", async () => {
+  const app = await bootApp({ omitLocal: true, route: () => NOT_PAIRED_HEALTH });
+  try {
+    app.els["local-base"].value = "http://example.com:51111";
+    await app.els["local-apply"].fire("click");
+
+    assert.strictEqual(app.els["local-status"].textContent, "本地模式组件未就绪，请重启应用后再试。");
+    assert.strictEqual(app.els["local-pair"].disabled, true, "地址没通过准入时不该允许配对");
+
+    // 一个请求都不该发出去（连探活都不该有）。
+    const probes = app.calls.filter((c) => c.path === "/api/v2/local/health");
+    assert.strictEqual(probes.length, 0, "模块未就绪时不该探活");
+
+    // 更要紧的两条：不许登记、不许落盘。
+    // （登记名单里另有云端地址 —— 那是 applyAuth 登记的服务端地址，与本地地址无关。）
+    assert.ok(
+      !app.registered.includes("http://example.com:51111"),
+      "没过准入的本地地址不许登记进 preload 白名单"
+    );
+    assert.ok(
+      !app.saved.some((c) => c.localBase === "http://example.com:51111"),
+      "没过准入的地址不许被写进配置"
+    );
+  } finally {
+    app.restore();
+  }
+});
+
+// 🔴 观感一致性：登记**失败**时输入框不许被改写。
+// 原来归一化后的地址在登记之前就回填了输入框，于是登记失败时状态行说着
+// 「地址格式无效」，输入框却已经换成了另一串字面量 —— 两边对不上。
+// 回填必须挪到登记成功之后。
+test("本地模式块: 登记失败 → 输入框保持用户填的原样，不被改写", async () => {
+  const app = await bootApp({
+    route: () => NOT_PAIRED_HEALTH,
+    registerBase: () => false, // preload 侧拒绝这个地址
+  });
+  try {
+    // 用户填的是带尾斜杠的同一个地址：归一化会把它变成不带尾斜杠的那一串。
+    app.els["local-base"].value = "http://127.0.0.1:51111/";
+    await app.els["local-apply"].fire("click");
+
+    assert.strictEqual(app.els["local-status"].textContent, "地址格式无效，请以 http:// 开头填写。");
+    assert.strictEqual(app.els["local-base"].value, "http://127.0.0.1:51111/",
+      "登记失败时输入框不许被改写");
+    assert.ok(
+      !app.saved.some((c) => c.localBase === "http://127.0.0.1:51111"),
+      "登记失败时地址不许落盘"
+    );
   } finally {
     app.restore();
   }
