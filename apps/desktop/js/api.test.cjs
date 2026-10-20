@@ -88,6 +88,46 @@ test("pollTask: timeout", async () => {
   assert.strictEqual(r.code, "TIMEOUT");
 });
 
+// 线上形状钉子（Task 3 对齐）：
+// - enroll 走 v2 信封：HTTP 200 + 外层 Ok/Data（PascalCase），成功 Data={ KeyMaterial, KeyId, Account }。
+// - pair 失败是小写 errCode/errMsg 字面量壳（HTTP 403/401 等非 2xx），errMsg 必须逐字透传不改写。
+test("normalize: enroll 成功 v2 PascalCase 双外壳（KeyMaterial/KeyId/Account）", () => {
+  const r = api.normalize({
+    ok: true,
+    data: { Ok: true, Data: { KeyMaterial: "AAAABBBBCCCCDDDD", KeyId: "aid-1", Account: "a@x.com" } },
+  });
+  assert.deepStrictEqual(r, {
+    ok: true,
+    data: { keyMaterial: "AAAABBBBCCCCDDDD", keyId: "aid-1", account: "a@x.com" },
+    taskId: null,
+  });
+});
+
+test("normalize: 双外壳形状等价（PascalCase ErrCode/ErrMsg = 小写 errCode/errMsg）", () => {
+  const pascal = api.normalize({ ok: true, data: { Ok: false, ErrCode: "E1", ErrMsg: "bad" } });
+  const lower = api.normalize({ ok: true, data: { ok: false, errCode: "E1", errMsg: "bad" } });
+  assert.strictEqual(pascal.ok, false);
+  assert.strictEqual(pascal.code, "E1");
+  assert.strictEqual(pascal.message, "bad");
+  assert.strictEqual(lower.ok, false);
+  assert.strictEqual(lower.code, "E1");
+  assert.strictEqual(lower.message, "bad");
+});
+
+test("normalize: pair 403 失败小写字面量壳逐字透传", () => {
+  const r = api.normalize({ ok: false, status: 403, data: { errCode: 403, errMsg: "本进程不是本地实例，不接受配对。" } });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.code, 403);
+  assert.strictEqual(r.message, "本进程不是本地实例，不接受配对。");
+});
+
+test("normalize: pair 401 失败小写字面量壳逐字透传", () => {
+  const r = api.normalize({ ok: false, status: 401, data: { errCode: 401, errMsg: "重新配对需要出示当前 AuthKey" } });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.code, 401);
+  assert.strictEqual(r.message, "重新配对需要出示当前 AuthKey");
+});
+
 test("setLocalBase: 登记 preload 并生效 localBase getter", () => {
   const reg = [];
   global.window = Object.assign(global.window || {}, {
