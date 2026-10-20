@@ -107,12 +107,39 @@ test("validateServerUrl: 本机回环地址拒绝", () => {
   }
 });
 
+test("validateServerUrl: 回环地址的 FQDN 尾点形态同样拒绝", () => {
+  for (const url of ["https://localhost.", "https://127.0.0.1."]) {
+    const r = Local.validateServerUrl(url);
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.reason, "serverUrl");
+    assert.strictEqual(r.message, "服务地址不能是本机回环地址。");
+  }
+});
+
+test("validateServerUrl: 空/非字符串地址 → 格式无效", () => {
+  for (const url of ["", null, undefined, 123, {}, ["https://api.example.com"]]) {
+    const r = Local.validateServerUrl(url);
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.reason, "serverUrl");
+    assert.strictEqual(r.message, "服务地址格式无效。");
+  }
+});
+
+test("validateServerUrl: 带 query 或 hash 的根地址 → 必须是根地址", () => {
+  for (const url of ["https://api.example.com?a=1", "https://api.example.com#f", "https://api.example.com/?a=1"]) {
+    const r = Local.validateServerUrl(url);
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.reason, "serverUrl");
+    assert.strictEqual(r.message, "服务地址必须是根地址（不允许带路径）。");
+  }
+});
+
 test("pairFlow: happy path", async () => {
   const bodies = [];
   let pairCount = 0;
   const r = await Local.pairFlow({
     apiBase: "https://api.example.com", localBase: "http://127.0.0.1:51111", key: "k1", account: "a@x.com",
-    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAABBBBCCCCDDDD", keyId: "aid-1" } }),
+    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAABBBBCCCCDDDD", keyId: "aid-1", account: "a@x.com" } }),
     pair: async (b) => { bodies.push(b); pairCount++;
       return pairCount === 1
         ? { ok: true, data: { keyId: "aid-1" } }
@@ -120,6 +147,8 @@ test("pairFlow: happy path", async () => {
     },
   });
   assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.stage, "pair");
+  assert.strictEqual(r.keyId, "aid-1");
   assert.strictEqual(bodies.length, 1);
   assert.strictEqual(bodies[0].AuthorizeWith, "k1");           // 恒带（含首配对）
   assert.strictEqual(bodies[0].ServerUrl, "https://api.example.com");
@@ -128,7 +157,7 @@ test("pairFlow: happy path", async () => {
   assert.strictEqual(bodies[0].KeyMaterial, "AAAABBBBCCCCDDDD");
 });
 
-test("pairFlow: 未传 account 时从 enroll Data.account 取", async () => {
+test("pairFlow: 账号以 enroll 响应回带值为准（调用方未传 account）", async () => {
   const bodies = [];
   const r = await Local.pairFlow({
     apiBase: "https://api.example.com", localBase: "http://127.0.0.1:51111", key: "k1",
@@ -139,17 +168,59 @@ test("pairFlow: 未传 account 时从 enroll Data.account 取", async () => {
   assert.strictEqual(bodies[0].Account, "en@x.com");
 });
 
+test("pairFlow: enroll 注入只收 key（不把账号塞进 enroll）", async () => {
+  let seen = null;
+  let argCount = -1;
+  const r = await Local.pairFlow({
+    apiBase: "https://api.example.com", localBase: "http://127.0.0.1:51111", key: "k1", account: "a@x.com",
+    enroll: async function () { seen = arguments[0]; argCount = arguments.length; return { ok: true, data: { keyMaterial: "AAAA====", keyId: "aid-1", account: "a@x.com" } }; },
+    pair: async () => ({ ok: true, data: { keyId: "aid-1" } }),
+  });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(seen, "k1");
+  assert.strictEqual(argCount, 1);
+});
+
+test("pairFlow: 账号与服务器登记不一致 → 响亮失败，不进入 pair", async () => {
+  let pairCount = 0;
+  const r = await Local.pairFlow({
+    apiBase: "https://api.example.com", localBase: "http://127.0.0.1:51111", key: "k1", account: "a@x.com",
+    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAA====", keyId: "aid-1", account: "other@x.com" } }),
+    pair: async () => { pairCount++; return { ok: true, data: { keyId: "aid-1" } }; },
+  });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.stage, "enroll");
+  assert.strictEqual(r.reason, "accountMismatch");
+  assert.strictEqual(r.code, 0);
+  assert.strictEqual(r.message, "账号与服务器登记不一致，请重新登录后再试。");
+  assert.strictEqual(pairCount, 0);
+});
+
 test("pairFlow: keyId 不一致 响亮失败 不继续", async () => {
   let pairedAfter = 0;
   const r = await Local.pairFlow({
     apiBase: "https://api.example.com", localBase: "http://127.0.0.1:51111", key: "k1", account: "a@x.com",
-    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAA====", keyId: "aid-1" } }),
+    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAA====", keyId: "aid-1", account: "a@x.com" } }),
     pair: async () => { pairedAfter++; return { ok: true, data: { keyId: "aid-OTHER" } }; },
   });
   assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.stage, "pair");
   assert.strictEqual(r.reason, "keyIdMismatch");
   assert.strictEqual(r.message, "配对材料与服务端登记不一致，请先重新登记材料。");
   assert.strictEqual(pairedAfter, 1);
+});
+
+test("pairFlow: enroll 响应无账号 → enroll 阶段 NO_ACCOUNT，不发 pair", async () => {
+  let pairCount = 0;
+  const r = await Local.pairFlow({
+    apiBase: "https://api.example.com", localBase: "http://127.0.0.1:51111", key: "k1",
+    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAA====", keyId: "aid-1" } }),
+    pair: async () => { pairCount++; return { ok: true, data: { keyId: "aid-1" } }; },
+  });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.stage, "enroll");
+  assert.strictEqual(r.code, "NO_ACCOUNT");
+  assert.strictEqual(pairCount, 0);
 });
 
 test("pairFlow: 空 account（enroll 响应无账号）→ enroll 阶段 NO_ACCOUNT，不发 pair", async () => {
@@ -166,6 +237,28 @@ test("pairFlow: 空 account（enroll 响应无账号）→ enroll 阶段 NO_ACCO
   assert.strictEqual(pairCount, 0);
 });
 
+test("pairFlow: enroll 响应缺 keyMaterial/keyId → enroll 阶段 BAD_ENROLL，不发 pair", async () => {
+  const shapes = [
+    { ok: true },
+    { ok: true, data: null },
+    { ok: true, data: { keyId: "aid-1", account: "a@x.com" } },
+    { ok: true, data: { keyMaterial: "AAAA====", account: "a@x.com" } },
+    { ok: true, data: { keyMaterial: "", keyId: "", account: "a@x.com" } },
+  ];
+  for (const shape of shapes) {
+    let pairCount = 0;
+    const r = await Local.pairFlow({
+      apiBase: "https://api.example.com", localBase: "http://127.0.0.1:51111", key: "k1", account: "a@x.com",
+      enroll: async () => shape,
+      pair: async () => { pairCount++; return { ok: true, data: { keyId: "aid-1" } }; },
+    });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.stage, "enroll");
+    assert.strictEqual(r.code, "BAD_ENROLL");
+    assert.strictEqual(pairCount, 0);
+  }
+});
+
 test("pairFlow: enroll 非 ok → 原样透传 code/message，不进入 pair", async () => {
   let pairCount = 0;
   const r = await Local.pairFlow({
@@ -180,10 +273,30 @@ test("pairFlow: enroll 非 ok → 原样透传 code/message，不进入 pair", a
   assert.strictEqual(pairCount, 0);
 });
 
+test("pairFlow: 失败结果的 stage/ok 由流程强制覆盖（不被源对象带偏）", async () => {
+  const rEnroll = await Local.pairFlow({
+    apiBase: "https://api.example.com", localBase: "http://127.0.0.1:51111", key: "k1", account: "a@x.com",
+    enroll: async () => ({ ok: false, stage: "bogus", code: 500, message: "服务器错误" }),
+    pair: async () => ({ ok: true, data: { keyId: "aid-1" } }),
+  });
+  assert.strictEqual(rEnroll.ok, false);
+  assert.strictEqual(rEnroll.stage, "enroll");
+  assert.strictEqual(rEnroll.code, 500);
+
+  const rPair = await Local.pairFlow({
+    apiBase: "https://api.example.com", localBase: "http://127.0.0.1:51111", key: "k1", account: "a@x.com",
+    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAA====", keyId: "aid-1", account: "a@x.com" } }),
+    pair: async () => ({ ok: false, stage: "bogus", code: 403, message: "本进程不是本地实例，不接受配对。" }),
+  });
+  assert.strictEqual(rPair.ok, false);
+  assert.strictEqual(rPair.stage, "pair");
+  assert.strictEqual(rPair.code, 403);
+});
+
 test("pairFlow: pair 403 字面量壳逐字透传", async () => {
   const r = await Local.pairFlow({
     apiBase: "https://api.example.com", localBase: "http://127.0.0.1:51111", key: "k1", account: "a@x.com",
-    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAA====", keyId: "aid-1" } }),
+    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAA====", keyId: "aid-1", account: "a@x.com" } }),
     pair: async () => ({ ok: false, code: 403, message: "本进程不是本地实例，不接受配对。" }),
   });
   assert.strictEqual(r.ok, false);
@@ -195,13 +308,57 @@ test("pairFlow: pair 403 字面量壳逐字透传", async () => {
 test("pairFlow: pair 401 字面量壳逐字透传（重配对出示 AuthKey）", async () => {
   const r = await Local.pairFlow({
     apiBase: "https://api.example.com", localBase: "http://127.0.0.1:51111", key: "k1", account: "a@x.com",
-    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAA====", keyId: "aid-1" } }),
+    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAA====", keyId: "aid-1", account: "a@x.com" } }),
     pair: async () => ({ ok: false, code: 401, message: "重新配对需要出示当前 AuthKey" }),
   });
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.stage, "pair");
   assert.strictEqual(r.code, 401);
   assert.strictEqual(r.message, "重新配对需要出示当前 AuthKey");
+});
+
+test("pairFlow: 端到端 —— 小写壳原始载荷经 api.normalize 后喂给 pairFlow，403 文案逐字透传", async () => {
+  const api = require("./api.js");
+  // 服务器 pair 失败时的字面量小写壳（未归一化的线上形状）。
+  const rawPair = { status: 403, ok: false, data: { errCode: 403, errMsg: "本进程不是本地实例，不接受配对。" } };
+  const normalizedPair = api.normalize(rawPair);
+  assert.strictEqual(normalizedPair.ok, false);
+  assert.strictEqual(normalizedPair.code, 403);
+  assert.strictEqual(normalizedPair.message, "本进程不是本地实例，不接受配对。");
+
+  const r = await Local.pairFlow({
+    apiBase: "https://api.example.com", localBase: "http://127.0.0.1:51111", key: "k1", account: "a@x.com",
+    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAA====", keyId: "aid-1", account: "a@x.com" } }),
+    pair: async () => normalizedPair,
+  });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.stage, "pair");
+  assert.strictEqual(r.code, 403);
+  assert.strictEqual(r.message, "本进程不是本地实例，不接受配对。");
+});
+
+test("pairFlow: 端到端 —— enroll 成功经 api.normalize（v2 PascalCase 壳）后账号取自回带值", async () => {
+  const api = require("./api.js");
+  const rawEnroll = {
+    status: 200,
+    ok: true,
+    data: { Ok: true, Data: { KeyMaterial: "AAAABBBBCCCCDDDD", KeyId: "aid-1", Account: "srv@x.com" } },
+  };
+  const normalizedEnroll = api.normalize(rawEnroll);
+  assert.strictEqual(normalizedEnroll.ok, true);
+  assert.strictEqual(normalizedEnroll.data.account, "srv@x.com");
+
+  const bodies = [];
+  const r = await Local.pairFlow({
+    apiBase: "https://api.example.com", localBase: "http://127.0.0.1:51111", key: "k1",
+    enroll: async () => normalizedEnroll,
+    pair: async (b) => { bodies.push(b); return { ok: true, data: { keyId: "aid-1" } }; },
+  });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.stage, "pair");
+  assert.strictEqual(r.keyId, "aid-1");
+  assert.strictEqual(bodies[0].Account, "srv@x.com");
+  assert.strictEqual(bodies[0].KeyMaterial, "AAAABBBBCCCCDDDD");
 });
 
 test("pairFlow: 双外壳形状等价（PascalCase enroll 失败 = 小写壳 pair 失败 经 api.normalize）", async () => {
@@ -228,7 +385,7 @@ test("pairFlow: 双外壳形状等价（PascalCase enroll 失败 = 小写壳 pai
   assert.strictEqual(rEnroll.message, "未认证");
 
   const rPair = await Local.pairFlow(Object.assign({}, common, {
-    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAA====", keyId: "aid-1" } }),
+    enroll: async () => ({ ok: true, data: { keyMaterial: "AAAA====", keyId: "aid-1", account: "a@x.com" } }),
     pair: async () => pairShell,
   }));
   assert.strictEqual(rPair.ok, false);
