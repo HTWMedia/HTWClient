@@ -87,3 +87,16 @@ test("pollTask: timeout", async () => {
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.code, "TIMEOUT");
 });
+
+test("setLocalBase: 登记 preload 并生效 localBase getter", () => {
+  const reg = [];
+  global.window = Object.assign(global.window || {}, {
+    htw: { apiBase: "", directBase: "", registerBase: (b) => reg.push(b) },
+  });
+  delete require.cache[require.resolve("./api.js")];
+  const localApi = require("./api.js");
+  localApi.setLocalBase("http://127.0.0.1:51123");
+  assert.strictEqual(localApi.localBase, "http://127.0.0.1:51123");
+  assert.ok(reg.includes("http://127.0.0.1:51123"));
+  // 单出口：localBase 请求图层拒绝网络失败时返回统一形状
+});

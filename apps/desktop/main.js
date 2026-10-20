@@ -54,11 +54,11 @@ function readJsonFile(p, fallback) {
 
 ipcMain.handle("htw:loadConfig", () => {
   const j = readJsonFile(configPath(), null) || {};
-  return { apiBase: j.apiBase || "", apiKey: j.apiKey || "" };
+  return { apiBase: j.apiBase || "", apiKey: j.apiKey || "", localBase: j.localBase || "" };
 });
 ipcMain.handle("htw:saveConfig", (_e, cfg) => {
   try {
-    fs.writeFileSync(configPath(), JSON.stringify({ apiBase: (cfg && cfg.apiBase) || "", apiKey: (cfg && cfg.apiKey) || "" }), "utf-8");
+    fs.writeFileSync(configPath(), JSON.stringify({ apiBase: (cfg && cfg.apiBase) || "", apiKey: (cfg && cfg.apiKey) || "", localBase: (cfg && cfg.localBase) || "" }), "utf-8");
     return true;
   } catch (e) { return false; }
 });

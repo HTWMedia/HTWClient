@@ -11,6 +11,10 @@
   // 反向代理时，可用 setDirectBase 或环境变量 HTW_API_DIRECT 指定。
   let _directBase =
     (typeof window !== "undefined" && window.htw && window.htw.directBase) || "";
+  // 本地服务的请求基地址：默认空串（不启用本地模式）。与 _directBase 同为可选通道，
+  // 由设置面板通过 setLocalBase 注入并登记到 preload 白名单。
+  let _localBase =
+    (typeof window !== "undefined" && window.htw && window.htw.localBase) || "";
 
   function setKey(k) { _key = k || ""; }
   // 改服务端地址必须先向 preload 登记：preload 只向白名单内的来源发请求，
@@ -25,6 +29,10 @@
     if (!b) return;
     if (window.htw && window.htw.registerBase) window.htw.registerBase(b);
     _directBase = b;
+  }
+  function setLocalBase(b) {
+    if (window.htw && window.htw.registerBase) window.htw.registerBase(b);
+    _localBase = b;
   }
   function hasKey() { return !!_key; }
   function authHeader() { return { AuthKey: _key }; }
@@ -234,11 +242,13 @@
   const post = (p, b) => call("POST", p, b);
   return {
     setKey: setKey, setBase: setBase, setDirectBase: setDirectBase,
+    setLocalBase: setLocalBase,
     hasKey: hasKey, authHeader: authHeader,
     call: call, get: get, post: post, upload: upload, download: download,
     normalize: normalize, pollTask: pollTask, onQuotaExceeded: onQuotaExceeded,
     subscribeTask: subscribeTask, unsubscribeTask: unsubscribeTask,
     get base() { return _base; }, get directBase() { return _directBase; },
+    get localBase() { return _localBase; },
   };
 });
 

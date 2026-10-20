@@ -64,9 +64,10 @@ function configPath() {
   return "htw-config.json";
 }
 // 读取持久化的 API 地址 / AuthKey（保存于应用数据目录，明文存储）。
+// 内容原样转发（含 localBase），schema 不在此校验 —— 字段含义由调用方与 main.js 约定。
 function loadConfig() {
   return ipcRenderer.invoke("htw:loadConfig").catch(function () {
-    return { apiBase: "", apiKey: "" };
+    return { apiBase: "", apiKey: "", localBase: "" };
   });
 }
 function saveConfig(cfg) {
