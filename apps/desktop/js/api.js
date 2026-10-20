@@ -223,6 +223,14 @@
     return { ok: false, code: code, message: message, raw: raw };
   }
 
+  // 失败壳的判据：顶层 errCode/ErrCode 存在，且不是 0。
+  // errCode:0 表示"没有错误"，不能判成失败 —— 判错了就是一次成功的响应被报成失败。
+  // errCode 缺失的壳也不算失败壳（那是另一个形状：有 ok/Ok 时由 ok/Ok 判定）。
+  function isFailureShellCode(code) {
+    if (code === undefined || code === null || code === "") return false;
+    return Number(code) !== 0;
+  }
+
   function normalize(res) {
     const d = res.data !== undefined ? res.data : res.body;
     if (res.status === 402) fireQuotaExceeded(d);
@@ -238,13 +246,14 @@
     if (res.ok && ok === true) return { ok: true, data: camelize(data), taskId: taskId || null };
     if (res.ok && ok === false) return failShape(code, msg, d);
     if (!res.ok) return failShape(code || res.status, msg || ("HTTP " + res.status), d);
-    // 失败壳：没有 ok/Ok 字段，却带着 errCode/ErrCode。
+    // 失败壳：没有 ok/Ok 字段，却带着非 0 的 errCode/ErrCode。
     // 本地实例的 pair 失败壳正是这个形状（{errCode, errMsg}），而且可能是
     // HTTP 200 —— 不在这里判失败，就会落到下面的 return { ok:true }，
     // 把一次失败当成配对成功。
     // 只看顶层：内层 Data 里带 errCode 的正常载荷不受影响；
-    // 有 ok/Ok 字段时仍以 ok/Ok 为准（上面的分支已经先判过了）。
-    if (ok === undefined && code !== undefined) return failShape(code, msg || ("HTTP " + res.status), d);
+    // 有 ok/Ok 字段时仍以 ok/Ok 为准（上面的分支已经先判过了）；
+    // errCode:0 是"没有错误"，不算失败壳。
+    if (ok === undefined && isFailureShellCode(code)) return failShape(code, msg || ("HTTP " + res.status), d);
     return { ok: true, data: camelize(data !== undefined ? data : d), taskId: taskId || null };
   }
 

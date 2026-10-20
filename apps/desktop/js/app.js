@@ -17,11 +17,16 @@
   const LOCAL_NOT_READY_TEXT = "本地实例尚未就绪，请先保存并探活。";
   // AuthKey 没填时的提示：直接失败，不发请求。
   const LOCAL_KEY_REQUIRED_TEXT = "请先填写 AuthKey";
+  // 本地实例已经就绪时的提示：就绪了就不需要再配对。
+  const LOCAL_ALREADY_READY_TEXT = "本地实例已就绪，无需配对。";
+  // 地址被改动（还没保存、还没探活）时的提示：之前那次探活的结果不再作数。
+  const LOCAL_BASE_CHANGED_TEXT = "地址已修改，请重新探活";
 
-  // 已确认（探活通过）的本地地址缓存。
-  // 只有「保存并探活」按钮能改它 —— 输入框里还没探活过的值不算数，
+  // 用户保存过的本地地址（点过「保存并探活」就落盘，探活失败也不清空 ——
+  // 地址本身是用户填的，探活失败只是实例没起来，不该把地址从配置里抹掉）。
+  // 只有「保存并探活」按钮能改它 —— 输入框里还没保存过的值不算数，
   // 否则每敲一个 AuthKey 字符都会把半截地址写进配置。
-  let confirmedLocalBase = "";
+  let userLocalBase = "";
   // 最近一次探活得到的三态（未探活 / 探活失败时为 null）。
   let confirmedLocalState = null;
 
@@ -63,9 +68,9 @@
   function applyAuth() {
     const base = getBaseInput().value.trim();
     const key = getKeyInput().value;
-    // 本地地址只落盘"已探活确认过"的那一份：输入框里还没探活的值一律不写
+    // 本地地址只落盘"用户保存过"的那一份：输入框里还没保存的值一律不写
     // （这个函数绑在 AuthKey 的每次按键上，跟着输入框走等于每敲一下存一次半截地址）。
-    saveConfigAll(confirmedLocalBase);
+    saveConfigAll(userLocalBase);
     clearLocal();
     if (base) window.HTWApi.setBase(base);
     window.HTWApi.setKey(key);
@@ -73,7 +78,7 @@
   }
 
   function persistAuth() {
-    saveConfigAll(confirmedLocalBase);
+    saveConfigAll(userLocalBase);
     clearLocal();
   }
 
@@ -205,17 +210,32 @@
     const text = (Local.STATE_TEXT && Local.STATE_TEXT[r.state]) || r.message || "";
     confirmedLocalState = r.state;
     setLocalStatus(text);
-    setLocalPairEnabled(r.state === "ready" || r.state === "pairedNotUnlocked");
+    // 配对按钮的可用性跟着三态走：
+    // - notPaired（还没配过对）→ 可以配对，这正是「一键配对」的主用例；
+    // - pairedNotUnlocked（配过对但实例重启后待解锁）→ 重新配对，出示当前 AuthKey；
+    // - ready（已经就绪）→ 不需要配对，按钮禁用。
+    setLocalPairEnabled(r.state === "notPaired" || r.state === "pairedNotUnlocked");
     return r;
   }
 
+  // 地址被改动（还没保存、还没探活）→ 上一次探活的结果立刻作废：
+  // 状态行提示要重新探活，配对按钮同时禁用 —— 免得拿旧地址的状态去配对新地址。
+  function onLocalBaseChanged() {
+    const v = localBaseValue();
+    if (v === userLocalBase) return; // 地址没变（改回原值），之前的结果仍然作数
+    confirmedLocalState = null;
+    setLocalStatus(LOCAL_BASE_CHANGED_TEXT);
+    setLocalPairEnabled(false);
+    setLocalPairResult("");
+  }
+
   // 「保存并探活」：空地址 = 关闭本地模式；非空 = 登记 + 探活。
-  // 这里是唯一能把本地地址写进配置的地方：确认过的地址进缓存，缓存才落盘。
+  // 这里是唯一能把本地地址写进配置的地方：用户保存过的地址进缓存，缓存才落盘。
   async function applyLocal() {
     const api = window.HTWApi;
     const v = localBaseValue();
     if (!v) {
-      confirmedLocalBase = "";
+      userLocalBase = "";
       confirmedLocalState = null;
       if (api && api.setLocalBase) api.setLocalBase("");
       saveConfigAll("");
@@ -224,7 +244,8 @@
       setLocalPairResult("");
       return { ok: false, state: "notConfigured", message: LOCAL_NOT_CONFIGURED };
     }
-    confirmedLocalBase = v;
+    // 地址先落盘再探活：探活失败（实例没起来）不该把用户填的地址从配置里抹掉。
+    userLocalBase = v;
     // 换了地址，之前的探活结果作废（不能拿旧地址的就绪状态去配对）。
     confirmedLocalState = null;
     if (api && api.setLocalBase) api.setLocalBase(v);
@@ -245,9 +266,24 @@
       setLocalPairResult("本地模式模块未加载。");
       return { ok: false, message: "本地模式模块未加载。" };
     }
+    // 地址自检：输入框里的地址必须还是保存过的那一份 ——
+    // 改了地址没保存就配对，配对的其实是上一个地址。
+    if (userLocalBase && localBaseValue() !== userLocalBase) {
+      confirmedLocalState = null;
+      setLocalStatus(LOCAL_BASE_CHANGED_TEXT);
+      setLocalPairEnabled(false);
+      setLocalPairResult(LOCAL_BASE_CHANGED_TEXT);
+      return { ok: false, message: LOCAL_BASE_CHANGED_TEXT };
+    }
     // 状态自检：按钮禁用只是界面层的兜底，流程本身也要拦一道 ——
     // 没探活过（或探活失败）就配对，配对的其实是上一个地址。
-    if (confirmedLocalState !== "ready" && confirmedLocalState !== "pairedNotUnlocked") {
+    // 放行的是"还需要配对"的两种状态：还没配过对（首配对）、配过对但实例重启后待解锁；
+    // 已经就绪的实例不需要再配对，给一句明确的说明而不是笼统的"未就绪"。
+    if (confirmedLocalState === "ready") {
+      setLocalPairResult(LOCAL_ALREADY_READY_TEXT);
+      return { ok: false, message: LOCAL_ALREADY_READY_TEXT };
+    }
+    if (confirmedLocalState !== "notPaired" && confirmedLocalState !== "pairedNotUnlocked") {
       setLocalPairResult(LOCAL_NOT_READY_TEXT);
       return { ok: false, message: LOCAL_NOT_READY_TEXT };
     }
@@ -287,6 +323,9 @@
     if (apply) apply.addEventListener("click", function () { return applyLocal(); });
     const pair = getLocalPairBtn();
     if (pair) pair.addEventListener("click", function () { return pairLocal(); });
+    // 地址一改，上一次探活的结果就不再作数（配对按钮与状态行跟着作废）。
+    const baseInput = getLocalBaseInput();
+    if (baseInput) baseInput.addEventListener("change", onLocalBaseChanged);
   }
 
   function wireNav() {
@@ -337,8 +376,8 @@
       const li = getLocalBaseInput();
       if (li) li.value = lb;
       if (window.HTWApi && window.HTWApi.setLocalBase) window.HTWApi.setLocalBase(lb);
-      // 上次确认过的地址：进缓存，applyAuth 整份写回时不能把它弄丢。
-      confirmedLocalBase = lb;
+      // 上次保存过的地址：进缓存，applyAuth 整份写回时不能把它弄丢。
+      userLocalBase = lb;
       setLocalStatus("已配置，未探活");
     }
     getBaseInput().addEventListener("change", applyAuth);

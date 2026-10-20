@@ -128,17 +128,18 @@ test("normalize: pair 401 失败小写字面量壳逐字透传", () => {
   assert.strictEqual(r.message, "重新配对需要出示当前 AuthKey");
 });
 
-test("setLocalBase: 登记 preload 并生效 localBase getter", () => {
+// 换 global.window 必须还原：这枚 window 漏给后面的用例，后面的断言就成了
+// 在别人的环境里跑出来的结果（而且看起来还挺绿）。
+test("setLocalBase: 登记 preload 并生效 localBase getter", async () => {
   const reg = [];
-  global.window = Object.assign(global.window || {}, {
+  await withStubWindow({
     htw: { apiBase: "", directBase: "", registerBase: (b) => reg.push(b) },
+  }, async (localApi) => {
+    localApi.setLocalBase("http://127.0.0.1:51123");
+    assert.strictEqual(localApi.localBase, "http://127.0.0.1:51123");
+    assert.ok(reg.includes("http://127.0.0.1:51123"));
+    // 单出口：localBase 请求图层拒绝网络失败时返回统一形状
   });
-  delete require.cache[require.resolve("./api.js")];
-  const localApi = require("./api.js");
-  localApi.setLocalBase("http://127.0.0.1:51123");
-  assert.strictEqual(localApi.localBase, "http://127.0.0.1:51123");
-  assert.ok(reg.includes("http://127.0.0.1:51123"));
-  // 单出口：localBase 请求图层拒绝网络失败时返回统一形状
 });
 
 // 4007 = 本地执行不可用（服务器侧机器契约）。客户端只显示这句中性文案，
@@ -164,6 +165,9 @@ async function withStubWindow(win, fn) {
     return await fn(require("./api.js"));
   } finally {
     global.window = prevWindow;
+    // 缓存里这枚 api.js 是按桩 window 初始化过的：留着的话，下一条用例
+    // require 到的是"带着桩的实例"，看到的 localBase / base 都不是真值。
+    delete require.cache[require.resolve("./api.js")];
   }
 }
 
@@ -273,4 +277,27 @@ test("normalize: HTTP 403 且壳里只有 errCode → 仍回 HTTP 403 文案", (
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.code, 403);
   assert.strictEqual(r.message, "HTTP 403");
+});
+
+// 失败壳的判定面收紧：errCode:0 表示"没有错误"，不能判成失败。
+// 收紧前只要顶层有 errCode 就判失败 —— 一次没带错误码的成功响应会被误报成失败。
+test("normalize: errCode:0 的壳不算失败（0 = 没有错误）", () => {
+  const r = api.normalize({ ok: true, status: 200, data: { errCode: 0, errMsg: null } });
+  assert.strictEqual(r.ok, true, "errCode:0 不该被判失败");
+
+  // PascalCase 变体同理；errMsg 是否为空都不影响判定（errCode 才是判据）。
+  const pascal = api.normalize({ ok: true, status: 200, data: { ErrCode: 0, ErrMsg: "" } });
+  assert.strictEqual(pascal.ok, true, "ErrCode:0 不该被判失败");
+
+  // 字符串 "0" 同义。
+  const str = api.normalize({ ok: true, status: 200, data: { errCode: "0" } });
+  assert.strictEqual(str.ok, true, "errCode:\"0\" 不该被判失败");
+});
+
+// 判定面仍然要接住真正的错误码：0 之外的非零码照旧判失败。
+test("normalize: errCode 非 0 的壳仍判失败", () => {
+  const r = api.normalize({ ok: true, status: 200, data: { errCode: 403, errMsg: "本进程不是本地实例，不接受配对。" } });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.code, 403);
+  assert.strictEqual(r.message, "本进程不是本地实例，不接受配对。");
 });

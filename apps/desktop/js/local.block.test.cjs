@@ -85,6 +85,13 @@ const READY_HEALTH = {
   data: { ok: true, mode: "local", state: "ready", credentialsUnlocked: true, version: "1.0.0" },
 };
 
+// 首配对时的状态：还没配过对，正是要「一键配对」的那一种。
+const NOT_PAIRED_HEALTH = {
+  status: 200,
+  ok: true,
+  data: { ok: true, mode: "local", state: "notPaired", credentialsUnlocked: false, version: "1.0.0" },
+};
+
 // 启动整个 app（真实 js/app.js），返回 { els, calls, saved }。
 // htw.call 按 path 分派，测试要改行为时传 route 覆盖。
 async function bootApp(opts) {
@@ -142,7 +149,7 @@ async function bootApp(opts) {
   };
 }
 
-test("本地模式块: 探活 ready → 状态行显示本地模式就绪，配对按钮解禁", async () => {
+test("本地模式块: 探活 ready → 状态行显示本地模式就绪（已就绪无需配对，按钮保持禁用）", async () => {
   const app = await bootApp();
   try {
     assert.strictEqual(app.els["local-pair"].disabled, true, "初始状态下配对按钮应禁用");
@@ -150,7 +157,8 @@ test("本地模式块: 探活 ready → 状态行显示本地模式就绪，配�
     await app.els["local-apply"].fire("click");
 
     assert.strictEqual(app.els["local-status"].textContent, "本地模式就绪");
-    assert.strictEqual(app.els["local-pair"].disabled, false, "探活就绪后配对按钮应解禁");
+    // 已就绪的实例不需要再配对：按钮保持禁用。
+    assert.strictEqual(app.els["local-pair"].disabled, true, "已就绪时配对按钮应保持禁用");
 
     // 探活走本地地址，且不带 AuthKey（健康检查不需要登录）。
     const health = app.calls.find((c) => c.path === "/api/v2/local/health");
@@ -201,17 +209,22 @@ test("本地模式块: 地址为空 → 状态行显示本地模式未配置，�
 });
 
 test("本地模式块: 一键配对成功 → 结果行提示成功，状态行刷新为就绪", async () => {
+  // 首配对的前提是"还没配过对"（notPaired）；配对成功后实例转入就绪态。
+  let paired = false;
   const app = await bootApp({
     route: (method, path) => {
       if (path === "/api/v2/local/enroll")
         return { status: 200, ok: true, data: { Ok: true, Data: { KeyMaterial: "AAAABBBBCCCCDDDD", KeyId: "aid-1", Account: "a@x.com" } } };
-      if (path === "/api/local/pair")
+      if (path === "/api/local/pair") {
+        paired = true;
         return { status: 200, ok: true, data: { ok: true, data: { keyId: "aid-1" } } };
-      return READY_HEALTH;
+      }
+      return paired ? READY_HEALTH : NOT_PAIRED_HEALTH;
     },
   });
   try {
     await app.els["local-apply"].fire("click");
+    assert.strictEqual(app.els["local-status"].textContent, "本地实例未配对");
     await app.els["local-pair"].fire("click");
 
     assert.strictEqual(app.els["local-pair-result"].textContent, "配对成功。");
@@ -242,7 +255,7 @@ test("本地模式块: 配对失败 → 结果行显示失败原文", async () =
         return { status: 200, ok: true, data: { Ok: true, Data: { KeyMaterial: "AAAA====", KeyId: "aid-1", Account: "a@x.com" } } };
       if (path === "/api/local/pair")
         return { status: 403, ok: false, data: { errCode: 403, errMsg: "本进程不是本地实例，不接受配对。" } };
-      return READY_HEALTH;
+      return NOT_PAIRED_HEALTH;
     },
   });
   try {
@@ -264,7 +277,7 @@ test("本地模式块: 配对返 HTTP 200 + 失败壳 → 结果行显示失败�
         return { status: 200, ok: true, data: { Ok: true, Data: { KeyMaterial: "AAAABBBBCCCCDDDD", KeyId: "aid-1", Account: "a@x.com" } } };
       if (path === "/api/local/pair")
         return { status: 200, ok: true, data: { errCode: 403, errMsg: "本进程不是本地实例，不接受配对。" } };
-      return READY_HEALTH;
+      return NOT_PAIRED_HEALTH;
     },
   });
   try {
@@ -330,7 +343,7 @@ test("本地模式块: 地址清空 → 已确认地址缓存被清空并落盘"
 // key 口径：输入框为空就直接失败，不发请求 ——
 // 否则配对体会带着空 AuthKey 出去，而登记用的却是另一个 key。
 test("本地模式块: AuthKey 为空 → 配对直接失败，不发任何请求", async () => {
-  const app = await bootApp();
+  const app = await bootApp({ route: () => NOT_PAIRED_HEALTH });
   try {
     await app.els["local-apply"].fire("click");
     app.els["api-key"].value = "";
@@ -355,6 +368,107 @@ test("本地模式块: 未探活就点配对 → 状态自检拦下，不发任�
     assert.strictEqual(app.els["local-pair-result"].textContent, "本地实例尚未就绪，请先保存并探活。");
     const sent = app.calls.slice(before).filter((c) => c.path === "/api/v2/local/enroll" || c.path === "/api/local/pair");
     assert.strictEqual(sent.length, 0, "状态不满足时不该发出登记或配对请求");
+  } finally {
+    app.restore();
+  }
+});
+
+// ---- 首配对闸门（notPaired 才是要配对的那一种）----
+
+// 首配对：实例还没配过对（notPaired）→ 配对按钮必须可用，
+// 点下去要真的发出登记 + 配对两条请求，并显示配对成功。
+test("本地模式块: 首配对（notPaired）→ 配对按钮可用，点击后发出登记与配对请求并成功", async () => {
+  const app = await bootApp({
+    route: (method, path) => {
+      if (path === "/api/v2/local/enroll")
+        return { status: 200, ok: true, data: { Ok: true, Data: { KeyMaterial: "AAAABBBBCCCCDDDD", KeyId: "aid-1", Account: "a@x.com" } } };
+      if (path === "/api/local/pair")
+        return { status: 200, ok: true, data: { ok: true, data: { keyId: "aid-1" } } };
+      return NOT_PAIRED_HEALTH;
+    },
+  });
+  try {
+    await app.els["local-apply"].fire("click");
+    assert.strictEqual(app.els["local-status"].textContent, "本地实例未配对");
+    assert.strictEqual(app.els["local-pair"].disabled, false, "首配对时配对按钮应可用");
+
+    const before = app.calls.length;
+    await app.els["local-pair"].fire("click");
+
+    assert.strictEqual(app.els["local-pair-result"].textContent, "配对成功。");
+    const sent = app.calls.slice(before);
+    const enroll = sent.find((c) => c.path === "/api/v2/local/enroll");
+    const pair = sent.find((c) => c.path === "/api/local/pair");
+    assert.ok(enroll, "首配对应发出登记请求");
+    assert.ok(pair, "首配对应发出配对请求");
+    assert.strictEqual(enroll.base, "https://htwmedia.dpdns.org", "登记走服务端地址");
+    assert.strictEqual(pair.base, "http://127.0.0.1:51111", "配对走本地实例地址");
+  } finally {
+    app.restore();
+  }
+});
+
+// 已就绪：实例已经配好且解锁了，不需要（也不该）再配一次 ——
+// 按钮禁用，流程自身也要拒绝，且一条请求都不发。
+test("本地模式块: 已就绪（ready）→ 配对按钮禁用，点击被拒且不发任何请求", async () => {
+  const app = await bootApp();
+  try {
+    await app.els["local-apply"].fire("click");
+    assert.strictEqual(app.els["local-status"].textContent, "本地模式就绪");
+    assert.strictEqual(app.els["local-pair"].disabled, true, "已就绪时配对按钮应禁用");
+
+    const before = app.calls.length;
+    await app.els["local-pair"].fire("click");
+
+    assert.strictEqual(app.els["local-pair-result"].textContent, "本地实例已就绪，无需配对。");
+    const sent = app.calls.slice(before).filter((c) => c.path === "/api/v2/local/enroll" || c.path === "/api/local/pair");
+    assert.strictEqual(sent.length, 0, "已就绪时不该发出登记或配对请求");
+  } finally {
+    app.restore();
+  }
+});
+
+// 实例重启后待解锁（pairedNotUnlocked）→ 允许重新配对（要出示当前 AuthKey）。
+test("本地模式块: 待解锁（pairedNotUnlocked）→ 配对按钮可用", async () => {
+  const app = await bootApp({
+    route: (method, path) => {
+      if (path === "/api/v2/local/enroll")
+        return { status: 200, ok: true, data: { Ok: true, Data: { KeyMaterial: "AAAABBBBCCCCDDDD", KeyId: "aid-1", Account: "a@x.com" } } };
+      if (path === "/api/local/pair")
+        return { status: 200, ok: true, data: { ok: true, data: { keyId: "aid-1" } } };
+      return { status: 200, ok: true, data: { ok: true, mode: "local", state: "pairedNotUnlocked", credentialsUnlocked: false, version: "1.0.0" } };
+    },
+  });
+  try {
+    await app.els["local-apply"].fire("click");
+    assert.strictEqual(app.els["local-pair"].disabled, false, "待解锁时配对按钮应可用");
+
+    await app.els["local-pair"].fire("click");
+    assert.strictEqual(app.els["local-pair-result"].textContent, "配对成功。");
+  } finally {
+    app.restore();
+  }
+});
+
+// 改了地址没保存：上一次探活的结果立刻作废 ——
+// 否则用户会拿旧地址的状态去配对新地址（实际配到的还是旧地址）。
+test("本地模式块: 改了地址没保存 → 探活状态作废，配对按钮禁用且不发请求", async () => {
+  const app = await bootApp();
+  try {
+    await app.els["local-apply"].fire("click");
+    assert.strictEqual(app.els["local-status"].textContent, "本地模式就绪");
+
+    // 用户改了地址，但没点「保存并探活」。
+    app.els["local-base"].value = "http://127.0.0.1:52222";
+    app.els["local-base"].fire("change");
+
+    assert.strictEqual(app.els["local-status"].textContent, "地址已修改，请重新探活");
+    assert.strictEqual(app.els["local-pair"].disabled, true, "地址改了以后配对按钮应禁用");
+
+    const before = app.calls.length;
+    await app.els["local-pair"].fire("click");
+    const sent = app.calls.slice(before).filter((c) => c.path === "/api/v2/local/enroll" || c.path === "/api/local/pair");
+    assert.strictEqual(sent.length, 0, "没探活过的地址不该被配对");
   } finally {
     app.restore();
   }
