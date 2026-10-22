@@ -21,6 +21,10 @@
   const LOCAL_UNAVAILABLE_CODE = 4007;
   const LOCAL_UNAVAILABLE_MESSAGE = "本地执行不可用，请检查网络或服务器状态。";
 
+  // 本地**已选定**但执行失败时的文案前缀。与云端失败分开：用户看到这句就知道
+  // 该查本机实例，而不是云端服务器。
+  const LOCAL_FAILED_PREFIX = "本地执行失败：";
+
   // 云端（服务器）连不上时的中性文案。
   // 🔴 与上面那句是**两种不同的症状**，必须分开：
   // 「本地执行不可用」说的是本机实例连不上，「无法连接服务器」说的是云端服务器连不上。
@@ -165,33 +169,74 @@
     return /fetch failed|failed to fetch|econnrefused|econnreset|etimedout|ehostunreach|enetunreach|enotfound|epipe|socket hang up|network error|err_connection_refused|err_connection_reset|err_timed_out|err_name_not_resolved|err_internet_disconnected/.test(msg);
   }
 
+  // 失败形状上打"这是本地失败"的标记。
+  //
+  // 🔴 只有**选路命中本地**的请求（routedLocal）才打这个标记：
+  //    - 云端失败带上它，用户就会把云端的问题误当成本机的问题去查；
+  //    - 配对 / 握手这类**显式指定本地地址**的请求不算"选路命中"，
+  //      它们走的是握手契约的既有文案（"本进程不是本地实例，不接受配对。"），
+  //      套上"本地执行失败："前缀反而把握手失败的性质说错了。
+  // 形状：{ ok:false, code, localFailed:true, message:"本地执行失败：…" }。
+  //  - 4007（本地执行不可用）那条出口**已有自己的中性文案**，不叠加前缀，只补标记，
+  //    免得出现"本地执行失败：本地执行不可用…"这种叠词。
+  //  - 原始 code 与 raw 一律透传：文案是给人看的，错误码是给排查看的，两者不能互相顶掉。
+  //  - 幂等：已经打过标记的形状原样返回（不会叠出第二个前缀）。
+  function markLocalFailed(norm) {
+    if (!norm || norm.ok !== false) return norm;
+    if (norm.localFailed) return norm;
+    if (norm.localUnavailable) {
+      return { ok: false, code: norm.code, localUnavailable: true, localFailed: true,
+        message: norm.message, raw: norm.raw };
+    }
+    const detail = norm.message ? String(norm.message) : "未知错误";
+    return { ok: false, code: norm.code, localFailed: true,
+      message: LOCAL_FAILED_PREFIX + detail, raw: norm.raw };
+  }
+
   async function call(method, path, body, baseOverride) {
     if (!_key) throw keyError();
     // 默认带上当前服务端地址：不传的话 preload 会退回它的内置默认值，
     // 「设置」里改过的地址就失效了。
     // 🔴 baseOverride 是**显式指定**，优先于选路（配对等流程要打固定地址）；
     //    不显式指定时由选路决定：命中本地走本地，否则走云端。
-    const target = baseOverride || resolveTarget(method, path);
+    const routedLocal = shouldUseLocal(method, path);
+    const target = baseOverride || (routedLocal ? _localBase : _base);
+    // 请求是不是打到了本地实例？显式 baseOverride 指向本地地址时同样是"本地"。
+    const isLocalTarget = !!(_localBase && target === _localBase);
+    // 「本地已选定」= 选路命中本地 **且** 请求确实打到了本地地址。
+    const localSelected = routedLocal && isLocalTarget;
     let res;
     try {
       res = await window.htw.call(method, path, body, _key, target);
     } catch (e) {
       // 本地基地址连不上（fetch failed / 连接被拒）与 4007 是同一个症状，
       // 走同一个出口；只限网络类失败，其它异常原样抛出去，不被这里吞掉。
-      if (_localBase && target === _localBase && isNetworkFailure(e))
-        return { ok: false, code: LOCAL_UNAVAILABLE_CODE, localUnavailable: true,
+      //
+      // 🔴 这里**没有**"改投云端重发"的分支，而且**永远不会有**：
+      //    请求已经打到本机实例上执行了，重发一次云端等于把有副作用的动作
+      //    （起任务、扣额度）双跑 —— 那比报错糟糕得多。
+      //    选路阶段的"本地没就绪 → 走云端"才是唯一允许改投的地方。
+      if (isLocalTarget && isNetworkFailure(e)) {
+        const shape = { ok: false, code: LOCAL_UNAVAILABLE_CODE, localUnavailable: true,
           message: LOCAL_UNAVAILABLE_MESSAGE, raw: e };
+        // 选路命中的本地请求额外带 localFailed：界面据此显示"本地执行失败"。
+        if (localSelected) shape.localFailed = true;
+        return shape;
+      }
       // 云端（服务器）连不上：把英文原文（Chromium 的 "fetch failed"）换成一句中性文案。
       // 原来这里原样抛出去，界面上就蹦出一句英文，用户既看不懂也不知道该查什么。
       // 仍然**抛出去**（不改成返回值）：抛与不抛是调用方的既有契约，只换文案。
-      if (target !== _localBase && isNetworkFailure(e)) {
+      if (!isLocalTarget && isNetworkFailure(e)) {
         const err = new Error(CLOUD_UNREACHABLE_MESSAGE);
         err.cause = e;
         throw err;
       }
       throw e;
     }
-    return normalize(res);
+    // 本地已选定但执行失败（HTTP 500 等）→ 打上本地失败标记，
+    // **不回落云端**。云端失败原样透传，不带这个标记。
+    const norm = normalize(res);
+    return localSelected ? markLocalFailed(norm) : norm;
   }
 
   // 单文件且超过该阈值时走分片上传，规避反向代理 / Cloudflare 的 body 大小限制 (413)。
@@ -252,7 +297,7 @@
     for (let w = 0; w < concurrency; w++) workers.push(worker());
     await Promise.all(workers);
     if (failed) throw failed;
-    return await call("POST", "/api/v2/files/complete", {
+    const doneRes = await call("POST", "/api/v2/files/complete", {
       fileId: uploadId,
       fileName: file.name,
       total: total,
@@ -260,6 +305,9 @@
       fileField: fileField || "file",
       fields: fields || {},
     }, uploadBase);
+    // 合并请求的路径（/api/v2/files/complete）不一定在清单里，所以"选路命中"
+    // 要按**原始路径**算：本次上传被路由到本地，合并失败同样算本地失败。
+    return (_localBase && uploadBase === _localBase) ? markLocalFailed(doneRes) : doneRes;
   }
 
   // 多文件走整包上传时的体积上限（Cloudflare 免费版单请求 100MB）：
@@ -293,9 +341,13 @@
     }
     // 整包上传的 base 由选路决定（命中本地 → 本地，否则 → 云端）。
     // 除 base 外，方法 / 路径 / 文件 / 字段 / 头一律不变。
-    const target = resolveTarget(method, path);
+    const routedLocal = shouldUseLocal(method, path);
+    const target = routedLocal ? _localBase : _base;
+    const localSelected = routedLocal && !!(_localBase && target === _localBase);
     const res = await window.htw.upload(method, path, filePaths, fields, authHeader(), onProgress, fileField, target);
-    return normalize(res);
+    // 与 call 同一口径：选路命中本地就在失败形状上标出来，**不回落云端**。
+    const norm = normalize(res);
+    return localSelected ? markLocalFailed(norm) : norm;
   }
 
   // 后端 MVC 走 AddNewtonsoftJson + DefaultContractResolver：POCO / DTO 一律 PascalCase

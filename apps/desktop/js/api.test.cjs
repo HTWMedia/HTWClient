@@ -450,7 +450,9 @@ const LOCAL = "http://127.0.0.1:51111";
 const DIRECT = "https://direct.example.com";
 
 // 5 个出口都能记账的桩窗口。
-function routingWindow() {
+// respond 可选：按 base 决定这次请求返回什么（或抛什么），
+// 用来钉住"本地失败"的语义（本地返 500 / 本地连不上）。
+function routingWindow(respond) {
   const seen = { call: [], upload: [], download: [], subscribe: [] };
   const win = {
     // genUploadId 用 window.crypto（Node 里没有 window.self）。
@@ -462,6 +464,7 @@ function routingWindow() {
       registerBase: () => {},
       call: async (method, path, body, key, base) => {
         seen.call.push({ method, path, body, key, base });
+        if (typeof respond === "function") return await respond(base, method, path);
         return { ok: true, status: 200, data: { ok: true, data: {} } };
       },
       upload: async (method, path, filePaths, fields, headers, onProgress, fileField, base) => {
@@ -496,7 +499,7 @@ async function makeStore(endpoints) {
 // 装上选路状态再跑一段断言。opts 缺省即"全满足"。
 async function withRouting(opts, fn) {
   const o = opts || {};
-  const { win, seen } = routingWindow();
+  const { win, seen } = routingWindow(o.respond);
   await withStubWindow(win, async (localApi) => {
     localApi.setKey("test-key");
     localApi.setLocalRouting({
@@ -718,4 +721,90 @@ test("选路: 切本地只换 base，方法 / 路径 / 体逐字不变", async (
 test("选路: resolveTarget 默认走云端（没喂状态就是不走本地）", () => {
   const fresh = require("./api.js");
   assert.strictEqual(fresh.resolveTarget("GET", "/api/v2/agent/voices"), "https://htwmedia.dpdns.org");
+});
+
+// =====================================================================
+// 本地执行失败不回落（spec §3.5 / §4 不变量 4）
+// =====================================================================
+//
+// 选路命中本地之后，请求就**已经在本机实例上执行**了。这时失败**直接报错**，
+// 绝不"改投云端重发一次" —— 有副作用的端点（起任务、扣额度）双跑比报错更糟。
+//
+// 失败形状要和云端失败**分得开**：本地失败带 localFailed 标记 + "本地执行失败："前缀，
+// 云端失败不带这个标记（带了就等于把两种症状混成一种，用户没法判断该查本机还是查网络）。
+
+// 数一数每条请求打到了哪台机器：本地 / 云端各几条。
+function countByBase(seen, base) {
+  return seen.call.filter((c) => c.base === base).length;
+}
+
+// ① 选路命中本地、本地返 500 → 本地失败标记 + **不回落云端**。
+// 什么使其变红：① 去掉本地失败标记（不产 localFailed / 不加文案前缀）；
+//              ② 给本地失败加一条"改投云端重发"的回落 → 云端调用次数从 0 变 1。
+test("本地失败: 选路命中本地、本地返 500 → localFailed 标记，且不回落云端", async () => {
+  await withRouting({
+    endpoints: ["POST /api/v2/agent/start"],
+    respond: (base) => {
+      if (base === LOCAL) return { ok: false, status: 500, data: { ok: false, errCode: 500, errMsg: "本地实例内部错误" } };
+      return { ok: true, status: 200, data: { ok: true, data: {} } };
+    },
+  }, async (api, seen) => {
+    const r = await api.call("POST", "/api/v2/agent/start", { a: 1 });
+
+    assert.strictEqual(r.ok, false, "本地执行失败必须是失败结果");
+    assert.strictEqual(r.localFailed, true, "本地已选定且失败 → 必须带 localFailed 标记");
+    assert.strictEqual(r.code, 500, "原始错误码要透传，不能被文案盖住");
+    assert.ok(/^本地执行失败：/.test(r.message), "本地失败文案带前缀，实际：" + r.message);
+    assert.ok(/本地实例内部错误/.test(r.message), "原始原因要留在文案里，实际：" + r.message);
+
+    assert.strictEqual(countByBase(seen, LOCAL), 1, "本地只该被请求一次");
+    assert.strictEqual(countByBase(seen, CLOUD), 0, "本地已选定并失败 → 不得回落云端重发");
+  });
+});
+
+// ② 选路命中本地、本地**网络不可达** → 沿用既有 4007 / localUnavailable 形状，同样不回落。
+// 什么使其变红：① 本地网络失败不再走 4007 那条出口（形状变了）；
+//              ② 给网络失败加"改投云端重发"的回落 → 云端调用次数从 0 变 1。
+test("本地失败: 选路命中本地、本地网络不可达 → 4007/localUnavailable 形状，且不回落云端", async () => {
+  await withRouting({
+    endpoints: ["POST /api/v2/agent/start"],
+    respond: (base) => {
+      if (base === LOCAL) throw new TypeError("fetch failed");
+      return { ok: true, status: 200, data: { ok: true, data: {} } };
+    },
+  }, async (api, seen) => {
+    const r = await api.call("POST", "/api/v2/agent/start", { a: 1 });
+
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.code, 4007, "网络不可达沿用既有的 4007 出口");
+    assert.strictEqual(r.localUnavailable, true, "网络不可达沿用既有的 localUnavailable 标记");
+    assert.strictEqual(r.message, "本地执行不可用，请检查网络或服务器状态。");
+    assert.strictEqual(r.localFailed, true, "本地已选定且失败 → 统一带 localFailed 标记");
+
+    assert.strictEqual(countByBase(seen, LOCAL), 1, "本地只该被请求一次");
+    assert.strictEqual(countByBase(seen, CLOUD), 0, "网络不可达同样不得回落云端重发");
+  });
+});
+
+// ③ 选路未命中（走云端）→ 云端失败**不得**带 localFailed（更不得带本地文案前缀）。
+// 什么使其变红：给失败形状无条件加上 localFailed / 无条件加"本地执行失败："前缀 → 这条红。
+test("本地失败: 选路未命中走云端，云端失败不带 localFailed 标记", async () => {
+  await withRouting({
+    endpoints: ["GET /api/v2/agent/voices"],
+    respond: (base) => {
+      if (base === CLOUD) return { ok: false, status: 500, data: { ok: false, errCode: 500, errMsg: "云端内部错误" } };
+      return { ok: true, status: 200, data: { ok: true, data: {} } };
+    },
+  }, async (api, seen) => {
+    const r = await api.call("GET", "/api/v2/creation/types");
+
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.localFailed, undefined, "云端失败不许带本地失败标记");
+    assert.strictEqual(r.localUnavailable, undefined, "云端失败不许带本地不可用标记");
+    assert.ok(!/本地执行失败/.test(r.message), "云端失败不许用本地文案，实际：" + r.message);
+    assert.strictEqual(r.message, "云端内部错误", "云端失败文案原样透传");
+
+    assert.strictEqual(countByBase(seen, CLOUD), 1);
+    assert.strictEqual(countByBase(seen, LOCAL), 0, "清单未命中就不该碰本地");
+  });
 });
