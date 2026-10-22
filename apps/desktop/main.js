@@ -89,7 +89,12 @@ function ensureLocalSupervisor() {
       // 所以走 getAllWindows 而不是只发给发起方。
       onState: (state) => {
         BrowserWindow.getAllWindows().forEach((w) => {
-          if (!w.isDestroyed()) w.webContents.send("htw:localEvent", state);
+          // isDestroyed() 与 send() 之间有竞态窗口：窗口可能正好在这两步之间被销毁，
+          // 这时 send() 抛错会打断整个 forEach，后面的窗口就都收不到状态了。
+          // 所以整段包 try/catch —— 单个窗口失败只影响它自己。
+          try {
+            if (!w.isDestroyed()) w.webContents.send("htw:localEvent", state);
+          } catch (e) { /* 窗口已销毁 */ }
         });
       },
       // 监督器把界面回调抛出的异常交到这里；不接也不影响状态推进，但记一笔便于排查。

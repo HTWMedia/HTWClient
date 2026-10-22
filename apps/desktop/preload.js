@@ -151,19 +151,29 @@ contextBridge.exposeInMainWorld("htw", {
   // ---- 本地实例（用户自备的本地可执行文件）----
   // 拉起/停止/查状态都由主进程执行，preload 只做转发。
   // 启动必须带上可执行文件路径：主进程不会沿用上次的路径。
+  //
+  // 失败兜底**不伪造状态载荷**：主进程真出问题时（通道没了、主进程挂了），
+  // 这里返回 { ok:false, errMsg, error }，**不含** state/base/pid/reason。
+  // 为什么不能伪造：下游（面板）据状态决定显示"未配置 / 已停止 / 运行中"，
+  // 兜底若回一个"正常态"，等于把主进程故障说成用户的配置问题；
+  // 更糟的是回 pid:null / base:"" 等于在"事实未知"时断言"实例没在跑"。
+  // 失败一律按 ok === false 判：拿不到 ok:false 的调用方不要按状态渲染。
+  // 形态照既有 subscribeTask 的 { ok:false, errMsg }。
   localStart: (binaryPath) => ipcRenderer
     .invoke("htw:localStart", String(binaryPath || ""))
-    // 主进程那边真出问题时不该让渲染层拿到一个未处理的 rejection。
     .catch((e) => ({
-      state: "failed", base: "", reason: "noBinary", attempt: 0, pid: null,
-      error: String((e && e.message) || e),
+      ok: false, errMsg: String((e && e.message) || e), error: String((e && e.message) || e),
     })),
   localStop: () => ipcRenderer
     .invoke("htw:localStop")
-    .catch((e) => ({ state: "stopped", base: "", reason: "", attempt: 0, pid: null, error: String((e && e.message) || e) })),
+    .catch((e) => ({
+      ok: false, errMsg: String((e && e.message) || e), error: String((e && e.message) || e),
+    })),
   localStatus: () => ipcRenderer
     .invoke("htw:localStatus")
-    .catch((e) => ({ state: "idle", base: "", reason: "", attempt: 0, pid: null, error: String((e && e.message) || e) })),
+    .catch((e) => ({
+      ok: false, errMsg: String((e && e.message) || e), error: String((e && e.message) || e),
+    })),
   // 状态订阅：主进程每次状态变化都推一次。返回取消订阅函数，形态与 onStreamEvent 一致，
   // 渲染层换面板时用它解绑，免得旧回调继续收事件。
   onLocalEvent: (cb) => {
