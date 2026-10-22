@@ -2,6 +2,10 @@ const test = require("node:test");
 const assert = require("node:assert");
 const api = require("./api.js");
 const Local = require("./local.js");
+const Caps = require("./local-capabilities.js");
+// 请求头物化的**同一份**口径（preload.call 直接用这个模块）：
+// 对请求头的断言建立在真实上线路径上，而不是在测试里另造一份规则。
+const Headers = require("./call-headers.js");
 
 /*
  * 本地模式设置块冒烟测试。
@@ -87,11 +91,14 @@ function makeLocalEls(opts) {
     "local-binary": makeNode("input"),
     "local-toggle": makeNode("button"),
     "local-state": makeNode("div"),
+    // 本地模式总开关（id 与 index.html 一致）：默认**不勾选**（总开关默认关）。
+    "local-enabled": makeNode("input"),
   };
   els["api-base"].value = "https://htwmedia.dpdns.org";
   els["api-key"].value = "test-key";
   els["local-base"].value = opts.localBase !== undefined ? opts.localBase : "http://127.0.0.1:51111";
   els["local-pair"].disabled = true;
+  els["local-enabled"].checked = false;
   return els;
 }
 
@@ -154,7 +161,10 @@ async function bootApp(opts) {
       loadConfig: async () => (opts.config || { apiBase: els["api-base"].value, apiKey: els["api-key"].value, localBase: "" }),
       saveConfig: (cfg) => { saved.push(cfg); return true; },
       call: async (method, path, body, apiKey, base) => {
-        calls.push({ method: method, path: path, body: body, apiKey: apiKey, base: base });
+        // 用 preload 同一份逻辑把实参物化成请求头：探活这类匿名请求
+        // 递下来的 apiKey 到底会不会变成AuthKey 头，由这份逻辑说了算。
+        const headers = Headers.buildCallHeaders(apiKey, body);
+        calls.push({ method: method, path: path, body: body, apiKey: apiKey, base: base, headers: headers });
         return route(method, path, body, apiKey, base);
       },
       // ---- 本地实例（监督器）----
@@ -187,6 +197,9 @@ async function bootApp(opts) {
   };
   // omitLocal：窗口里**没有**本地模式模块（模拟模块没加载 / 加载顺序不对）。
   if (!opts.omitLocal) win.HTWLocal = Local;
+  // 端点能力清单模块（渲染层靠它拉清单）。真实运行时由 index.html 的
+  // <script src="js/local-capabilities.js"> 挂上 —— 缺了它就永远拉不到清单。
+  win.HTWLocalCapabilities = Caps;
 
   const prevDoc = global.document;
   const prevWin = global.window;
@@ -230,15 +243,21 @@ test("本地模式块: 探活 ready → 状态行显示本地模式就绪（已�
     // 已就绪的实例不需要再配对：按钮保持禁用。
     assert.strictEqual(app.els["local-pair"].disabled, true, "已就绪时配对按钮应保持禁用");
 
-    // 探活走本地地址，且不带 AuthKey（健康检查不需要登录）。
+    // 探活走本地地址，且**请求头对象里没有 AuthKey 键**（健康检查不需要登录，
+    // 也不该把云端密钥递给本机进程 —— 连"空值的头"都不许出现，
+    // 断言建在真实上线的请求头上，不是实参形态上）。
     const health = app.calls.find((c) => c.path === "/api/v2/local/health");
     assert.ok(health, "应发出一次探活请求");
     assert.strictEqual(health.base, "http://127.0.0.1:51111");
-    assert.strictEqual(health.apiKey, undefined, "探活不应把 AuthKey 递给本机进程");
+    // 显式走省略通道：传 **null**（不是无意漏传的 undefined —— 那正是旧断言被骗过的原因）。
+    assert.strictEqual(health.apiKey, null, "探活必须显式传 null（省略通道哨兵），实际：" + String(health.apiKey));
+    assert.ok(!("AuthKey" in health.headers), "探活请求头不得带 AuthKey（空值头也不许），实际：" + JSON.stringify(health.headers));
 
-    // 配置的键一起写，别把既有键丢掉（可执行文件路径是第 4 个键）。
+    // 配置的键一起写，别把既有键丢掉（可执行文件路径是第 4 个键，
+    // 「启用本地模式」总开关是第 5 个键）。
     const cfg = app.saved[app.saved.length - 1];
-    assert.deepStrictEqual(Object.keys(cfg).sort(), ["apiBase", "apiKey", "localBase", "localBinary"]);
+    assert.deepStrictEqual(Object.keys(cfg).sort(), ["apiBase", "apiKey", "localBase", "localBinary", "localEnabled"]);
+    assert.strictEqual(cfg.localEnabled, false, "总开关默认关");
     assert.strictEqual(cfg.localBase, "http://127.0.0.1:51111");
     assert.strictEqual(cfg.apiBase, "https://htwmedia.dpdns.org");
     assert.strictEqual(cfg.apiKey, "test-key");
@@ -258,6 +277,78 @@ test("本地模式块: 探活 500 → 不算就绪，状态行给失败文案，
     // 500 是"实例回了错误"，不是"连不上"：两者文案必须能区分开。
     assert.strictEqual(app.els["local-status"].textContent, "本地实例返回错误，请检查本地实例状态。");
     assert.strictEqual(app.els["local-pair"].disabled, true, "探活失败时配对按钮应保持禁用");
+  } finally {
+    app.restore();
+  }
+});
+
+// 🔴 就绪判据也必须**跟着监督器走**：实例报非 running（停止/退避/失败）时，
+// 之前探活得到的"就绪+已配对"立刻作废 —— 不然实例都停了，业务请求还往本机发。
+test("本地模式块: 监督器报 stopped → 选路判据失效，端点回到云端", async () => {
+  const app = await bootApp({
+    route: (method, path) => {
+      if (path === "/api/v2/local/capabilities")
+        return { status: 200, ok: true, data: { protocolVersion: 1, endpoints: ["GET /api/v2/agent/voices"] } };
+      return READY_HEALTH;
+    },
+  });
+  try {
+    // 先把前提立起来：总开关开 + 探活就绪 + 已配对 + 清单命中。
+    app.App.local.setEnabled(true);
+    await app.els["local-apply"].fire("click");
+    assert.strictEqual(app.App.local.routing().ready, true, "前提：实例已就绪");
+    assert.strictEqual(app.App.local.routing().paired, true, "前提：已配对且解锁");
+    assert.strictEqual(api.resolveTarget("GET", "/api/v2/agent/voices"), "http://127.0.0.1:51111",
+      "前提：清单内的端点走本地");
+    // 监督器状态事件（真实上线路径：主进程推送）报 stopped。
+    app.emitLocalEvent({ ok: true, state: "stopped", base: "", reason: "", attempt: 0, pid: null });
+    assert.strictEqual(api.localRouting.ready, false, "监督器报非 running → 就绪判据必须失效");
+    assert.strictEqual(api.localRouting.paired, false, "配对判据一并失效");
+    assert.strictEqual(api.resolveTarget("GET", "/api/v2/agent/voices"), "https://htwmedia.dpdns.org",
+      "端点回到云端");
+  } finally {
+    app.restore();
+  }
+});
+
+// 🔴 运行中的状态文案不能自相矛盾：总开关**关**着就说"业务请求仍走云端"；
+// **开**着就说清单内的业务请求走本机。一句固定文案会把总开关的样子说反。
+// 🔴 清单里的协议版本也要再核一道（健康检查已比过一次，防御纵深）：
+// 健康响应不带版本（老实例形态）握手不会拦，清单版本对不上 → 清单作废，端点走云端。
+test("本地模式块: 清单协议版本与客户端不匹配 → 清单作废，端点走云端", async () => {
+  const app = await bootApp({
+    route: (method, path) => {
+      if (path === "/api/v2/local/capabilities")
+        return { status: 200, ok: true, data: { protocolVersion: 2, endpoints: ["GET /api/v2/agent/voices"] } };
+      // 健康检查不带协议版本（老实例形态）：握手不会拦，清单侧必须再核一道。
+      return READY_HEALTH;
+    },
+  });
+  try {
+    app.App.local.setEnabled(true);
+    await app.els["local-apply"].fire("click");
+    assert.strictEqual(app.App.local.routing().hasStore, false, "版本对不上 → 清单不得进选路");
+    assert.strictEqual(api.resolveTarget("GET", "/api/v2/agent/voices"), "https://htwmedia.dpdns.org",
+      "端点走云端");
+    assert.strictEqual(api.localRouting.store, null, "选路判据里没有作废的清单");
+  } finally {
+    app.restore();
+  }
+});
+
+test("本地模式块: 运行中文案按总开关切换（不互相矛盾）", async () => {
+  const app = await bootApp();
+  try {
+    const runningPayload = { ok: true, state: "running", base: "http://127.0.0.1:51111", reason: "", attempt: 1, pid: 4242 };
+    app.emitLocalEvent(runningPayload);
+    const offText = app.els["local-state"].textContent;
+    assert.ok(/业务请求仍走云端/.test(offText), "总开关关 → 文案写走云端，实际：" + offText);
+
+    app.App.local.setEnabled(true);
+    app.emitLocalEvent(runningPayload);
+    const onText = app.els["local-state"].textContent;
+    assert.ok(/清单内的业务请求走本机/.test(onText), "总开关开 → 文案写走本机，实际：" + onText);
+    assert.ok(!/业务请求仍走云端/.test(onText), "开着的文案不得保留旧说法，实际：" + onText);
   } finally {
     app.restore();
   }
@@ -304,9 +395,13 @@ test("本地模式块: 一键配对成功 → 结果行提示成功，状态行�
     assert.ok(enroll, "应发出一次登记请求");
     assert.strictEqual(enroll.base, "https://htwmedia.dpdns.org", "登记走服务端地址");
     assert.strictEqual(enroll.apiKey, "test-key", "登记请求带 AuthKey");
+    assert.ok("AuthKey" in enroll.headers && enroll.headers.AuthKey === "test-key",
+      "登记的头仍带真 AuthKey（配对语义保持不变，实际：" + JSON.stringify(enroll.headers) + "）");
 
     const pair = app.calls.find((c) => c.path === "/api/local/pair");
     assert.ok(pair, "应发出一次配对请求");
+    assert.ok("AuthKey" in pair.headers && pair.headers.AuthKey === "test-key",
+      "配对的头仍带真 AuthKey（实际：" + JSON.stringify(pair.headers) + "）");
     assert.strictEqual(pair.base, "http://127.0.0.1:51111", "配对走本地实例地址");
     assert.strictEqual(pair.body.ServerUrl, "https://htwmedia.dpdns.org");
     assert.strictEqual(pair.body.Account, "a@x.com", "账号以登记响应回带值为准");
@@ -934,7 +1029,7 @@ test("本地实例: 状态行不暗示业务流量已切本地", async () => {
     for (const bad of ["业务走本地", "已切换本地", "切到本地", "走本地", "流量已切", "已接本地"]) {
       assert.ok(!text.includes(bad), "状态行不该出现暗示流量已切的说法（" + bad + "），实际：" + text);
     }
-    // 反过来：必须显式说清业务请求仍走云端（本轮不切流量）。
+    // 反过来：业务请求按端点能力清单切本地，此测试未开总开关 → 状态行必须显式说清业务请求仍走云端。
     assert.ok(text.includes("业务请求仍走云端"), "运行中应写明业务请求仍走云端，实际：" + text);
   } finally {
     app.restore();
@@ -1112,5 +1207,223 @@ test("本地模式块: 可执行文件路径只认输入框里的用户输入", 
     assert.strictEqual(cfg.localBinary, "C:\\tools\\local-instance.exe");
   } finally {
     app.restore();
+  }
+});
+
+// ---- 本地模式总开关（config 第 5 键 localEnabled）----
+//
+// 四条口径钉在下面这几条用例里：
+//  ① **默认关**：配置里没有 localEnabled 这个键 → 勾选框未选中、选路全走云端；
+//  ② 勾选 / 取消勾选都要落盘（localEnabled: true / false），既有四键一字不动；
+//  ③ 启动时读到 localEnabled:true → 勾选框选中，且选路判据里的 enabled 为真；
+//  ④ 实例就绪后**自动拉一次**端点能力清单并喂给 api.js；拉不到 → 空清单 →
+//     全走云端（不报错、不阻断）。
+//
+// 🔴 api.js 是模块单例（跨用例共享状态）：每条用例收尾都要把选路判据复位，
+//    否则上一条用例留下的"开关开着 + 清单命中"会污染下一条。
+
+const CLOUD_BASE = "https://htwmedia.dpdns.org";
+const LOCAL_BASE = "http://127.0.0.1:51111";
+const CAPS_PATH = "/api/v2/local/capabilities";
+// 清单夹具：一条带占位符的端点（匹配的是"方法 + 路径模式"，不是前缀）。
+const CAPS_LIST = ["GET /api/v2/voice/status/{id:int}"];
+
+// 探活回 ready；清单端点按 capsResponder 给。
+function makeRoute(capsResponder) {
+  return function (method, path) {
+    if (path === CAPS_PATH) return capsResponder();
+    return READY_HEALTH;
+  };
+}
+
+// 复位 api.js 的选路判据（模块单例的跨用例污染）。
+function resetRouting() {
+  api.setLocalRouting({});
+}
+
+// 勾选启用 → 落盘 localEnabled:true（既有四键一字不动）。
+// 什么使其变红：勾选框没有接线（或落盘时漏了这个键）→ 落盘里没有 localEnabled / 不是 true。
+test("本地模式总开关: 勾选启用 → 落盘 localEnabled:true，既有四键一字不动", async () => {
+  const app = await bootApp({
+    config: { apiBase: CLOUD_BASE, apiKey: "test-key", localBase: LOCAL_BASE },
+  });
+  try {
+    app.els["local-enabled"].checked = true;
+    await app.els["local-enabled"].fire("change");
+
+    const cfg = app.saved[app.saved.length - 1];
+    assert.strictEqual(cfg.localEnabled, true, "勾选后应落盘 localEnabled:true");
+    // 既有四键一个都不能少（少写一个键等于把另一个清空）。
+    assert.strictEqual(cfg.apiBase, CLOUD_BASE);
+    assert.strictEqual(cfg.apiKey, "test-key");
+    assert.strictEqual(cfg.localBase, LOCAL_BASE);
+    assert.strictEqual(cfg.localBinary, "");
+  } finally {
+    app.restore();
+    resetRouting();
+  }
+});
+
+// 取消勾选 → 落盘 localEnabled:false。
+// 什么使其变红：只写 true 不写 false（或取消勾选时干脆不落盘）→ 落盘值不是 false。
+test("本地模式总开关: 取消勾选 → 落盘 localEnabled:false", async () => {
+  const app = await bootApp({
+    config: { apiBase: CLOUD_BASE, apiKey: "test-key", localBase: LOCAL_BASE, localEnabled: true },
+  });
+  try {
+    assert.strictEqual(app.els["local-enabled"].checked, true, "启动时应回填勾选状态");
+    app.els["local-enabled"].checked = false;
+    await app.els["local-enabled"].fire("change");
+
+    const cfg = app.saved[app.saved.length - 1];
+    assert.strictEqual(cfg.localEnabled, false, "取消勾选后应落盘 localEnabled:false");
+  } finally {
+    app.restore();
+    resetRouting();
+  }
+});
+
+// 启动读到 localEnabled:true → 勾选框选中，且选路判据里的 enabled 为真。
+// 什么使其变红：启动时不读这个键（或读了不喂给选路）→ 勾选框未选中 / enabled 为假。
+test("本地模式总开关: 启动读到 localEnabled:true → 勾选框选中，选路判据 enabled 为真", async () => {
+  const app = await bootApp({
+    config: { apiBase: CLOUD_BASE, apiKey: "test-key", localBase: LOCAL_BASE, localEnabled: true },
+  });
+  try {
+    assert.strictEqual(app.els["local-enabled"].checked, true, "启动时应回填勾选状态");
+    assert.strictEqual(api.localRouting.enabled, true, "api.js 的选路判据应收到 enabled:true");
+    assert.strictEqual(app.App.local.routing().enabled, true);
+  } finally {
+    app.restore();
+    resetRouting();
+  }
+});
+
+// 默认关：配置里没有该键 → 勾选框未选中；即使实例就绪且清单命中也走云端。
+// 什么使其变红：缺省当成"开"（或读不到时按 true 处理）→ 勾选框选中 / 端点走本地。
+test("本地模式总开关: 默认关（配置里没有该键）→ 未选中，实例就绪且清单命中也走云端", async () => {
+  const app = await bootApp({
+    config: { apiBase: CLOUD_BASE, apiKey: "test-key", localBase: LOCAL_BASE },
+    route: makeRoute(() => ({ status: 200, ok: true, data: { endpoints: CAPS_LIST } })),
+  });
+  try {
+    assert.strictEqual(app.els["local-enabled"].checked, false, "总开关默认不该勾选");
+    assert.strictEqual(api.localRouting.enabled, false, "默认不该把选路判据的 enabled 置真");
+
+    await app.els["local-apply"].fire("click");
+
+    // 只差总开关这一条：清单确实拉到了、也确实喂给了 api.js。
+    assert.strictEqual(
+      api.localRouting.store.has("GET", "/api/v2/voice/status/123"), true,
+      "清单应已喂给 api.js（否则下面的断言没有意义）"
+    );
+    assert.strictEqual(
+      api.resolveTarget("GET", "/api/v2/voice/status/123"), CLOUD_BASE,
+      "总开关关 → 该端点必须走云端"
+    );
+  } finally {
+    app.restore();
+    resetRouting();
+  }
+});
+
+// 开关开 + 实例就绪 + 清单命中 → 该端点走本地；不在清单里的端点仍走云端。
+// 什么使其变红：enabled 没喂进选路（或开关状态没生效）→ 命中的端点仍走云端。
+test("本地模式总开关: 开启 + 实例就绪 + 清单命中 → 命中的端点走本地，其余走云端", async () => {
+  const app = await bootApp({
+    config: { apiBase: CLOUD_BASE, apiKey: "test-key", localBase: LOCAL_BASE, localEnabled: true },
+    route: makeRoute(() => ({ status: 200, ok: true, data: { endpoints: CAPS_LIST } })),
+  });
+  try {
+    await app.els["local-apply"].fire("click");
+
+    assert.strictEqual(api.localRouting.enabled, true);
+    assert.strictEqual(
+      api.resolveTarget("GET", "/api/v2/voice/status/123"), LOCAL_BASE,
+      "清单命中的端点应走本地实例"
+    );
+    assert.strictEqual(
+      api.resolveTarget("GET", "/api/v2/voice/other"), CLOUD_BASE,
+      "清单外的端点仍走云端"
+    );
+  } finally {
+    app.restore();
+    resetRouting();
+  }
+});
+
+// 运行时勾选 / 取消 → 立刻生效（不用重启）：选路判据的 enabled 跟着变。
+// 什么使其变红：勾选后不把新状态喂给选路 → enabled 仍是旧值（关），
+// 表现为「勾选框勾着、请求却还是走云端」。
+test("本地模式总开关: 运行时勾选 / 取消 → 立刻生效，选路判据的 enabled 跟着变", async () => {
+  const app = await bootApp({
+    config: { apiBase: CLOUD_BASE, apiKey: "test-key", localBase: LOCAL_BASE },
+  });
+  try {
+    assert.strictEqual(api.localRouting.enabled, false, "初始是关");
+
+    app.els["local-enabled"].checked = true;
+    await app.els["local-enabled"].fire("change");
+    assert.strictEqual(api.localRouting.enabled, true, "勾选后应立刻生效");
+
+    app.els["local-enabled"].checked = false;
+    await app.els["local-enabled"].fire("change");
+    assert.strictEqual(api.localRouting.enabled, false, "取消勾选后应立刻回到关");
+  } finally {
+    app.restore();
+    resetRouting();
+  }
+});
+
+// 实例就绪 → 自动拉一次端点能力清单（向本地实例拉），并喂给 api.js。
+// 什么使其变红：实例就绪后不拉清单（拉了但没喂给 api.js）→ 没有那条请求 / store 缺席。
+test("本地模式总开关: 实例就绪 → 自动拉一次端点能力清单并喂给 api.js", async () => {
+  const app = await bootApp({
+    config: { apiBase: CLOUD_BASE, apiKey: "test-key", localBase: LOCAL_BASE, localEnabled: true },
+    route: makeRoute(() => ({ status: 200, ok: true, data: { endpoints: CAPS_LIST } })),
+  });
+  try {
+    await app.els["local-apply"].fire("click");
+
+    const pulls = app.calls.filter((c) => c.path === CAPS_PATH);
+    assert.strictEqual(pulls.length, 1, "实例就绪后应自动拉一次清单");
+    assert.strictEqual(pulls[0].method, "GET");
+    assert.strictEqual(pulls[0].base, LOCAL_BASE, "清单要向本地实例拉");
+
+    assert.ok(api.localRouting.store, "清单应喂给 api.js");
+    assert.strictEqual(
+      api.localRouting.store.has("GET", "/api/v2/voice/status/123"), true,
+      "喂进去的清单应能按方法 + 路径模式命中"
+    );
+  } finally {
+    app.restore();
+    resetRouting();
+  }
+});
+
+// 清单拉取失败 → 空清单 → 全走云端，**不报错**（状态行照旧，不抛异常）。
+// 什么使其变红：拉取失败被当成错误抛出去（状态行变成失败文案 / 流程抛异常）。
+test("本地模式总开关: 清单拉取失败 → 空清单 → 全走云端，不报错", async () => {
+  const app = await bootApp({
+    config: { apiBase: CLOUD_BASE, apiKey: "test-key", localBase: LOCAL_BASE, localEnabled: true },
+    route: makeRoute(() => ({ status: 500, ok: false, data: { errMsg: "boom" } })),
+  });
+  try {
+    await app.els["local-apply"].fire("click");
+
+    // 失败不是错误：状态行照旧说就绪（实例本身是好的，只是清单没拉到）。
+    assert.strictEqual(app.els["local-status"].textContent, "本地模式就绪", "清单拉不到不该影响状态行");
+    assert.ok(api.localRouting.store, "清单对象仍在（只是表是空的）");
+    assert.strictEqual(
+      api.localRouting.store.has("GET", "/api/v2/voice/status/123"), false,
+      "空清单 → 任何端点都不命中"
+    );
+    assert.strictEqual(
+      api.resolveTarget("GET", "/api/v2/voice/status/123"), CLOUD_BASE,
+      "空清单 → 全部走云端"
+    );
+  } finally {
+    app.restore();
+    resetRouting();
   }
 });

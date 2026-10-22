@@ -13,6 +13,7 @@
   function getLocalBinaryInput() { return document.getElementById("local-binary"); }
   function getLocalToggleBtn() { return document.getElementById("local-toggle"); }
   function getLocalStateEl() { return document.getElementById("local-state"); }
+  function getLocalEnabledInput() { return document.getElementById("local-enabled"); }
 
   // 本地模式未配置（输入框为空）时的状态文案。
   const LOCAL_NOT_CONFIGURED = "本地模式未配置";
@@ -40,15 +41,19 @@
   //  - failed ≠ 实例已停（进程正跑时收到 start("") 也会翻成 failed）：
   //    所以失败文案只说"启动失败"，不说"已停止"。
   //
-  // ⚠️ 本轮**不切业务流量**：状态行必须显式区分「实例在跑」与「业务走本地」。
-  // 运行中的文案写明"业务请求仍走云端"，免得用户以为业务已经切到本机。
+  // ⚠️ 状态行必须显式区分「实例在跑」与「业务走本地」：
+  //    运行中的文案按**总开关**走 —— 开：清单内的业务请求走本机（说清哪些走本机）；
+  //    关：业务请求仍走云端。一句固定文案会把开关的实际样子说反。
   const LOCAL_INSTANCE_TEXTS = {
     idle: "本地实例：请先填写可执行文件路径。",
     starting: "本地实例：正在启动…",
     stopping: "本地实例：正在停止…",
     stopped: "本地实例：已停止。",
-    running: "本地实例运行中（地址 {base}）。业务请求仍走云端。",
     backoff: "本地实例崩溃退避中，稍后会自动重试。",
+  };
+  const LOCAL_RUNNING_TEXTS = {
+    enabled: "本地实例运行中（地址 {base}）。清单内的业务请求走本机。",
+    disabled: "本地实例运行中（地址 {base}）。业务请求仍走云端。",
   };
   // 失败原因 → 中文（键是监督器的机器契约取值）。
   const LOCAL_INSTANCE_REASON_TEXTS = {
@@ -108,11 +113,13 @@
   function setLocalPairResult(text) { const el = getLocalPairResultEl(); if (el) el.textContent = text; }
   function setLocalPairEnabled(on) { const b = getLocalPairBtn(); if (b) b.disabled = !on; }
 
-  // 配置的四个键必须一起写：主进程的 saveConfig 只认
-  // apiBase/apiKey/localBase/localBinary，少写一个键等于把另一个键清空
+  // 配置的五个键必须一起写：主进程的 saveConfig 只认
+  // apiBase/apiKey/localBase/localBinary/localEnabled，少写一个键等于把另一个键清空
   // （例如保存 AuthKey 时把本地地址抹掉）。
   // localBinary 走缓存（userLocalBinary），不直接读输入框：
   // 输入框里还没确认过的值不该跟着每次按键落盘。
+  // localEnabled 走总开关状态（localModeEnabled），不直接读勾选框 ——
+  // 勾选框是**显示**，状态才是事实（启动时要先读配置再回填勾选框）。
   function saveConfigAll(localBase) {
     if (!window.htw || !window.htw.saveConfig) return;
     const base = getBaseInput() ? getBaseInput().value.trim() : "";
@@ -122,6 +129,7 @@
       apiKey: key,
       localBase: localBase == null ? "" : localBase,
       localBinary: userLocalBinary,
+      localEnabled: localModeEnabled,
     });
   }
 
@@ -245,6 +253,97 @@
   // 三态文案与状态判定都在 js/local.js（机器契约只在那里翻译），
   // 这里只做接线：读地址 → 登记基地址 → 探活 → 显示状态 → 允许配对。
 
+  // ---- 本地选路：把实例状态与能力清单喂给 api.js ----
+  //
+  // 判据本身全在 api.js 那边（setLocalRouting），这里只负责**提供事实**：
+  //  - enabled     用户总开关（默认关；设置页勾选与落盘见下面 onLocalEnabledChanged）。
+  //  - ready       实例可达（探活通过）。
+  //  - paired      已配对**且已解锁**（探活三态为 ready）——
+  //                未配对 / 未解锁时鉴权层会 500，那时切过去只会拿到坏结果。
+  //  - compatible  协议版本握手通过。
+  //  - store       端点能力清单（js/local-capabilities.js 的 store）。
+  let localModeEnabled = false;
+  let localInstanceReady = false;
+  let localInstancePaired = false;
+  let localInstanceCompatible = false;
+  let capabilitiesStore = null;
+  let capabilitiesStoreBase = "";
+
+  // 把当前事实喂给 api.js。任何一次状态变化后都要调一次 ——
+  // 不调的话 api.js 会拿着上一次的状态选路（地址都换了还往老地址发）。
+  function syncLocalRouting() {
+    const api = window.HTWApi;
+    if (!api || typeof api.setLocalRouting !== "function") return;
+    api.setLocalRouting({
+      enabled: localModeEnabled,
+      ready: localInstanceReady,
+      paired: localInstancePaired,
+      compatible: localInstanceCompatible,
+      store: capabilitiesStore,
+    });
+  }
+
+  // 选路判据整体作废（实例没起来 / 地址变了 / 没配置）：一律走云端。
+  function resetLocalRouting() {
+    localInstanceReady = false;
+    localInstancePaired = false;
+    localInstanceCompatible = false;
+    capabilitiesStore = null;
+    capabilitiesStoreBase = "";
+    syncLocalRouting();
+  }
+
+  // 总开关变化：立刻落盘 + 立刻把新状态喂给选路。
+  //
+  // 落盘走 saveConfigAll（五个键一起写）：既有四键一字不动，只多一个 localEnabled。
+  // 勾选框是**显示**，状态（localModeEnabled）才是事实 —— 两者同源，
+  // 免得出现「勾选框勾着、判据却说是关的」这种自相矛盾的状态。
+  function onLocalEnabledChanged() {
+    const el = getLocalEnabledInput();
+    localModeEnabled = !!(el && el.checked);
+    saveConfigAll(userLocalBase);
+    syncLocalRouting();
+  }
+
+  // 实例就绪后拉一次端点能力清单。
+  // 清单**与实例生命周期绑定**：地址变了就重新拉（缓存按地址记）。
+  // 拉不到 / 为空 → store 查不到任何端点 → 选路全走云端（不报错、不阻断）。
+  async function loadCapabilitiesStore(base) {
+    const Caps = window.HTWLocalCapabilities;
+    const b = String(base || "").trim();
+    if (!Caps || typeof Caps.createStore !== "function" || !b) {
+      capabilitiesStore = null;
+      capabilitiesStoreBase = "";
+      syncLocalRouting();
+      return null;
+    }
+    if (capabilitiesStore && capabilitiesStoreBase === b) return capabilitiesStore;
+    const store = Caps.createStore({ base: b, transport: localTransport(b) });
+    capabilitiesStore = store;
+    capabilitiesStoreBase = b;
+    // 拉取失败不是错误：清单为空 = 本地无能力 = 全部走云端。
+    try { await store.load(); } catch (e) { /* 拉不到就是"本地无能力" */ }
+    // 🔴 清单自报的协议版本再核一道（健康检查已比对过一次，这里是防御纵深：
+    //    健康响应不带版本的老实例握手不会拦）。对不上 → 清单作废，全部走云端；
+    //    读不到（null / 非数字）不拦 —— 老实例没有这个字段，不能把它当不兼容。
+    const LocalMod = window.HTWLocal;
+    const supported = (LocalMod && typeof LocalMod.SUPPORTED_PROTOCOL_VERSION === "number")
+      ? LocalMod.SUPPORTED_PROTOCOL_VERSION
+      : null;
+    const reported = (typeof store.protocolVersion === "number" && Number.isFinite(store.protocolVersion))
+      ? store.protocolVersion
+      : null;
+    if (supported !== null && reported !== null && reported !== supported) {
+      store.clear();
+      capabilitiesStore = null;
+      capabilitiesStoreBase = "";
+      syncLocalRouting();
+      return null;
+    }
+    syncLocalRouting();
+    return store;
+  }
+
   // ---- 本地实例：启停与状态 ----
   // 状态文案与判定口径见 LOCAL_INSTANCE_TEXTS 上面的注释。
 
@@ -300,7 +399,9 @@
     const p = payload || {};
     const st = String(p.state || "");
     if (st === "running") {
-      setLocalStateText(LOCAL_INSTANCE_TEXTS.running.replace("{base}", String(p.base || "")));
+      // 运行中的文案按总开关走（LOCAL_RUNNING_TEXTS）：文案与开关的实际样子不能互相矛盾。
+      const template = localModeEnabled ? LOCAL_RUNNING_TEXTS.enabled : LOCAL_RUNNING_TEXTS.disabled;
+      setLocalStateText(template.replace("{base}", String(p.base || "")));
     } else if (st === "failed") {
       const why = LOCAL_INSTANCE_REASON_TEXTS[p.reason] || String(p.reason || "原因未知");
       setLocalStateText("本地实例启动失败：" + why + "。");
@@ -332,7 +433,13 @@
     supervisorSnapshot = payload;
     adoptSupervisorBase(payload.base);
     renderLocalState(payload);
-    if (payload.state !== "running") return;
+    if (payload.state !== "running") {
+      // 🔴 监督器报非 running（停止 / 退避 / 失败 / 启动中）：实例不保证活着，
+      // 之前探活得到的"就绪 / 已配对"立刻作废 —— 不然实例都停了，
+      // 业务请求还往本机发。端点选路整体回到云端；等下次 running 事件重新探活再恢复。
+      resetLocalRouting();
+      return;
+    }
     // 实例跑起来了 → 地址回填 + 自动探活。
     // 为什么地址要回填：端口是系统随机分配的，桌面端只能从子进程上报里拿。
     // 用户把它手工抄进输入框，抄错一个字符就全白搭 —— 监督器报什么就是什么。
@@ -430,7 +537,10 @@
     return {
       call: async function (method, path) {
         // 不带 AuthKey：健康检查不需要登录，也不该把云端密钥递给本机进程。
-        const res = await window.htw.call(method, pathOf(path), undefined, undefined, localBase);
+        // 🔴 显式传 **null**（省略通道哨兵）：preload 头物化对 null/undefined 一律
+        //    不建 AuthKey 键 —— 连"空值的头"都不出现（空值头在实例侧也会被当作
+        //    "带了凭据"处理）。探活与端点清单共用这一条 transport，两个出口同时覆盖。
+        const res = await window.htw.call(method, pathOf(path), undefined, null, localBase);
         const status = res ? res.status : 0;
         if (typeof status !== "number" || status < 200 || status >= 300) {
           const e = new Error("HTTP " + status);
@@ -449,6 +559,8 @@
     const localBase = currentLocalBase();
     if (!Local || typeof Local.probeHealth !== "function") {
       confirmedLocalState = null;
+      // 选路判据作废：模块都不在，本地实例不可用 → 走云端。
+      resetLocalRouting();
       setLocalStatus(LOCAL_MODULE_MISSING_TEXT);
       setLocalPairEnabled(false);
       return { ok: false, state: "invalid", message: LOCAL_MODULE_MISSING_TEXT };
@@ -460,9 +572,10 @@
       r = { ok: false, state: "unreachable", message: (e && e.message) ? e.message : String(e) };
     }
     if (!r || r.ok !== true) {
-      // 探活失败 = 未就绪：配对必须被状态自检拦下。
+      // 探活失败 = 未就绪：配对必须被状态自检拦下，选路也一并作废。
       confirmedLocalState = null;
       localProtocolMismatch = false;
+      resetLocalRouting();
       setLocalStatus((r && r.message) ? r.message : "无法连接本地实例，请先启动或检查地址。");
       setLocalPairEnabled(false);
       return r;
@@ -482,6 +595,13 @@
     if (supported !== null && typeof version === "number" && version !== supported) {
       confirmedLocalState = null;
       localProtocolMismatch = true;
+      // 实例可达但握手不兼容 → 选路走云端（ready 为真、compatible 为假）。
+      localInstanceReady = true;
+      localInstancePaired = false;
+      localInstanceCompatible = false;
+      capabilitiesStore = null;
+      capabilitiesStoreBase = "";
+      syncLocalRouting();
       setLocalStatus(LOCAL_PROTOCOL_MISMATCH_TEXT);
       setLocalPairEnabled(false);
       setLocalPairResult(LOCAL_PROTOCOL_MISMATCH_TEXT);
@@ -491,6 +611,21 @@
     // 状态文案取机器契约的映射表（不在这里另造一套说法）。
     const text = (Local.STATE_TEXT && Local.STATE_TEXT[r.state]) || r.message || "";
     confirmedLocalState = r.state;
+    // ---- 选路判据 ----
+    // 实例可达（ready）与握手兼容（compatible）：探活过了 + 版本对上了。
+    // 已配对**且已解锁**才算 paired：探活三态里只有 ready 满足
+    // （notPaired / pairedNotUnlocked 时鉴权层会 500，不能切本地）。
+    localInstanceReady = true;
+    localInstanceCompatible = true;
+    localInstancePaired = (r.state === "ready");
+    if (localInstancePaired) {
+      // 就绪了才拉清单：没配对时拉到的清单也用不上。
+      await loadCapabilitiesStore(localBase);
+    } else {
+      capabilitiesStore = null;
+      capabilitiesStoreBase = "";
+    }
+    syncLocalRouting();
     setLocalStatus(text);
     // 配对按钮的可用性跟着三态走：
     // - notPaired（还没配过对）→ 可以配对，这正是「一键配对」的主用例；
@@ -511,6 +646,9 @@
     if (norm.ok && norm.base === userLocalBase) return;
     confirmedLocalState = null;
     localProtocolMismatch = false;
+    // 地址一改，上一次探活的结果作废 → 选路判据也一并作废
+    // （不然会拿着旧地址的就绪状态往新地址发请求）。
+    resetLocalRouting();
     setLocalStatus(LOCAL_BASE_CHANGED_TEXT);
     setLocalPairEnabled(false);
     setLocalPairResult("");
@@ -533,6 +671,8 @@
       userLocalBase = "";
       confirmedLocalState = null;
       localProtocolMismatch = false;
+      // 关闭本地模式 → 选路判据整体作废（清单也清掉：地址没了，清单无意义）。
+      resetLocalRouting();
       if (api && api.setLocalBase) api.setLocalBase("");
       saveConfigAll("");
       setLocalStatus(LOCAL_NOT_CONFIGURED);
@@ -557,6 +697,8 @@
     confirmedLocalState = null;
     // 换了地址，之前那次探活的版本判定也作废（新地址还没探过）。
     localProtocolMismatch = false;
+    // 换了地址，之前的清单与就绪判据也作废（清单与实例生命周期绑定）。
+    resetLocalRouting();
     // 登记 = 进 preload 白名单。登记失败（地址格式非法）不落盘、不生效。
     const res = api && api.setLocalBase ? api.setLocalBase(base) : null;
     if (res && res.ok === false) {
@@ -688,6 +830,9 @@
     // 地址一改，上一次探活的结果就不再作数（配对按钮与状态行跟着作废）。
     const baseInput = getLocalBaseInput();
     if (baseInput) baseInput.addEventListener("change", onLocalBaseChanged);
+    // 总开关：勾选 / 取消都要立刻落盘并生效。
+    const enabledInput = getLocalEnabledInput();
+    if (enabledInput) enabledInput.addEventListener("change", onLocalEnabledChanged);
   }
 
   function wireNav() {
@@ -739,6 +884,13 @@
       const bi = getLocalBinaryInput();
       if (bi) bi.value = userLocalBinary;
     }
+    // 总开关（config 第 5 键 localEnabled）：**默认关**。
+    // 配置里没有这个键 = 用户从没勾选过 → 当关。
+    // 布尔口径只认 true："true" / 1 都不是用户勾选出来的值，
+    // 当成"开"会把流量切到本地去 —— 那是最不该出的错。
+    localModeEnabled = saved.localEnabled === true;
+    const enabledInput = getLocalEnabledInput();
+    if (enabledInput) enabledInput.checked = localModeEnabled;
     // 本地地址要在 applyAuth 之前填好：applyAuth 会把配置整份写回，
     // 顺序反了会把刚读出来的本地地址又清空。
     if (saved.localBase) {
@@ -767,6 +919,9 @@
     getBaseInput().addEventListener("change", applyAuth);
     getKeyInput().addEventListener("input", applyAuth);
     applyAuth();
+    // 把总开关的事实喂给选路（enabled 是选路的第一条判据）。
+    // 不调的话 api.js 拿不到 enabled —— 启动时勾选过也不生效。
+    syncLocalRouting();
     if (window.HTWApi && window.HTWApi.onQuotaExceeded) window.HTWApi.onQuotaExceeded(showQuotaBanner);
     wireNav();
     wireLocal();
@@ -823,6 +978,22 @@
       toggle: toggleLocal,
       stateOf: function () { return supervisorSnapshot; },
       base: currentLocalBase,
+      // 本地选路状态（给 api.js 的判据用；后续任务接总开关时也走这里）。
+      routing: function () {
+        return {
+          enabled: localModeEnabled,
+          ready: localInstanceReady,
+          paired: localInstancePaired,
+          compatible: localInstanceCompatible,
+          hasStore: !!capabilitiesStore,
+        };
+      },
+      // 总开关（默认关）。设置页勾选与落盘接上以后由它驱动。
+      setEnabled: function (on) {
+        localModeEnabled = !!on;
+        syncLocalRouting();
+        return localModeEnabled;
+      },
     },
   };
 })();

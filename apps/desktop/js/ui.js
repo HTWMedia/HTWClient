@@ -41,11 +41,16 @@
   function showError(region, message) {
     clear(region);
     const msg = String(message || "");
-    // 本地模式不可用是独立症状：走专用块（标题固定），
-    // 详情里剥掉 "[4007] " 这类代码前缀，只留给人看的话。
-    const local = msg.indexOf("本地执行不可用") !== -1;
+    // 本地模式的两种症状分开显示：标题不同，用户才知道该查本机还是查网络。
+    //  - "本地执行不可用"（4007）：本机实例连不上 ⇒ 专用标题「本地执行不可用」；
+    //  - "本地执行失败"：本机已选定但执行失败 ⇒ 标题「本地执行失败」（M1）。
+    // 两者详情里都剥掉 "[4007] " 这类代码前缀，只留给人看的话。
+    const unavailable = msg.indexOf("本地执行不可用") !== -1;
+    const failed = !unavailable && msg.indexOf("本地执行失败") !== -1;
+    const local = unavailable || failed;
+    const title = unavailable ? "本地执行不可用" : (failed ? "本地执行失败" : "出错了");
     mount(region, el("div", { class: "error-box" }, [
-      el("strong", { text: local ? "本地执行不可用" : "出错了" }),
+      el("strong", { text: title }),
       el("div", { class: "error-detail", text: local ? msg.replace(/^\[\d+\]\s*/, "") : msg }),
     ]));
     return region;

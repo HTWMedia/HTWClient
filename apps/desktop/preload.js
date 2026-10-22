@@ -7,6 +7,8 @@ const path = require("path");
 const http = require("http");
 const https = require("https");
 const { URL } = require("url");
+// call 请求头的唯一物化口径（省略通道也定义在这里：测试桩用同一份逻辑断言请求头）。
+const { buildCallHeaders } = require("./js/call-headers.js");
 
 const API_BASE = process.env.HTW_API_BASE || "https://htwmedia.dpdns.org";
 // 可选的大文件直连通道：默认关闭（空串），此时所有请求都走 API_BASE。
@@ -68,10 +70,11 @@ function configPath() {
   return "htw-config.json";
 }
 // 读取持久化的 API 地址 / AuthKey（保存于应用数据目录，明文存储）。
-// 内容原样转发（含 localBase / localBinary），schema 不在此校验 —— 字段含义由调用方与 main.js 约定。
+// 内容原样转发（含 localBase / localBinary / localEnabled），schema 不在此校验 —— 字段含义由调用方与 main.js 约定。
+// 兜底里的 localEnabled 是 false（总开关缺省关）：主进程通道断时不该默认把流量切到本地。
 function loadConfig() {
   return ipcRenderer.invoke("htw:loadConfig").catch(function () {
-    return { apiBase: "", apiKey: "", localBase: "", localBinary: "" };
+    return { apiBase: "", apiKey: "", localBase: "", localBinary: "", localEnabled: false };
   });
 }
 function saveConfig(cfg) {
@@ -189,13 +192,14 @@ contextBridge.exposeInMainWorld("htw", {
   call: async (method, path, body, apiKey, baseOverride) => {
     const base = resolveBase(baseOverride);
     if (!isAllowedBase(base)) return baseRejected(base);
-    const headers = { AuthKey: apiKey || "" };
+    // 头物化走唯一口径（js/call-headers.js）：apiKey 为 null/undefined（省略通道）
+    // 时请求真的不带 AuthKey —— 探活/清单这类匿名请求连空值头都不发出去。
+    const headers = buildCallHeaders(apiKey, body);
     const init = { method, headers };
     // GET / DELETE 等不带体的请求，body 必须是 undefined：
     // Chromium 的 fetch 遇到 method=GET 且 body 非空会直接抛
     // "Request with GET/HEAD method cannot have body"。
     if (body !== undefined && body !== null) {
-      headers["Content-Type"] = "application/json";
       init.body = typeof body === "string" ? body : JSON.stringify(body);
     }
     const res = await fetch(`${base}${path}`, init);
@@ -295,9 +299,12 @@ contextBridge.exposeInMainWorld("htw", {
         }
       );
 
-      req.on("error", (err) =>
-        resolve({ status: 0, ok: false, data: { errCode: 0, errMsg: err.message } })
-      );
+      req.on("error", () => {
+        // 与 call 出口同一口径（api.js 的网络失败出口）：网络类失败只给**中性中文陈述**，
+        // 不把英文原文（"socket hang up" / "ECONNRESET" 之类）透给用户。
+        // 4007（本地执行不可用）的语义不动 —— 这里不冒用它的码，也不谎称本地/云端哪一侧。
+        resolve({ status: 0, ok: false, data: { errCode: 0, errMsg: "网络连接失败，请检查网络或服务器状态。" } });
+      });
 
       // 分块写入以便回传进度：整块 write 时内核缓冲会一次性吞掉，
       // 界面只能显示"处理中…"。每块写完后回调 { loaded, total }。

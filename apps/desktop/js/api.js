@@ -21,6 +21,10 @@
   const LOCAL_UNAVAILABLE_CODE = 4007;
   const LOCAL_UNAVAILABLE_MESSAGE = "本地执行不可用，请检查网络或服务器状态。";
 
+  // 本地**已选定**但执行失败时的文案前缀。与云端失败分开：用户看到这句就知道
+  // 该查本机实例，而不是云端服务器。
+  const LOCAL_FAILED_PREFIX = "本地执行失败：";
+
   // 云端（服务器）连不上时的中性文案。
   // 🔴 与上面那句是**两种不同的症状**，必须分开：
   // 「本地执行不可用」说的是本机实例连不上，「无法连接服务器」说的是云端服务器连不上。
@@ -75,6 +79,74 @@
     _localBase = n.base;
     return { ok: true, base: n.base };
   }
+  // ---- 本地选路（端点能力清单）----
+  //
+  // 切本地的判据是**全部满足**（任一条不满足 → 该端点走云端）：
+  //  ① 用户总开关开着（默认关）；
+  //  ② 本地实例就绪（探活通过）；
+  //  ③ 已配对**且已解锁**（未解锁时鉴权层会 500，切过去只会拿到一个坏结果）；
+  //  ④ 协议握手兼容；
+  //  ⑤ 本地地址已登记（没地址就没地方切）；
+  //  ⑥ 端点能力清单命中（方法 + 路径模式，不是前缀匹配）。
+  //
+  // 🔴 这是**选路阶段**的判断：本地没就绪就走云端，不是"先发本地、失败再回云端"。
+  //    已选定本地后执行失败**不回落**（重副作用端点双跑比报错更糟）。
+  let _localRouting = {
+    enabled: false, ready: false, paired: false, compatible: false, store: null,
+  };
+
+  // 由 app.js 调用：把用户总开关、实例就绪判据与能力清单喂进来。
+  // 布尔字段一律只认 true：undefined / 0 / "false" 都当"不满足"，
+  // 免得某个上游把字符串 "false" 当成开着（那会把流量切到本地去）。
+  function setLocalRouting(state) {
+    const s = state || {};
+    _localRouting = {
+      enabled: s.enabled === true,
+      ready: s.ready === true,
+      paired: s.paired === true,
+      compatible: s.compatible === true,
+      store: (s.store && typeof s.store.has === "function") ? s.store : null,
+    };
+  }
+
+  // 清单匹配用的路径：**先剥掉查询串与片段**。
+  // 清单里写的是端点路径（"/api/v2/voice/status/{id:int}"），而实际请求常常带查询串
+  // （"?x=1"）—— 不剥掉的话匹配必然失败，白名单永远不命中，
+  // 症状是"本地模式开着却什么都不走本地"（静默不生效，最难查的一种）。
+  function pathForMatch(path) {
+    const s = String(path == null ? "" : path);
+    let end = s.length;
+    const q = s.indexOf("?");
+    if (q >= 0 && q < end) end = q;
+    const h = s.indexOf("#");
+    if (h >= 0 && h < end) end = h;
+    return s.slice(0, end);
+  }
+
+  // 这个端点该不该走本地。
+  function shouldUseLocal(method, path) {
+    if (!_localRouting.enabled) return false;
+    if (!_localRouting.ready) return false;
+    if (!_localRouting.paired) return false;
+    if (!_localRouting.compatible) return false;
+    if (!_localBase) return false;
+    const store = _localRouting.store;
+    if (!store || typeof store.has !== "function") return false;
+    const m = typeof method === "string" ? method : "";
+    if (!m) return false;
+    let hit = false;
+    // 清单判据抛异常时按"不命中"处理：判成命中会把请求发到本地去，
+    // 而本地多半没有这个端点 —— 宁可走云端。
+    try { hit = store.has(m, pathForMatch(path)) === true; } catch (e) { hit = false; }
+    return hit;
+  }
+
+  // 选路结果：命中本地 → 本地基地址；否则 → 云端基地址。
+  // 除 base 外，方法 / 路径 / 体 / 头一律不变（"客户端零端点改动"仍然成立）。
+  function resolveTarget(method, path) {
+    return shouldUseLocal(method, path) ? _localBase : _base;
+  }
+
   function hasKey() { return !!_key; }
   function authHeader() { return { AuthKey: _key }; }
 
@@ -97,36 +169,83 @@
     return /fetch failed|failed to fetch|econnrefused|econnreset|etimedout|ehostunreach|enetunreach|enotfound|epipe|socket hang up|network error|err_connection_refused|err_connection_reset|err_timed_out|err_name_not_resolved|err_internet_disconnected/.test(msg);
   }
 
+  // 失败形状上打"这是本地失败"的标记。
+  //
+  // 🔴 只有**选路命中本地**的请求（routedLocal）才打这个标记：
+  //    - 云端失败带上它，用户就会把云端的问题误当成本机的问题去查；
+  //    - 配对 / 握手这类**显式指定本地地址**的请求不算"选路命中"，
+  //      它们走的是握手契约的既有文案（"本进程不是本地实例，不接受配对。"），
+  //      套上"本地执行失败："前缀反而把握手失败的性质说错了。
+  // 形状：{ ok:false, code, localFailed:true, message:"本地执行失败：…" }。
+  //  - 4007（本地执行不可用）那条出口**已有自己的中性文案**，不叠加前缀，只补标记，
+  //    免得出现"本地执行失败：本地执行不可用…"这种叠词。
+  //  - 原始 code 与 raw 一律透传：文案是给人看的，错误码是给排查看的，两者不能互相顶掉。
+  //  - 幂等：已经打过标记的形状原样返回（不会叠出第二个前缀）。
+  function markLocalFailed(norm) {
+    if (!norm || norm.ok !== false) return norm;
+    if (norm.localFailed) return norm;
+    // 🔴 **展开原形状再覆写标记**：失败形状可能带着 data / raw 之类的扩展字段
+    //    （raw 是排查凭据，data 是上游回带内容），白名单重建会把它们抹掉 —— 都不能丢。
+    if (norm.localUnavailable) {
+      return Object.assign({}, norm, { localUnavailable: true, localFailed: true });
+    }
+    const detail = norm.message ? String(norm.message) : "未知错误";
+    return Object.assign({}, norm, { localFailed: true, message: LOCAL_FAILED_PREFIX + detail });
+  }
+
   async function call(method, path, body, baseOverride) {
     if (!_key) throw keyError();
     // 默认带上当前服务端地址：不传的话 preload 会退回它的内置默认值，
     // 「设置」里改过的地址就失效了。
-    const target = baseOverride || _base;
+    // 🔴 baseOverride 是**显式指定**，优先于选路（配对等流程要打固定地址）；
+    //    不显式指定时由选路决定：命中本地走本地，否则走云端。
+    const routedLocal = shouldUseLocal(method, path);
+    const target = baseOverride || (routedLocal ? _localBase : _base);
+    // 请求是不是打到了本地实例？显式 baseOverride 指向本地地址时同样是"本地"。
+    const isLocalTarget = !!(_localBase && target === _localBase);
+    // 「本地已选定」= 选路命中本地 **且** 请求确实打到了本地地址。
+    const localSelected = routedLocal && isLocalTarget;
     let res;
     try {
       res = await window.htw.call(method, path, body, _key, target);
     } catch (e) {
       // 本地基地址连不上（fetch failed / 连接被拒）与 4007 是同一个症状，
       // 走同一个出口；只限网络类失败，其它异常原样抛出去，不被这里吞掉。
-      if (_localBase && target === _localBase && isNetworkFailure(e))
-        return { ok: false, code: LOCAL_UNAVAILABLE_CODE, localUnavailable: true,
+      //
+      // 🔴 这里**没有**"改投云端重发"的分支，而且**永远不会有**：
+      //    请求已经打到本机实例上执行了，重发一次云端等于把有副作用的动作
+      //    （起任务、扣额度）双跑 —— 那比报错糟糕得多。
+      //    选路阶段的"本地没就绪 → 走云端"才是唯一允许改投的地方。
+      if (isLocalTarget && isNetworkFailure(e)) {
+        const shape = { ok: false, code: LOCAL_UNAVAILABLE_CODE, localUnavailable: true,
           message: LOCAL_UNAVAILABLE_MESSAGE, raw: e };
+        // 选路命中的本地请求额外带 localFailed：界面据此显示"本地执行失败"。
+        if (localSelected) shape.localFailed = true;
+        return shape;
+      }
       // 云端（服务器）连不上：把英文原文（Chromium 的 "fetch failed"）换成一句中性文案。
       // 原来这里原样抛出去，界面上就蹦出一句英文，用户既看不懂也不知道该查什么。
       // 仍然**抛出去**（不改成返回值）：抛与不抛是调用方的既有契约，只换文案。
-      if (target !== _localBase && isNetworkFailure(e)) {
+      if (!isLocalTarget && isNetworkFailure(e)) {
         const err = new Error(CLOUD_UNREACHABLE_MESSAGE);
         err.cause = e;
         throw err;
       }
       throw e;
     }
-    return normalize(res);
+    // 本地已选定但执行失败（HTTP 500 等）→ 打上本地失败标记，
+    // **不回落云端**。云端失败原样透传，不带这个标记。
+    const norm = normalize(res);
+    return localSelected ? markLocalFailed(norm) : norm;
   }
 
   // 单文件且超过该阈值时走分片上传，规避反向代理 / Cloudflare 的 body 大小限制 (413)。
   // 单片 10MB；需确保反向代理 client_max_body_size >= 单片大小（建议 16m），Cloudflare 免费版单请求 100MB 上限内。
   const CHUNK_SIZE = 10 * 1024 * 1024;
+  // 分片上传的实际请求端点：选路输入是**它本身**，不是被拆分的原始业务端点。
+  // 清单只收"能在本机独立执行"的端点 —— 清单没有分片端点 ⇒ 分片上传永不路由本地
+  // （原始端点命中也不能把大文件文件端点带进本机）。
+  const CHUNK_UPLOAD_PATH = "/api/v2/files/chunk";
 
   function genUploadId() {
     const buf = new Uint8Array(16);
@@ -141,7 +260,11 @@
     const uploadId = genUploadId();
     const total = Math.max(1, Math.ceil(full.length / CHUNK_SIZE));
     // 大文件走分片上传；若配置了直连通道（_directBase）则走它，否则走 _base。
-    const uploadBase = _directBase;
+    // 🔴 **直连语义不能被改坏**：分片上传的直连站是"源站直传"优化，与本地无关。
+    //    所以选路的口径是：分片端点（CHUNK_UPLOAD_PATH）命中清单 → 本地基地址；
+    //    **未命中 → 仍然是直连站**（不是云端 _base —— 那会把既有的大文件直传行为改掉）。
+    //    注意输入是分片端点本身，不是被拆分的原始业务端点（path 只是给合并请求带回去用的）。
+    const uploadBase = shouldUseLocal("POST", CHUNK_UPLOAD_PATH) ? _localBase : _directBase;
     let failed = null;
     let next = 0;
     let done = 0;
@@ -168,7 +291,27 @@
             uploadBase
           );
           const norm = normalize(res);
-          if (!norm.ok) { const e = new Error("分片 " + i + " 上传失败: " + (norm.message || norm.code)); e.httpError = true; failed = e; return; }
+          if (!norm.ok) {
+            // 🔴 本地已选定但分片执行失败：收敛到 markLocalFailed 口径
+            //    （localFailed 标记 + "本地执行失败："前缀），不抛裸的分片异常；
+            //    throw 契约不变（调用方仍收到 Error），只是错误体带上了明确的标记。
+            const chunkLocal = !!(_localBase && uploadBase === _localBase);
+            if (chunkLocal) {
+              const marked = markLocalFailed(norm);
+              const e = new Error(marked.message + "（分片 " + i + "）");
+              e.httpError = true;
+              e.localFailed = true;
+              e.code = norm.code;
+              if (marked.localUnavailable === true) e.localUnavailable = true;
+              e.raw = norm.raw;
+              failed = e;
+            } else {
+              const e = new Error("分片 " + i + " 上传失败: " + (norm.message || norm.code));
+              e.httpError = true;
+              failed = e;
+            }
+            return;
+          }
           done++;
           report();
         } catch (e) { failed = e; return; }
@@ -179,7 +322,7 @@
     for (let w = 0; w < concurrency; w++) workers.push(worker());
     await Promise.all(workers);
     if (failed) throw failed;
-    return await call("POST", "/api/v2/files/complete", {
+    const doneRes = await call("POST", "/api/v2/files/complete", {
       fileId: uploadId,
       fileName: file.name,
       total: total,
@@ -187,6 +330,9 @@
       fileField: fileField || "file",
       fields: fields || {},
     }, uploadBase);
+    // 合并请求的路径（/api/v2/files/complete）不一定在清单里，所以"选路命中"
+    // 要按**原始路径**算：本次上传被路由到本地，合并失败同样算本地失败。
+    return (_localBase && uploadBase === _localBase) ? markLocalFailed(doneRes) : doneRes;
   }
 
   // 多文件走整包上传时的体积上限（Cloudflare 免费版单请求 100MB）：
@@ -218,8 +364,15 @@
         );
       }
     }
-    const res = await window.htw.upload(method, path, filePaths, fields, authHeader(), onProgress, fileField, _base);
-    return normalize(res);
+    // 整包上传的 base 由选路决定（命中本地 → 本地，否则 → 云端）。
+    // 除 base 外，方法 / 路径 / 文件 / 字段 / 头一律不变。
+    const routedLocal = shouldUseLocal(method, path);
+    const target = routedLocal ? _localBase : _base;
+    const localSelected = routedLocal && !!(_localBase && target === _localBase);
+    const res = await window.htw.upload(method, path, filePaths, fields, authHeader(), onProgress, fileField, target);
+    // 与 call 同一口径：选路命中本地就在失败形状上标出来，**不回落云端**。
+    const norm = normalize(res);
+    return localSelected ? markLocalFailed(norm) : norm;
   }
 
   // 后端 MVC 走 AddNewtonsoftJson + DefaultContractResolver：POCO / DTO 一律 PascalCase
@@ -314,16 +467,38 @@
 
   async function download(method, path, baseOverride) {
     if (!_key) throw keyError();
-    const res = await window.htw.download(method, path, _key, baseOverride || _base);
-    if (res && !res.ok && res.error) throw new Error(res.error);
+    // baseOverride 优先（显式指定）；否则由选路决定。
+    const routedLocal = !baseOverride && shouldUseLocal(method, path);
+    const target = baseOverride || (routedLocal ? _localBase : _base);
+    const localSelected = routedLocal && !!(_localBase && target === _localBase);
+    const res = await window.htw.download(method, path, _key, target);
+    if (res && !res.ok && res.error) {
+      // 失败仍按既有契约**抛出**；本地已选定的失败把标记挂在 Error 对象上
+      // （throw 契约不变），界面据此把"本地失败"与云端失败分开显示。
+      const e = new Error(res.error);
+      if (localSelected) {
+        e.localFailed = true;
+        if (isNetworkFailure(e)) e.localUnavailable = true;
+      }
+      throw e;
+    }
     return res;
   }
 
   // SSE 订阅转发。streamId 用 "域:任务标识" 作键，主进程据此去重连接。
-  function subscribeTask(domain, taskId) {
+  //
+  // 订阅的路径由主进程按 base + "/api/v2/stream/{domain}/{taskId}" 发起，
+  // 所以选路必须用**同一个路径**去比清单 —— 否则命中判据与实际请求对不上。
+  function streamPath(domain, taskId) {
+    return "/api/v2/stream/" + encodeURIComponent(domain) + "/" + encodeURIComponent(taskId);
+  }
+
+  // baseOverride：显式指定时优先于选路（与 call / download 同一口径）。
+  function subscribeTask(domain, taskId, baseOverride) {
     const streamId = domain + ":" + taskId;
     if (!window.htw || !window.htw.subscribeTask) return null;
-    window.htw.subscribeTask(streamId, domain, taskId, _key, _base);
+    const target = baseOverride || resolveTarget("GET", streamPath(domain, taskId));
+    window.htw.subscribeTask(streamId, domain, taskId, _key, target);
     return streamId;
   }
   function unsubscribeTask(streamId) {
@@ -334,12 +509,17 @@
     opts = opts || {};
     const interval = opts.interval || 2000;
     const timeout = opts.timeout || 600000;
-    const fetcher = opts.fetcher || ((id) => call("GET", "/api/v2/task/" + id));
+    // 轮询打向哪台机器由**同一套选路**决定（任务态在哪台机器上发起，就在哪台轮询）。
+    // base 传给 fetcher：自定义 fetcher 可以自己决定用哪个 base，
+    // 默认 fetcher 直接把它交给 call（显式 base 优先于再次选路，结果一致）。
+    const path = "/api/v2/task/" + taskId;
+    const base = resolveTarget("GET", path);
+    const fetcher = opts.fetcher || ((id, b) => call("GET", "/api/v2/task/" + id, undefined, b));
     const start = Date.now();
     while (true) {
       let r;
       try {
-        r = await fetcher(taskId);
+        r = await fetcher(taskId, base);
       } catch (e) {
         return { ok: false, code: "NETWORK", message: e && e.message ? e.message : String(e), raw: e };
       }
@@ -357,14 +537,21 @@
   return {
     setKey: setKey, setBase: setBase, setDirectBase: setDirectBase,
     setLocalBase: setLocalBase,
+    // 本地选路：喂状态（app.js）+ 查结果（可单测的纯函数）。
+    setLocalRouting: setLocalRouting,
+    resolveTarget: resolveTarget,
+    shouldUseLocal: shouldUseLocal,
     hasKey: hasKey, authHeader: authHeader,
     call: call, get: get, post: post, upload: upload, download: download,
     normalize: normalize, pollTask: pollTask, onQuotaExceeded: onQuotaExceeded,
+    // 失败标记（可单测：界面层 / 汇总层也用它判别本地失败）。
+    markLocalFailed: markLocalFailed,
     LOCAL_UNAVAILABLE_CODE: LOCAL_UNAVAILABLE_CODE,
     LOCAL_UNAVAILABLE_MESSAGE: LOCAL_UNAVAILABLE_MESSAGE,
     subscribeTask: subscribeTask, unsubscribeTask: unsubscribeTask,
     get base() { return _base; }, get directBase() { return _directBase; },
     get localBase() { return _localBase; },
+    get localRouting() { return _localRouting; },
   };
 });
 
