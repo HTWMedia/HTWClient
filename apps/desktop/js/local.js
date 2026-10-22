@@ -21,6 +21,16 @@
   const SERVER_ERROR_TEXT = "本地实例返回错误，请检查本地实例状态。";
   const INVALID_TEXT = "本地实例响应不可识别。";
 
+  // ---- 协议版本握手 ----
+  //
+  // 客户端与本地实例之间的**机器判据**：实例在 health 响应里报自己的协议版本，
+  // 客户端钉住自己支持的值，对不上就不配对（配对会把账号级材料发给实例）。
+  //
+  // 🔴 值只认**整数**：响应里那个给人看的 version 字段不是判据
+  // （桌面端与实例没有公共版本刻度：一边是 0.5.0，一边是 2026.10.x）。
+  // 协议版本随协议演进递增，与信息版本号无关。
+  const SUPPORTED_PROTOCOL_VERSION = 1;
+
   // ---- 本地实例地址：归一化与准入 ----
   //
   // 🔴 三条约束都是硬的，配对请求会把 **AuthKey + 账号级 KEK 材料**发往这个地址：
@@ -112,10 +122,12 @@
     return undefined;
   }
 
-  // 探活本地实例。返回 { ok, state, message }：
+  // 探活本地实例。返回 { ok, state, message, protocolVersion }：
   // - ok:true  → state 为三态之一（notPaired / pairedNotUnlocked / ready），message 为对应文案；
+  //               protocolVersion 为实例报的协议版本（整数）；读不到就是 null。
   // - ok:false → state 为 server（该地址不是本地实例）/ unreachable（连不上）/
   //             serverError（实例回了错误）/ invalid（响应不可识别）。
+  //             失败时**不带** protocolVersion：没有实例可谈，谈版本没有意义。
   async function probeHealth(base, transport) {
     const call = transport && transport.call;
     let res;
@@ -148,7 +160,15 @@
     if (typeof state !== "string" || !Object.prototype.hasOwnProperty.call(STATE_TEXT, state)) {
       return { ok: false, state: "invalid", message: INVALID_TEXT };
     }
-    return { ok: true, state: state, message: STATE_TEXT[state] };
+    // 协议版本：只认**数字**。
+    // 读不到（老实例没有这个字段）或类型不对，一律当"不知道"（null）——
+    // 🔴 **不猜、不当 0**：0 是一个具体的版本号，冒充它等于编造了一个版本。
+    // 老实例没有这个字段时客户端不做握手（见 app.js 的兼容分支）。
+    const rawVersion = readFirst(inner, ["protocolVersion", "ProtocolVersion"]);
+    const protocolVersion = typeof rawVersion === "number" && Number.isFinite(rawVersion)
+      ? rawVersion
+      : null;
+    return { ok: true, state: state, message: STATE_TEXT[state], protocolVersion: protocolVersion };
   }
 
   // ---- 一键配对协议 ----
@@ -219,6 +239,8 @@
     validateServerUrl: validateServerUrl,
     normalizeLocalBase: normalizeLocalBase,
     pairFlow: pairFlow,
+    // 客户端钉住自己支持的协议版本（握手判据，见上面的注释）。
+    SUPPORTED_PROTOCOL_VERSION: SUPPORTED_PROTOCOL_VERSION,
     STATE_TEXT: STATE_TEXT,
     MODE_TEXT: MODE_TEXT,
     LOCAL_BASE_TEXTS: LOCAL_BASE_TEXTS,

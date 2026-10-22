@@ -104,6 +104,17 @@ const NOT_PAIRED_HEALTH = {
   data: { ok: true, mode: "local", state: "notPaired", credentialsUnlocked: false, version: "1.0.0" },
 };
 
+// 带协议版本的 health 夹具（协议版本握手用）。
+// protocolVersion 是客户端与实例之间的机器判据；state 用 notPaired ——
+// 这样"没有做版本判定"的实现会把配对按钮放开，下面的断言才真的能变红。
+function healthWithVersion(version) {
+  return {
+    status: 200,
+    ok: true,
+    data: { ok: true, mode: "local", state: "notPaired", credentialsUnlocked: false, version: "1.0.0", protocolVersion: version },
+  };
+}
+
 // 启动整个 app（真实 js/app.js），返回 { els, calls, saved }。
 // htw.call 按 path 分派，测试要改行为时传 route 覆盖。
 async function bootApp(opts) {
@@ -221,9 +232,9 @@ test("本地模式块: 探活 ready → 状态行显示本地模式就绪（已�
     assert.strictEqual(health.base, "http://127.0.0.1:51111");
     assert.strictEqual(health.apiKey, undefined, "探活不应把 AuthKey 递给本机进程");
 
-    // 配置三个键一起写，别把既有键丢掉。
+    // 配置的键一起写，别把既有键丢掉（可执行文件路径是第 4 个键）。
     const cfg = app.saved[app.saved.length - 1];
-    assert.deepStrictEqual(Object.keys(cfg).sort(), ["apiBase", "apiKey", "localBase"]);
+    assert.deepStrictEqual(Object.keys(cfg).sort(), ["apiBase", "apiKey", "localBase", "localBinary"]);
     assert.strictEqual(cfg.localBase, "http://127.0.0.1:51111");
     assert.strictEqual(cfg.apiBase, "https://htwmedia.dpdns.org");
     assert.strictEqual(cfg.apiKey, "test-key");
@@ -914,6 +925,110 @@ test("本地实例: 实例在跑时点按钮 → 调停止，不调启动", asyn
 
     assert.strictEqual(app.localCalls.stop, 1, "运行中点按钮应调停止");
     assert.deepStrictEqual(app.localCalls.start, [], "运行中点按钮不该再调启动");
+  } finally {
+    app.restore();
+  }
+});
+
+// ---- 协议版本握手 ----
+//
+// 口径：客户端钉住一个支持的协议版本；实例回的数字对不上 → 拒绝配对并说清。
+// 老实例没有这个字段 → **不阻断**（按兼容处理，见报告）。
+
+// 不支持的版本 → 状态行说"不兼容"，配对按钮保持禁用。
+// 什么使其变红：不比版本（或比错了）→ 配对按钮会被放开、状态行显示的是实例的三态。
+test("本地模式块: 实例协议版本不支持 → 提示不兼容，配对按钮保持禁用", async () => {
+  const app = await bootApp({ route: () => healthWithVersion(2) });
+  try {
+    await app.els["local-apply"].fire("click");
+
+    assert.strictEqual(app.els["local-status"].textContent, "本地实例与客户端不兼容，请更新客户端或本地实例");
+    assert.strictEqual(app.els["local-pair"].disabled, true, "版本不兼容时配对按钮应保持禁用");
+
+    // 流程自身也要拦住：按钮禁用只是界面层的兜底，点了也不该发请求。
+    const before = app.calls.length;
+    await app.els["local-pair"].fire("click");
+    const sent = app.calls.slice(before).filter((c) => c.path === "/api/v2/local/enroll" || c.path === "/api/local/pair");
+    assert.strictEqual(sent.length, 0, "版本不兼容时不该发出登记或配对请求");
+    assert.strictEqual(app.els["local-pair-result"].textContent, "本地实例与客户端不兼容，请更新客户端或本地实例");
+  } finally {
+    app.restore();
+  }
+});
+
+// 支持的版本 → 行为与现在完全一致（状态行走实例的三态，配对按钮按状态开）。
+// 什么使其变红：任何版本都当成不兼容（或者都当成兼容）→ 状态行/按钮状态不对。
+test("本地模式块: 实例协议版本一致 → 正常，配对按钮按状态启用", async () => {
+  const app = await bootApp({ route: () => healthWithVersion(1) });
+  try {
+    await app.els["local-apply"].fire("click");
+
+    assert.strictEqual(app.els["local-status"].textContent, "本地实例未配对");
+    assert.strictEqual(app.els["local-pair"].disabled, false, "版本一致时首配对按钮应可用");
+  } finally {
+    app.restore();
+  }
+});
+
+// 老实例没有 protocolVersion 字段 → **不阻断**（按兼容处理；老实例不做握手）。
+// 什么使其变红：把"读不到"当成不兼容（于是老实例全都用不了本地模式）。
+test("本地模式块: 老实例没有 protocolVersion → 不阻断（按兼容处理）", async () => {
+  const app = await bootApp({ route: () => NOT_PAIRED_HEALTH }); // 夹具里没有 protocolVersion
+  try {
+    await app.els["local-apply"].fire("click");
+
+    assert.strictEqual(app.els["local-status"].textContent, "本地实例未配对");
+    assert.strictEqual(app.els["local-pair"].disabled, false, "老实例不该被拦住");
+  } finally {
+    app.restore();
+  }
+});
+
+// ---- 可执行文件路径落盘 ----
+//
+// 口径：路径是用户显式填的（不是秘密，但每次启动重输不可接受），
+// 所以要落盘、并在下次启动时回填输入框。
+
+// 什么使其变红：启动时不回填（用户每次都要重输）/ 落盘时丢了这个键。
+test("本地模式块: 可执行文件路径落盘 → 下次启动回填输入框", async () => {
+  const app = await bootApp({
+    config: {
+      apiBase: "https://htwmedia.dpdns.org",
+      apiKey: "test-key",
+      localBase: "http://127.0.0.1:51111",
+      localBinary: "C:\\tools\\local-instance.exe",
+    },
+  });
+  try {
+    // 启动时回填：上次用户填的路径还在输入框里。
+    assert.strictEqual(app.els["local-binary"].value, "C:\\tools\\local-instance.exe");
+
+    // 用户改了路径并保存 → 落盘（连同既有三键一起写）。
+    app.els["local-binary"].value = "D:\\apps\\local-instance.exe";
+    await app.els["local-apply"].fire("click");
+
+    const cfg = app.saved[app.saved.length - 1];
+    assert.strictEqual(cfg.localBinary, "D:\\apps\\local-instance.exe");
+    // 既有三键不许被这次写入弄丢。
+    assert.strictEqual(cfg.apiBase, "https://htwmedia.dpdns.org");
+    assert.strictEqual(cfg.apiKey, "test-key");
+    assert.strictEqual(cfg.localBase, "http://127.0.0.1:51111");
+  } finally {
+    app.restore();
+  }
+});
+
+// 只接受用户**显式输入**的路径：输入框里没动过就不该凭空多出一个路径，
+// 而且路径永远是本机的文件路径，不接受任何远端下发的值。
+// 什么使其变红：路径不是从输入框取（或者从别处取）→ 落盘的值不对。
+test("本地模式块: 可执行文件路径只认输入框里的用户输入", async () => {
+  const app = await bootApp();
+  try {
+    app.els["local-binary"].value = "C:\\tools\\local-instance.exe";
+    await app.els["local-apply"].fire("click");
+
+    const cfg = app.saved[app.saved.length - 1];
+    assert.strictEqual(cfg.localBinary, "C:\\tools\\local-instance.exe");
   } finally {
     app.restore();
   }

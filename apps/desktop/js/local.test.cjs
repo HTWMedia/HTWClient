@@ -6,21 +6,21 @@ test("probeHealth: ready", async () => {
   const r = await Local.probeHealth("http://127.0.0.1:51111", {
     call: async () => ({ status: 200, ok: true, data: { ok: true, mode: "local", state: "ready", credentialsUnlocked: true, version: "9.9.9-abc" } }),
   });
-  assert.deepStrictEqual(r, { ok: true, state: "ready", message: "本地模式就绪" });
+  assert.deepStrictEqual(r, { ok: true, state: "ready", message: "本地模式就绪", protocolVersion: null });
 });
 
 test("probeHealth: notPaired", async () => {
   const r = await Local.probeHealth("http://127.0.0.1:51111", {
     call: async () => ({ status: 200, ok: true, data: { ok: true, mode: "local", state: "notPaired", credentialsUnlocked: false } }),
   });
-  assert.deepStrictEqual(r, { ok: true, state: "notPaired", message: "本地实例未配对" });
+  assert.deepStrictEqual(r, { ok: true, state: "notPaired", message: "本地实例未配对", protocolVersion: null });
 });
 
 test("probeHealth: pairedNotUnlocked", async () => {
   const r = await Local.probeHealth("http://127.0.0.1:51111", {
     call: async () => ({ status: 200, ok: true, data: { ok: true, mode: "local", state: "pairedNotUnlocked", credentialsUnlocked: false } }),
   });
-  assert.deepStrictEqual(r, { ok: true, state: "pairedNotUnlocked", message: "已配对，待解锁（本地实例重启后出现）" });
+  assert.deepStrictEqual(r, { ok: true, state: "pairedNotUnlocked", message: "已配对，待解锁（本地实例重启后出现）", protocolVersion: null });
 });
 
 test("probeHealth: v2 信封包裹（PascalCase Data + 内层 state）", async () => {
@@ -31,7 +31,7 @@ test("probeHealth: v2 信封包裹（PascalCase Data + 内层 state）", async (
       data: { Ok: true, Data: { ok: true, mode: "local", state: "ready", credentialsUnlocked: true, version: "1.2.3" } },
     }),
   });
-  assert.deepStrictEqual(r, { ok: true, state: "ready", message: "本地模式就绪" });
+  assert.deepStrictEqual(r, { ok: true, state: "ready", message: "本地模式就绪", protocolVersion: null });
 });
 
 test("probeHealth: mode:server → 该地址不是本地实例", async () => {
@@ -83,6 +83,70 @@ test("probeHealth: state 非字符串 → invalid", async () => {
     call: async () => ({ status: 200, ok: true, data: { ok: true, mode: "local", state: 3 } }),
   });
   assert.deepStrictEqual(r, { ok: false, state: "invalid", message: "本地实例响应不可识别。" });
+});
+
+// ---- 协议版本握手 ----
+//
+// protocolVersion 是客户端与本地实例之间的**机器判据**
+// （响应里那个给人看的 version 字段不是判据 —— 桌面端与实例没有公共版本刻度）。
+// 读不到时必须是 null：**不猜、不当 0**（0 会被当成"有个很老的协议"，那是断言）。
+
+// 什么使其变红：probeHealth 不带出 protocolVersion（或把它当 0 / 当 1 填默认值）。
+test("probeHealth: 响应带 protocolVersion → 返回该版本号", async () => {
+  const r = await Local.probeHealth("http://127.0.0.1:51111", {
+    call: async () => ({
+      status: 200,
+      ok: true,
+      data: { ok: true, mode: "local", state: "ready", credentialsUnlocked: true, protocolVersion: 1 },
+    }),
+  });
+  assert.strictEqual(r.protocolVersion, 1);
+});
+
+// 什么使其变红：缺字段时返回 undefined / 0 / 1（等于替老实例编了一个版本）。
+test("probeHealth: 响应不带 protocolVersion → 返回 null（不是 0、不是 1）", async () => {
+  const r = await Local.probeHealth("http://127.0.0.1:51111", {
+    call: async () => ({
+      status: 200,
+      ok: true,
+      data: { ok: true, mode: "local", state: "ready", credentialsUnlocked: true },
+    }),
+  });
+  assert.strictEqual(r.protocolVersion, null);
+  assert.notStrictEqual(r.protocolVersion, 0);
+  assert.notStrictEqual(r.protocolVersion, 1);
+});
+
+// 大小写双兼容：服务器既可能回 protocolVersion，也可能回 ProtocolVersion。
+// 什么使其变红：只读小写（PascalCase 字段读不到 → 版本被当成 null，握手形同虚设）。
+test("probeHealth: protocolVersion 大小写双兼容（ProtocolVersion 也认）", async () => {
+  const r = await Local.probeHealth("http://127.0.0.1:51111", {
+    call: async () => ({
+      status: 200,
+      ok: true,
+      data: { Ok: true, Data: { ok: true, mode: "local", state: "ready", credentialsUnlocked: true, ProtocolVersion: 1 } },
+    }),
+  });
+  assert.strictEqual(r.protocolVersion, 1);
+});
+
+// 类型不对（字符串 / 布尔）一律当"不知道"，不当版本号用 —— 更不能当 0。
+// 什么使其变红：非数字被原样透出（客户端拿字符串去比大小，等于没比）。
+test("probeHealth: protocolVersion 不是数字 → 当作 null（不猜）", async () => {
+  const r = await Local.probeHealth("http://127.0.0.1:51111", {
+    call: async () => ({
+      status: 200,
+      ok: true,
+      data: { ok: true, mode: "local", state: "ready", credentialsUnlocked: true, protocolVersion: "1" },
+    }),
+  });
+  assert.strictEqual(r.protocolVersion, null);
+});
+
+// 客户端钉住自己支持的协议版本（与服务器 LocalProtocol.Version 对齐 = 1）。
+// 什么使其变红：常量缺失 / 值不是 1（桌面端与实例就没有公共刻度了）。
+test("SUPPORTED_PROTOCOL_VERSION: 客户端钉住支持的协议版本", () => {
+  assert.strictEqual(Local.SUPPORTED_PROTOCOL_VERSION, 1);
 });
 
 test("STATE_TEXT / MODE_TEXT 机器契约映射", () => {

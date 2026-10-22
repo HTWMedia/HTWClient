@@ -26,6 +26,8 @@
   const LOCAL_BASE_CHANGED_TEXT = "地址已修改，请重新探活";
   // 本地模式模块没就绪时的统一提示（闸门、状态行、探活、配对共用同一句）。
   const LOCAL_MODULE_MISSING_TEXT = "本地模式组件未就绪，请重启应用后再试。";
+  // 协议版本对不上时的提示（客户端与实例之间没有公共版本刻度，只能让用户更新其中一边）。
+  const LOCAL_PROTOCOL_MISMATCH_TEXT = "本地实例与客户端不兼容，请更新客户端或本地实例";
 
   // ---- 本地实例（用户自备可执行文件）的状态文案 ----
   //
@@ -62,8 +64,14 @@
   // 只有「保存并探活」按钮能改它 —— 输入框里还没保存过的值不算数，
   // 否则每敲一个 AuthKey 字符都会把半截地址写进配置。
   let userLocalBase = "";
+  // 用户保存过的本地实例可执行文件路径（点过「保存并探活」或「启动本地实例」就落盘）。
+  // 路径不是秘密（只是本机上的一个文件路径），但每次启动重输一遍不可接受 —— 所以要落盘。
+  // 🔴 只认**用户显式输入**的路径（输入框里的值）：不接受任何远端下发的路径。
+  let userLocalBinary = "";
   // 最近一次探活得到的三态（未探活 / 探活失败时为 null）。
   let confirmedLocalState = null;
+  // 最近一次探活是不是撞上了协议版本不匹配（是的话，配对一律被拒）。
+  let localProtocolMismatch = false;
   // 监督器（主进程）最近一次上报的状态，以及它**发现**的地址。
   // supervisorBase 是实例真正的地址（端口由系统分配，桌面端只能从子进程上报里拿），
   // 所以探活与配对都优先用它；没有它时才用用户保存过的地址。
@@ -100,13 +108,32 @@
   function setLocalPairResult(text) { const el = getLocalPairResultEl(); if (el) el.textContent = text; }
   function setLocalPairEnabled(on) { const b = getLocalPairBtn(); if (b) b.disabled = !on; }
 
-  // 配置的三个键必须一起写：主进程的 saveConfig 只认 apiBase/apiKey/localBase，
-  // 少写一个键等于把另一个键清空（例如保存 AuthKey 时把本地地址抹掉）。
+  // 配置的四个键必须一起写：主进程的 saveConfig 只认
+  // apiBase/apiKey/localBase/localBinary，少写一个键等于把另一个键清空
+  // （例如保存 AuthKey 时把本地地址抹掉）。
+  // localBinary 走缓存（userLocalBinary），不直接读输入框：
+  // 输入框里还没确认过的值不该跟着每次按键落盘。
   function saveConfigAll(localBase) {
     if (!window.htw || !window.htw.saveConfig) return;
     const base = getBaseInput() ? getBaseInput().value.trim() : "";
     const key = getKeyInput() ? getKeyInput().value : "";
-    window.htw.saveConfig({ apiBase: base, apiKey: key, localBase: localBase == null ? "" : localBase });
+    window.htw.saveConfig({
+      apiBase: base,
+      apiKey: key,
+      localBase: localBase == null ? "" : localBase,
+      localBinary: userLocalBinary,
+    });
+  }
+
+  // 落盘用户显式填写的可执行文件路径。
+  // 值只从输入框来（用户显式输入），**不接受任何远端下发的路径**。
+  // 值没变就不写（省一次磁盘写入，也避免把空值写回去）。
+  function confirmLocalBinary(value) {
+    const p = String(value == null ? "" : value).trim();
+    if (p === userLocalBinary) return p;
+    userLocalBinary = p;
+    saveConfigAll(userLocalBase);
+    return p;
   }
 
   // AuthKey 只存主进程的 userData 文件（明文，README 已声明）。
@@ -222,8 +249,9 @@
   // 状态文案与判定口径见 LOCAL_INSTANCE_TEXTS 上面的注释。
 
   // 用户自备的可执行文件路径。
-  // **不落盘**：主进程的配置只有三个键（apiBase/apiKey/localBase），
-  // 多写的键会被 saveConfig 丢掉 —— 每次启动都要用户再填一次。
+  // **要落盘**：主进程的配置有第 4 个键（localBinary），
+  // 每次启动都要用户重输一遍是不可接受的 —— 落盘后在启动时回填输入框。
+  // 落盘的值只来自用户显式输入（见 confirmLocalBinary）。
   function localBinaryValue() {
     const input = getLocalBinaryInput();
     return input ? String(input.value || "").trim() : "";
@@ -327,7 +355,10 @@
   // 启停按钮：实例没在跑 → 启动（**必须带上可执行文件路径**）；在跑 → 停止。
   async function toggleLocal() {
     if (localInstanceAlive()) return await callSupervisor("localStop");
-    return await callSupervisor("localStart", localBinaryValue());
+    const p = localBinaryValue();
+    // 点「启动」就是确认这个路径（用户显式输入的）：落盘，下次启动不用重输。
+    confirmLocalBinary(p);
+    return await callSupervisor("localStart", p);
   }
 
   // 把完整 URL 拆成 path（preload 的 call 是 base + path 拼出来的，
@@ -378,10 +409,32 @@
     if (!r || r.ok !== true) {
       // 探活失败 = 未就绪：配对必须被状态自检拦下。
       confirmedLocalState = null;
+      localProtocolMismatch = false;
       setLocalStatus((r && r.message) ? r.message : "无法连接本地实例，请先启动或检查地址。");
       setLocalPairEnabled(false);
       return r;
     }
+    // ---- 协议版本握手 ----
+    //
+    // 实例报的协议版本与客户端支持的对不上 → **拒绝配对**并说清：
+    // 配对会把 AuthKey + 账号级 KEK 材料发给实例，版本对不上时不该发。
+    //
+    // 🔴 版本读不到（null）时**不阻断**：老实例没有这个字段，做不了握手 ——
+    //    按兼容处理（老实例不做版本握手，见任务报告）。绝不能把 null 当成 0
+    //    去比，那样会把所有老实例都说成"不兼容"。
+    const supported = (Local && typeof Local.SUPPORTED_PROTOCOL_VERSION === "number")
+      ? Local.SUPPORTED_PROTOCOL_VERSION
+      : null;
+    const version = r.protocolVersion;
+    if (supported !== null && typeof version === "number" && version !== supported) {
+      confirmedLocalState = null;
+      localProtocolMismatch = true;
+      setLocalStatus(LOCAL_PROTOCOL_MISMATCH_TEXT);
+      setLocalPairEnabled(false);
+      setLocalPairResult(LOCAL_PROTOCOL_MISMATCH_TEXT);
+      return { ok: false, state: "protocolMismatch", message: LOCAL_PROTOCOL_MISMATCH_TEXT, protocolVersion: version };
+    }
+    localProtocolMismatch = false;
     // 状态文案取机器契约的映射表（不在这里另造一套说法）。
     const text = (Local.STATE_TEXT && Local.STATE_TEXT[r.state]) || r.message || "";
     confirmedLocalState = r.state;
@@ -404,6 +457,7 @@
     const norm = normalizeLocalBase(v);
     if (norm.ok && norm.base === userLocalBase) return;
     confirmedLocalState = null;
+    localProtocolMismatch = false;
     setLocalStatus(LOCAL_BASE_CHANGED_TEXT);
     setLocalPairEnabled(false);
     setLocalPairResult("");
@@ -413,10 +467,13 @@
   // 这里是唯一能把本地地址写进配置的地方：用户保存过的地址进缓存，缓存才落盘。
   async function applyLocal() {
     const api = window.HTWApi;
+    // 可执行文件路径：用户显式填的就落盘（与地址校验无关 —— 路径与地址是两件事）。
+    confirmLocalBinary(localBinaryValue());
     const v = localBaseValue();
     if (!v) {
       userLocalBase = "";
       confirmedLocalState = null;
+      localProtocolMismatch = false;
       if (api && api.setLocalBase) api.setLocalBase("");
       saveConfigAll("");
       setLocalStatus(LOCAL_NOT_CONFIGURED);
@@ -439,6 +496,8 @@
     const base = norm.base;
     // 换了地址，之前的探活结果作废（不能拿旧地址的就绪状态去配对）。
     confirmedLocalState = null;
+    // 换了地址，之前那次探活的版本判定也作废（新地址还没探过）。
+    localProtocolMismatch = false;
     // 登记 = 进 preload 白名单。登记失败（地址格式非法）不落盘、不生效。
     const res = api && api.setLocalBase ? api.setLocalBase(base) : null;
     if (res && res.ok === false) {
@@ -493,6 +552,12 @@
       setLocalPairEnabled(false);
       setLocalPairResult(LOCAL_BASE_CHANGED_TEXT);
       return { ok: false, message: LOCAL_BASE_CHANGED_TEXT };
+    }
+    // 协议版本不匹配 → 一律不配对（按钮禁用只是界面层的兜底，流程本身也要拦一道）。
+    if (localProtocolMismatch) {
+      setLocalStatus(LOCAL_PROTOCOL_MISMATCH_TEXT);
+      setLocalPairResult(LOCAL_PROTOCOL_MISMATCH_TEXT);
+      return { ok: false, message: LOCAL_PROTOCOL_MISMATCH_TEXT };
     }
     // 状态自检：按钮禁用只是界面层的兜底，流程本身也要拦一道 ——
     // 没探活过（或探活失败）就配对，配对的其实是上一个地址。
@@ -602,6 +667,14 @@
     clearLocal();
     if (saved.apiBase) getBaseInput().value = saved.apiBase;
     if (saved.apiKey) getKeyInput().value = saved.apiKey;
+    // 可执行文件路径：启动时回填输入框（上次用户显式填的那一份）。
+    // 🔴 只接受**字符串**且只接受用户自己填过的值 —— 配置里的路径不是远端下发的，
+    // 但类型不对（对象/数组）说明配置被改坏了，宁可留空也不填。
+    if (typeof saved.localBinary === "string" && saved.localBinary.trim()) {
+      userLocalBinary = saved.localBinary.trim();
+      const bi = getLocalBinaryInput();
+      if (bi) bi.value = userLocalBinary;
+    }
     // 本地地址要在 applyAuth 之前填好：applyAuth 会把配置整份写回，
     // 顺序反了会把刚读出来的本地地址又清空。
     if (saved.localBase) {

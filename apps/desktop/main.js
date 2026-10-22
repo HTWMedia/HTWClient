@@ -53,13 +53,25 @@ function readJsonFile(p, fallback) {
   return fallback;
 }
 
+// 配置的四个键：apiBase/apiKey/localBase + localBinary（本地实例可执行文件路径）。
+// localBinary 不是秘密（只是本机上的一个文件路径），但每次启动重输一遍不可接受 —— 所以要落盘。
 ipcMain.handle("htw:loadConfig", () => {
   const j = readJsonFile(configPath(), null) || {};
-  return { apiBase: j.apiBase || "", apiKey: j.apiKey || "", localBase: j.localBase || "" };
+  return {
+    apiBase: j.apiBase || "",
+    apiKey: j.apiKey || "",
+    localBase: j.localBase || "",
+    localBinary: typeof j.localBinary === "string" ? j.localBinary : "",
+  };
 });
 ipcMain.handle("htw:saveConfig", (_e, cfg) => {
   try {
-    fs.writeFileSync(configPath(), JSON.stringify({ apiBase: (cfg && cfg.apiBase) || "", apiKey: (cfg && cfg.apiKey) || "", localBase: (cfg && cfg.localBase) || "" }), "utf-8");
+    fs.writeFileSync(configPath(), JSON.stringify({
+      apiBase: (cfg && cfg.apiBase) || "",
+      apiKey: (cfg && cfg.apiKey) || "",
+      localBase: (cfg && cfg.localBase) || "",
+      localBinary: typeof (cfg && cfg.localBinary) === "string" ? cfg.localBinary : "",
+    }), "utf-8");
     return true;
   } catch (e) { return false; }
 });

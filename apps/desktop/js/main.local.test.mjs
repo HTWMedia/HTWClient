@@ -296,6 +296,19 @@ test("退出时先停子进程，再断长连接", () => {
   assert.ok(di < si, "必须先停本地实例子进程，再断长连接");
 });
 
+// 配置的读写要包含第 4 键 localBinary（可执行文件路径要落盘），
+// 而既有三键 apiBase/apiKey/localBase 一个都不能少 —— 少一个就等于把另一个清空。
+// 什么使其变红：load/save 漏掉 localBinary（路径每次启动都要重输），
+// 或漏掉既有三键之一（配置被写残）。
+test("配置读写包含 localBinary，既有三键一字不动", () => {
+  const load = sliceCall(mainJs, 'ipcMain.handle("htw:loadConfig"');
+  const save = sliceCall(mainJs, 'ipcMain.handle("htw:saveConfig"');
+  for (const key of ["apiBase", "apiKey", "localBase", "localBinary"]) {
+    assert.ok(load.text.includes(key), `htw:loadConfig 必须读出 ${key}`);
+    assert.ok(save.text.includes(key), `htw:saveConfig 必须写入 ${key}`);
+  }
+});
+
 test("preload 暴露了本地实例的四个入口", () => {
   for (const name of ["localStart", "localStop", "localStatus", "onLocalEvent"]) {
     assert.ok(
