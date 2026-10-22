@@ -8,13 +8,15 @@
  *
  * 职责边界：健康三态与配对**不在这里**（归渲染层既有的 probeHealth / pairFlow），
  * 这里只回答两个问题：**进程活着吗**、**它报的地址是哪个**。
+ *
+ * 🔴 **仅 CommonJS（主进程专用）**：本模块要 require("child_process")，
+ * 渲染层加载它会直接抛 —— 所以**不做** UMD / 浏览器分支。
+ * （曾经有过一个渲染层全局分支，那是死代码：这个文件从未进 index.html。）
  */
 
-(function (root, factory) {
-  const api = factory();
-  if (typeof module !== "undefined" && module.exports) module.exports = api;
-  if (typeof window !== "undefined") window.HTWLocalSupervisor = api;
-})(typeof self !== "undefined" ? self : this, function () {
+(function (factory) {
+  module.exports = factory();
+})(function () {
   const childProcess = require("child_process");
 
   // 状态机取值是机器契约（主进程 → IPC → 渲染层按字面量取用），不要改写。
@@ -26,6 +28,9 @@
     failed: "failed",     // 起不来 / 没找到地址 / 崩溃超限
     stopping: "stopping", // 正在停止
   });
+  // 🔴 failed **不代表实例已停**：failed 只说明"这次没成功起来"，
+  // 进程可能还在跑（例：实例正跑着时收到一次空路径的 start()，状态会翻成 failed）。
+  // 所以失败文案只说"启动失败"，不说"已停止"；界面也不该由 failed 推断"没进程了"。
 
   // 失败原因取值。其它场景（正常启动、停止）reason 留空。
   const REASON = Object.freeze({

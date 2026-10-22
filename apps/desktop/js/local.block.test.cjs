@@ -70,7 +70,11 @@ function makeNode(tag) {
 }
 
 // 设置页里与本地模式相关的元素（id 与 index.html 一致）。
-function makeLocalEls() {
+// localBase 可覆盖：真实场景里用户可以什么都不填（地址由本地实例监督器发现），
+// 所以测试必须能造出"地址输入框为空"这个前提 —— 预填写死的话，
+// "空输入框 + 监督器已发现地址"这条路径在测试里根本走不到。
+function makeLocalEls(opts) {
+  opts = opts || {};
   const els = {
     "api-base": makeNode("input"),
     "api-key": makeNode("input"),
@@ -86,7 +90,7 @@ function makeLocalEls() {
   };
   els["api-base"].value = "https://htwmedia.dpdns.org";
   els["api-key"].value = "test-key";
-  els["local-base"].value = "http://127.0.0.1:51111";
+  els["local-base"].value = opts.localBase !== undefined ? opts.localBase : "http://127.0.0.1:51111";
   els["local-pair"].disabled = true;
   return els;
 }
@@ -119,7 +123,7 @@ function healthWithVersion(version) {
 // htw.call 按 path 分派，测试要改行为时传 route 覆盖。
 async function bootApp(opts) {
   opts = opts || {};
-  const els = opts.els || makeLocalEls();
+  const els = opts.els || makeLocalEls(opts);
   const calls = [];
   const saved = [];
   const registered = [];
@@ -293,7 +297,7 @@ test("本地模式块: 一键配对成功 → 结果行提示成功，状态行�
     assert.strictEqual(app.els["local-status"].textContent, "本地实例未配对");
     await app.els["local-pair"].fire("click");
 
-    assert.strictEqual(app.els["local-pair-result"].textContent, "配对成功。");
+    assert.strictEqual(app.els["local-pair-result"].textContent, "配对成功。（实际地址：http://127.0.0.1:51111）");
     assert.strictEqual(app.els["local-status"].textContent, "本地模式就绪");
 
     const enroll = app.calls.find((c) => c.path === "/api/v2/local/enroll");
@@ -328,7 +332,7 @@ test("本地模式块: 配对失败 → 结果行显示失败原文", async () =
     await app.els["local-apply"].fire("click");
     await app.els["local-pair"].fire("click");
 
-    assert.strictEqual(app.els["local-pair-result"].textContent, "本进程不是本地实例，不接受配对。");
+    assert.strictEqual(app.els["local-pair-result"].textContent, "本进程不是本地实例，不接受配对。（实际地址：http://127.0.0.1:51111）");
   } finally {
     app.restore();
   }
@@ -351,7 +355,7 @@ test("本地模式块: 配对返 HTTP 200 + 失败壳 → 结果行显示失败�
     await app.els["local-pair"].fire("click");
 
     assert.notStrictEqual(app.els["local-pair-result"].textContent, "配对成功。", "失败壳不能被当成配对成功");
-    assert.strictEqual(app.els["local-pair-result"].textContent, "本进程不是本地实例，不接受配对。");
+    assert.strictEqual(app.els["local-pair-result"].textContent, "本进程不是本地实例，不接受配对。（实际地址：http://127.0.0.1:51111）");
   } finally {
     app.restore();
   }
@@ -461,7 +465,7 @@ test("本地模式块: 首配对（notPaired）→ 配对按钮可用，点击�
     const before = app.calls.length;
     await app.els["local-pair"].fire("click");
 
-    assert.strictEqual(app.els["local-pair-result"].textContent, "配对成功。");
+    assert.strictEqual(app.els["local-pair-result"].textContent, "配对成功。（实际地址：http://127.0.0.1:51111）");
     const sent = app.calls.slice(before);
     const enroll = sent.find((c) => c.path === "/api/v2/local/enroll");
     const pair = sent.find((c) => c.path === "/api/local/pair");
@@ -510,7 +514,7 @@ test("本地模式块: 待解锁（pairedNotUnlocked）→ 配对按钮可用", 
     assert.strictEqual(app.els["local-pair"].disabled, false, "待解锁时配对按钮应可用");
 
     await app.els["local-pair"].fire("click");
-    assert.strictEqual(app.els["local-pair-result"].textContent, "配对成功。");
+    assert.strictEqual(app.els["local-pair-result"].textContent, "配对成功。（实际地址：http://127.0.0.1:51111）");
   } finally {
     app.restore();
   }
@@ -709,7 +713,7 @@ test("本地模式块: 保存后只多打一个尾斜杠 → 探活状态不作�
     assert.strictEqual(app.els["local-status"].textContent, "本地实例未配对", "写法差异不该让探活结果作废");
 
     await app.els["local-pair"].fire("click");
-    assert.strictEqual(app.els["local-pair-result"].textContent, "配对成功。");
+    assert.strictEqual(app.els["local-pair-result"].textContent, "配对成功。（实际地址：http://127.0.0.1:51111）");
 
     const pair = app.calls.find((c) => c.path === "/api/local/pair");
     assert.ok(pair, "应发出配对请求");
@@ -821,6 +825,83 @@ test("本地实例: 收到运行中事件 → 状态行显示运行中，探活�
     const pair = app.calls.find((c) => c.path === "/api/local/pair");
     assert.ok(pair, "应发出一次配对请求");
     assert.strictEqual(pair.base, "http://127.0.0.1:51234", "配对必须走监督器发现的地址");
+  } finally {
+    app.restore();
+  }
+});
+
+// 监督器发现的地址**直接可用**：用户什么都没填（输入框为空），
+// 点「保存并探活」不能报"本地模式未配置" —— 端口是系统随机分配的，
+// 要用户手工抄进输入框，等于"地址发现"这个能力白做。
+// 什么使其变红：applyLocal 只认输入框的值（不看监督器给的地址）→
+//   输入框为空就早退"本地模式未配置"，一条探活请求都不发。
+test("本地实例: 地址输入框为空 + 监督器已发现地址 → 点保存并探活要探活到监督器给的地址", async () => {
+  const app = await bootApp({ localBase: "" });
+  try {
+    // 监督器自己发现地址并上报 running。
+    app.emitLocalEvent({ state: "running", base: "http://127.0.0.1:51234", reason: "", attempt: 0, pid: 4321 });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // 发现的地址要回填进输入框（用户不用把随机端口手工抄进去）。
+    assert.strictEqual(app.els["local-base"].value, "http://127.0.0.1:51234",
+      "监督器发现的地址应回填进地址输入框");
+
+    const before = app.calls.length;
+    await app.els["local-apply"].fire("click");
+
+    const probes = app.calls.slice(before).filter((c) => c.path === "/api/v2/local/health");
+    assert.ok(probes.length >= 1, "点保存并探活必须发出探活请求（不是'本地模式未配置'）");
+    assert.strictEqual(probes[0].base, "http://127.0.0.1:51234", "探活必须走监督器发现的地址");
+    assert.notStrictEqual(app.els["local-status"].textContent, "本地模式未配置",
+      "监督器已经给出地址了，不该报'本地模式未配置'");
+  } finally {
+    app.restore();
+  }
+});
+
+// 主流程也要握手：「点启动 → 实例起来」这条路上从没探过活，
+// 于是不兼容的实例照样显示"本地实例运行中"。
+// 什么使其变红：收到 running 事件后不自动探活 → 一条 health 请求都不发。
+test("本地实例: 收到 running 事件（地址变化）→ 自动探活一次，不用手点按钮", async () => {
+  const app = await bootApp();
+  try {
+    const before = app.calls.length;
+    app.emitLocalEvent({ state: "running", base: "http://127.0.0.1:51234", reason: "", attempt: 0, pid: 4321 });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const probes = app.calls.slice(before).filter((c) => c.path === "/api/v2/local/health");
+    assert.strictEqual(probes.length, 1, "监督器报 running 后应自动探活一次");
+    assert.strictEqual(probes[0].base, "http://127.0.0.1:51234", "自动探活必须走监督器发现的地址");
+
+    // 同一个地址再报一次 running → 不重复探活（否则每次状态推送都打一次 health）。
+    const before2 = app.calls.length;
+    app.emitLocalEvent({ state: "running", base: "http://127.0.0.1:51234", reason: "", attempt: 0, pid: 4321 });
+    await new Promise((r) => setTimeout(r, 0));
+    const probes2 = app.calls.slice(before2).filter((c) => c.path === "/api/v2/local/health");
+    assert.strictEqual(probes2.length, 0, "地址没变就不该重复探活");
+  } finally {
+    app.restore();
+  }
+});
+
+// 地址输入框被清空（用户手动改的）时，只要监督器还握着实例的真地址，
+// 探活就不能落空 —— 端口是系统随机分配的，用户没填不代表没有地址。
+// 什么使其变红：applyLocal 只认输入框的值 → 直接报"本地模式未配置"，一条 health 都不发。
+test("本地实例: 清空地址输入框但监督器有地址 → 仍按监督器给的地址探活", async () => {
+  const app = await bootApp();
+  try {
+    app.emitLocalEvent({ state: "running", base: "http://127.0.0.1:51234", reason: "", attempt: 0, pid: 4321 });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // 用户把地址框清空了（实例还在跑，地址还在监督器手里）。
+    app.els["local-base"].value = "";
+
+    const before = app.calls.length;
+    await app.els["local-apply"].fire("click");
+
+    const probes = app.calls.slice(before).filter((c) => c.path === "/api/v2/local/health");
+    assert.ok(probes.length >= 1, "输入框为空但监督器有地址时也要探活");
+    assert.strictEqual(probes[0].base, "http://127.0.0.1:51234", "探活必须走监督器发现的地址");
   } finally {
     app.restore();
   }

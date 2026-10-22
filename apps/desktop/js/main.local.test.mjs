@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
+import * as realFs from "node:fs";
 import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 /*
@@ -135,6 +137,62 @@ function stripComments(src) {
   return out;
 }
 
+// 取出 ipcMain.handle("<channel>", <箭头函数>) 里的箭头函数源码。
+// 为什么要抠出来单独跑：main.js 依赖 electron，node --test 起不来主进程。
+// 但处理函数本身是纯逻辑（校验路径 + 交给监督器），抠出来注入桩依赖后
+// 就能**真的调它** —— 这比"源码里有没有某个词"这种形状守卫强得多。
+function handlerArrow(src, channel) {
+  const marker = `ipcMain.handle("${channel}"`;
+  const idx = src.indexOf(marker);
+  assert.ok(idx >= 0, `源码里找不到标记：${marker}`);
+  let i = idx + marker.length;
+  while (i < src.length && /[\s,]/.test(src[i])) i += 1;
+  assert.ok(src[i] === "(", `${channel} 的处理函数应以箭头函数的参数表开头`);
+  const paramsStart = i;
+  let depth = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === "`") { i = skipString(src, i); continue; }
+    if (c === "(") depth += 1;
+    else if (c === ")") { depth -= 1; if (depth === 0) { i += 1; break; } }
+    i += 1;
+  }
+  const params = src.slice(paramsStart, i);
+  while (i < src.length && /\s/.test(src[i])) i += 1;
+  assert.ok(src.startsWith("=>", i), `${channel} 的处理函数不是箭头函数`);
+  i += 2;
+  while (i < src.length && /\s/.test(src[i])) i += 1;
+  let body;
+  if (src[i] === "{") {
+    body = blockAt(src, i);
+  } else {
+    const start = i;
+    let d = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === '"' || c === "'" || c === "`") { i = skipString(src, i); continue; }
+      if (c === "(" || c === "[" || c === "{") { d += 1; i += 1; continue; }
+      if (c === ")" || c === "]" || c === "}") {
+        if (d === 0) break;
+        d -= 1; i += 1; continue;
+      }
+      if (c === "," && d === 0) break;
+      i += 1;
+    }
+    body = src.slice(start, i);
+  }
+  return params + " => " + body;
+}
+
+// 用桩依赖把处理函数"装"起来：注入的键名就是它引用的自由变量名
+// （fs / ensureLocalSupervisor / localSupervisor …）。
+function makeHandler(channel, deps) {
+  const arrow = handlerArrow(mainJs, channel);
+  const names = Object.keys(deps);
+  const values = names.map((n) => deps[n]);
+  return new Function(...names, "return (" + arrow + ");")(...values);
+}
+
 function blockAfter(src, marker) {
   const markerIdx = src.indexOf(marker);
   assert.ok(markerIdx >= 0, `源码里找不到标记：${marker}`);
@@ -215,6 +273,93 @@ test("htw:localStop 调停、htw:localStatus 查状态", () => {
   assert.ok(/\.status\s*\(/.test(status.text), "localStatus 必须返回监督器的 status()");
 });
 
+// ---- 可执行文件路径的前置校验 ----
+//
+// 什么使其变红：主进程不做存在性校验，直接把路径丢给 spawn ——
+// child_process.spawn 对**不存在的文件不抛异常**，只异步发 'error'，
+// 监督器把 'error' 与 'exit' 同路 → 退避重试 3 次 → failed(crashed)，
+// 界面显示"连续启动后仍异常退出"。用户只是路径打错了一个字符。
+// 这几条用例把处理函数抠出来**真的调**，验证行为（不只是代码形状）。
+
+test("htw:localStart: 路径不存在 → 直接失败并说清是哪个文件，绝不 spawn", () => {
+  const started = [];
+  const fn = makeHandler("htw:localStart", {
+    fs: realFs,
+    ensureLocalSupervisor: () => ({
+      start: (p) => { started.push(p); return { state: "starting", base: "", reason: "", attempt: 0, pid: 1 }; },
+    }),
+  });
+
+  const missing = join(tmpdir(), "htw-no-such-local-instance-9d3f.exe");
+  const r = fn({}, missing);
+
+  assert.strictEqual(r.ok, false, "路径不存在时必须直接失败");
+  assert.strictEqual(r.errMsg, "找不到该可执行文件：" + missing, "失败文案要带上路径");
+  assert.deepStrictEqual(started, [], "路径不存在时不得 spawn 任何进程");
+});
+
+test("htw:localStart: 路径是个目录 → 同样直接失败（不是可执行文件）", () => {
+  const started = [];
+  const fn = makeHandler("htw:localStart", {
+    fs: realFs,
+    ensureLocalSupervisor: () => ({
+      start: (p) => { started.push(p); return { state: "starting" }; },
+    }),
+  });
+
+  const r = fn({}, tmpdir());
+
+  assert.strictEqual(r.ok, false, "目录不是可执行文件，必须直接失败");
+  assert.deepStrictEqual(started, [], "不得 spawn");
+});
+
+test("htw:localStart: 路径存在 → 原样交给监督器启动", () => {
+  const started = [];
+  const fn = makeHandler("htw:localStart", {
+    fs: realFs,
+    ensureLocalSupervisor: () => ({
+      start: (p) => { started.push(p); return { state: "starting", base: "", reason: "", attempt: 0, pid: 1 }; },
+    }),
+  });
+
+  const exe = process.execPath; // 一定存在的文件
+  const r = fn({}, exe);
+
+  assert.deepStrictEqual(started, [exe], "存在的路径必须交给监督器启动");
+  assert.ok(r && r.state === "starting", "存在时返回监督器的状态载荷");
+});
+
+// 查状态不该凭空把监督器建出来（"懒创建"的口径要成立）。
+// 什么使其变红：localStatus 无条件 ensureLocalSupervisor() → 查一次状态就多一个监督器实例。
+test("htw:localStatus: 监督器还没建 → 直接回 idle，不创建它", () => {
+  let created = 0;
+  const fn = makeHandler("htw:localStatus", {
+    localSupervisor: null,
+    ensureLocalSupervisor: () => {
+      created += 1;
+      return { status: () => ({ state: "idle", base: "", reason: "", attempt: 0, pid: null }) };
+    },
+  });
+
+  const st = fn();
+
+  assert.strictEqual(st.state, "idle", "没配置过时状态就是 idle");
+  assert.strictEqual(st.base, "");
+  assert.strictEqual(created, 0, "查状态不该创建监督器");
+});
+
+test("htw:localStatus: 监督器已经在 → 返回它的真实状态", () => {
+  const fn = makeHandler("htw:localStatus", {
+    localSupervisor: { status: () => ({ state: "running", base: "http://127.0.0.1:51234", reason: "", attempt: 0, pid: 42 }) },
+    ensureLocalSupervisor: () => { throw new Error("不该创建监督器"); },
+  });
+
+  const st = fn();
+
+  assert.strictEqual(st.state, "running");
+  assert.strictEqual(st.base, "http://127.0.0.1:51234");
+});
+
 test("监督器懒创建：没配置过本地实例就不创建，更不会 spawn", () => {
   assert.ok(
     /let\s+localSupervisor\s*=\s*null/.test(mainJs),
@@ -251,10 +396,18 @@ test("状态广播前必须确认窗口没被销毁（isDestroyed 守卫）", ()
   // 全文 includes 会让"别处恰好有个 isDestroyed"也算数，等于没守卫。
   // 再剥掉注释：注释里提到 isDestroyed 不算守卫（注释不是代码）。
   const cb = stripComments(arrowValue(mainJs, "onState:"));
+  // 必须真的**调用** isDestroyed()：只做字符串匹配的话，
+  // `if (w.isDestroyed) { … }`（把方法当属性用）也能过 —— 那是误写，
+  // 运行时不会按预期判断窗口死活。
   assert.ok(
-    cb.includes("isDestroyed"),
-    "onState 广播前必须用 isDestroyed() 确认窗口还活着：窗口销毁后 send() 会抛错，打断整个广播"
+    /isDestroyed\s*\(\s*\)/.test(cb),
+    "onState 广播前必须调用 isDestroyed() 确认窗口还活着：窗口销毁后 send() 会抛错，打断整个广播"
   );
+  // 顺序：先判活，再 send。反了等于没守卫（send 已经把异常抛出去了）。
+  const guardIdx = cb.search(/isDestroyed\s*\(\s*\)/);
+  const sendIdx = cb.search(/\.send\s*\(/);
+  assert.ok(sendIdx >= 0, "onState 广播里必须有 send()");
+  assert.ok(guardIdx < sendIdx, "isDestroyed() 必须在 send() 之前");
 });
 
 test("广播到单个窗口失败不能打断其它窗口（try/catch）", () => {

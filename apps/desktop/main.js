@@ -91,8 +91,9 @@ ipcMain.handle("htw:openExternal", (_e, url) => {
 // 桌面端只负责"把进程拉起来、把地址盯住、退出时不留孤儿"，
 // 真正的业务流量走哪条路由渲染层决定（本轮不切流量）。
 //
-// 监督器**懒创建**：用户没配置过本地实例时，主进程连监督器都不建，
-// 更不会 spawn 任何东西 —— 不能让"没开本地模式"的普通用户平白多出一个进程。
+// 监督器**懒创建**：查状态不会创建它（没配置过时直接回 idle），
+// 只有用户真的点了启动才会建 —— 更不会 spawn 任何东西：
+// 不能让"没开本地模式"的普通用户平白多出一个进程。
 let localSupervisor = null;
 function ensureLocalSupervisor() {
   if (!localSupervisor) {
@@ -120,11 +121,36 @@ function ensureLocalSupervisor() {
 
 // 启动：路径**每次都必须带上**。空路径由监督器判 failed(noBinary)，
 // 它不会拿空路径去 spawn，也不会沿用上次配置过的路径。
-ipcMain.handle("htw:localStart", (_e, binaryPath) => ensureLocalSupervisor().start(String(binaryPath || "")));
+//
+// 🔴 **先校验路径存在，再交给监督器**：child_process.spawn 对不存在的文件
+// **不抛异常**，只异步发 'error'；监督器把 'error' 与 'exit' 同路 →
+// 退避重试 3 次 → failed(crashed)，界面显示"连续启动后仍异常退出"。
+// 用户明明只是路径打错了一个字符，却被告知实例反复崩溃 —— 必须在 spawn 之前就拦下。
+// （失败载荷用 { ok:false, errMsg }：**不**复用 reason:"noBinary" ——
+//   那是"没填路径"的语义，这里是"填了但找不到"，两回事。）
+ipcMain.handle("htw:localStart", (_e, binaryPath) => {
+  const p = String(binaryPath || "").trim();
+  if (p) {
+    let usable = false;
+    try {
+      // 必须是**文件**：目录同样 spawn 不了。
+      usable = fs.existsSync(p) && fs.statSync(p).isFile();
+    } catch (e) {
+      usable = false; // 读不到（权限/路径非法）就当"找不到"
+    }
+    if (!usable) {
+      return { ok: false, errMsg: "找不到该可执行文件：" + p };
+    }
+  }
+  return ensureLocalSupervisor().start(p);
+});
 // 停止：用户主动停止后不再自动重启。
 ipcMain.handle("htw:localStop", () => ensureLocalSupervisor().stop());
 // 查状态：返回 { state, base, reason, attempt, pid }。
-ipcMain.handle("htw:localStatus", () => ensureLocalSupervisor().status());
+// 监督器还没建时直接回 idle —— 查状态不该凭空造一个监督器出来。
+ipcMain.handle("htw:localStatus", () => (localSupervisor
+  ? localSupervisor.status()
+  : { state: "idle", base: "", reason: "", attempt: 0, pid: null }));
 
 ipcMain.on("htw:allowBase", (_e, base) => {
   const o = originOf(base);

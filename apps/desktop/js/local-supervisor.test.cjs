@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { EventEmitter } = require("node:events");
+const { readFileSync } = require("node:fs");
 const Supervisor = require("./local-supervisor.js");
 
 // ---- 假 spawn / 假时钟 ----
@@ -481,4 +482,31 @@ test("supervisor: 没有注入 onError 时，onState 抛错被静默吞掉但监
 
   fake.children[0].stdout.emit("data", LINE);
   assert.strictEqual(sup.status().state, "running");
+});
+
+// 原 env 对象**不得被污染**：HTW_LOCAL 是子进程专用的角色标记，
+// 写进主进程自己的 env 就等于把整个应用变成"本地实例角色"
+// （子进程若缺这个变量会以服务器角色启动：连数据库、绑非回环端口）。
+// 什么使其变红：把 Object.assign({}, env) 改成直接改 env → 原对象上多出 HTW_LOCAL。
+test("supervisor: 原 env 对象不被污染（HTW_LOCAL 只加在子进程那份副本上）", (t) => {
+  const fake = createFakeSpawn();
+  const env = { PATH: "C:/bin" };
+  const sup = Supervisor.createSupervisor({ spawnFn: fake.spawnFn, env: env });
+  t.after(() => sup.dispose());
+
+  sup.start(BIN);
+
+  assert.strictEqual(fake.children[0].options.env.HTW_LOCAL, "1", "子进程必须以本地实例角色启动");
+  assert.strictEqual(env.HTW_LOCAL, undefined, "原 env 对象不得被污染");
+  assert.deepStrictEqual(Object.keys(env), ["PATH"], "原 env 对象的键不得被改动");
+});
+
+// 这个模块**只做 CommonJS**（主进程专用）：它要 require("child_process")，
+// 渲染层加载会直接抛。曾经有个渲染层全局分支 —— 那是死代码：
+// 这个文件从未进 index.html，留着只会让人以为渲染层能用它。
+// 什么使其变红：把渲染层分支加回来 → 断言里的渲染层全局命中。
+test("supervisor: 只做 CommonJS（主进程专用），不留渲染层分支", () => {
+  const src = readFileSync(require.resolve("./local-supervisor.js"), "utf-8");
+  assert.ok(!/\bwindow\b/.test(src), "监督器模块里不该出现渲染层全局（那是死代码分支）");
+  assert.ok(/module\.exports/.test(src), "必须是 CommonJS 导出");
 });

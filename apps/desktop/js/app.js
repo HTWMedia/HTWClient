@@ -266,6 +266,16 @@
     return userLocalBase || "";
   }
 
+  // 配对结果行要带上**实际使用的地址**：输入框里显示的可能不是配对实际打向的那个
+  // （监督器发现的地址优先于用户保存的地址），用户得知道材料发到了哪儿。
+  // 失败文案本身逐字透传，这里只在后面补一句地址说明。
+  function pairResultWithBase(text, base) {
+    const t = String(text == null ? "" : text);
+    const b = String(base == null ? "" : base).trim();
+    if (!b) return t;
+    return t + "（实际地址：" + b + "）";
+  }
+
   // 采纳监督器发现的地址：登记进 preload 白名单，否则请求会被 BASE_NOT_ALLOWED 拒掉。
   // 归一化/准入不过（不是本机回环根地址）就**不采纳** —— 地址不合格时宁可不发请求。
   function adoptSupervisorBase(base) {
@@ -322,6 +332,49 @@
     supervisorSnapshot = payload;
     adoptSupervisorBase(payload.base);
     renderLocalState(payload);
+    if (payload.state !== "running") return;
+    // 实例跑起来了 → 地址回填 + 自动探活。
+    // 为什么地址要回填：端口是系统随机分配的，桌面端只能从子进程上报里拿。
+    // 用户把它手工抄进输入框，抄错一个字符就全白搭 —— 监督器报什么就是什么。
+    // （"只认用户显式输入"那条约束针对的是 **localBinary 可执行文件路径**，
+    //   地址是实例自己报的真地址，不是远端下发的值。）
+    backfillSupervisorBase(payload.base);
+    autoProbeRunning(payload.base);
+  }
+
+  // 监督器发现的地址回填进地址输入框。
+  function backfillSupervisorBase(base) {
+    const b = String(base || "").trim();
+    if (!b) return;
+    const li = getLocalBaseInput();
+    if (!li) return;
+    if (String(li.value || "").trim() === b) return;
+    li.value = b;
+  }
+
+  // 上一次自动探活成功用过的地址（地址没成功探过就不重复探）。
+  let lastAutoProbedBase = "";
+
+  // 实例跑起来就自动探一次活。
+  // 为什么必须自动探：「点启动 → 实例起来」这条主路径上从没探过活，
+  // 于是不兼容的实例照样显示"本地实例运行中" —— 用户以为能用，等到配对才炸。
+  // 探活失败**不抛到界面之外**：失败就显示在状态行上，不该把事件处理搞崩。
+  function autoProbeRunning(base) {
+    const b = String(base || "").trim();
+    if (!b) return;
+    if (b === lastAutoProbedBase) return; // 这个地址已经探过了
+    let p;
+    try {
+      p = probeLocal();
+    } catch (e) {
+      return; // 探活抛错也不外抛（事件处理抛出去会打断整条事件链）
+    }
+    if (!p || typeof p.then !== "function") return;
+    p.then(function (r) {
+      // 只有探成功了才记下这个地址：探失败说明这个地址还没被确认过，
+      // 后面再来一次事件还能重试。
+      if (r && r.ok === true) lastAutoProbedBase = b;
+    }).catch(function () { /* 探活失败只体现在状态行上 */ });
   }
 
   // 调监督器的 IPC（启动 / 停止）。
@@ -469,7 +522,13 @@
     const api = window.HTWApi;
     // 可执行文件路径：用户显式填的就落盘（与地址校验无关 —— 路径与地址是两件事）。
     confirmLocalBinary(localBinaryValue());
-    const v = localBaseValue();
+    // 地址来源：输入框优先；输入框为空但**监督器已经发现了地址**时用监督器那个。
+    // 为什么不能只看输入框：端口是系统随机分配的，用户拿不到、不该手工抄 ——
+    // 监督器报上来的就是实例真正的地址，照着它探活才对。
+    //
+    // ⚠️ 兜底只认**监督器**的地址，不认用户保存过的那一份：
+    //   "清空输入框"是用户关闭本地模式的动作（那条既有语义不能被破坏）。
+    const v = localBaseValue() || supervisorBase;
     if (!v) {
       userLocalBase = "";
       confirmedLocalState = null;
@@ -544,9 +603,13 @@
     // 地址自检：输入框里的地址必须还是保存过的那一份 ——
     // 改了地址没保存就配对，配对的其实是上一个地址。
     // 比的是**归一化之后**的地址：尾斜杠这类写法差异不是改动（与 onLocalBaseChanged 同口径）。
+    //
+    // 例外：监督器发现了地址并已回填输入框 —— 那时输入框里显示的就是实例真正的地址，
+    // 配对也正是打向它（currentLocalBase 优先用它），所以不该按"改了地址"拦下。
     const curNorm = normalizeLocalBase(localBaseValue());
     const curBase = curNorm.ok ? curNorm.base : localBaseValue();
-    if (userLocalBase && curBase !== userLocalBase) {
+    const supervisorOwns = !!supervisorBase && localBase === supervisorBase;
+    if (!supervisorOwns && userLocalBase && curBase !== userLocalBase) {
       confirmedLocalState = null;
       setLocalStatus(LOCAL_BASE_CHANGED_TEXT);
       setLocalPairEnabled(false);
@@ -592,11 +655,12 @@
       r = { ok: false, message: (e && e.message) ? e.message : String(e) };
     }
     if (!r || r.ok !== true) {
-      // 失败文案逐字透传（keyId 不一致等都是流程给出的原文）。
-      setLocalPairResult((r && r.message) ? r.message : "配对失败。");
+      // 失败文案逐字透传（keyId 不一致等都是流程给出的原文），
+      // 后面补上实际使用的地址（可能不是输入框里显示的那个）。
+      setLocalPairResult(pairResultWithBase((r && r.message) ? r.message : "配对失败。", localBase));
       return r;
     }
-    setLocalPairResult("配对成功。");
+    setLocalPairResult(pairResultWithBase("配对成功。", localBase));
     // 只刷新状态行，不清结果行（刚写进去的成功提示不能被自己抹掉）。
     await probeLocal();
     return r;
@@ -712,9 +776,9 @@
       try {
         const st = await window.htw.localStatus();
         if (st && st.ok !== false && typeof st.state === "string" && !supervisorSnapshot) {
-          supervisorSnapshot = st;
-          adoptSupervisorBase(st.base);
-          renderLocalState(st);
+          // 走与监督器事件**同一套**处理：状态渲染 + 地址回填 + 自动探活。
+          // （主流程也得握手：实例早就在跑的时候，客户端不能装作没看见。）
+          onSupervisorEvent(st);
         }
       } catch (e) { /* 拿不到初始状态不影响设置页 */ }
     }
