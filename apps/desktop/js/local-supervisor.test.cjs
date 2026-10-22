@@ -234,7 +234,9 @@ test("supervisor: 末行没有换行符时以 stdout 流结束补齐", (t) => {
   assert.strictEqual(sup.status().base, "http://127.0.0.1:51234");
 });
 
-// 契约面：导出的常量与状态取值是机器契约，别处按字面量取用。
+// 什么使其变红：任何一个导出常量被改字面量（STATE 的取值、默认超时、退避序列、
+// 最大重启次数、正则 source）→ 用例 9 的逐字断言红；
+// 少导出一个成员（例如把 LISTENING_RE 删掉）同样红。
 test("supervisor: 导出契约（STATE / 常量 / LISTENING_RE）", () => {
   assert.deepStrictEqual(Supervisor.STATE, {
     idle: "idle",
@@ -249,4 +251,234 @@ test("supervisor: 导出契约（STATE / 常量 / LISTENING_RE）", () => {
   assert.strictEqual(Supervisor.MAX_RESTARTS, 3);
   assert.strictEqual(Supervisor.LISTENING_RE.source, "^\\[local-instance\\] listening (.+)$");
   assert.strictEqual(typeof Supervisor.createSupervisor, "function");
+});
+
+// 什么使其变红：把 handleChildGone 开头的陈旧守卫去掉（或让 clearAddressTimer
+// 无条件执行）→ 旧子进程迟到的 exit 会作废**新**实例的地址超时计时器
+// （新实例不吐地址就永远等不到 failed(noAddress)），并且多排一次退避，
+// 退避到点再拉起一个进程 → 双实例 + 没人监管的孤儿进程。
+// 断言任一条变红即说明守卫被拆了。
+test("supervisor: stop → start 后旧子进程迟到的 exit 被忽略（不双实例、不作废新实例的地址超时）", () => {
+  const fake = createFakeSpawn();
+  const clock = createFakeClock();
+  const sup = Supervisor.createSupervisor({
+    spawnFn: fake.spawnFn,
+    delayFn: clock.delayFn,
+    addressTimeoutMs: 10,
+  });
+
+  sup.start(BIN);
+  assert.strictEqual(fake.children.length, 1);
+  sup.stop();
+  assert.strictEqual(sup.status().state, "stopped");
+
+  sup.start(BIN);
+  assert.strictEqual(fake.children.length, 2, "重新启动 → 第二个进程");
+  assert.strictEqual(sup.status().state, "starting");
+
+  // 旧子进程的 exit 迟到（真实场景：点了停止之后进程过一会儿才真的退出）
+  fake.children[0].emit("exit", 0, null);
+
+  assert.strictEqual(fake.children.length, 2, "陈旧 exit 不得当场再拉起任何进程");
+  assert.deepStrictEqual(clock.delaysOf("backoff"), [], "陈旧 exit 不得排退避");
+
+  // 新实例一直没吐地址 → 它的地址超时必须**仍然有效**
+  clock.fireAll();
+
+  assert.strictEqual(fake.children.length, 2, "陈旧 exit 引发的退避不得再拉起进程");
+  const s = sup.status();
+  assert.strictEqual(s.state, "failed", "新实例拿不到地址必须照样 failed(noAddress)");
+  assert.strictEqual(s.reason, "noAddress");
+});
+
+// 什么使其变红：退避等待期把状态写成 starting（而不是 stopped）→
+// 退避期内的 start() 会被 starting 早退分支静默吞掉（不真的 spawn），
+// attempt/pid 的断言也一起红。
+test("supervisor: 崩溃退避期 = stopped + attempt>0 + pid=null；退避期内手动启动会真的拉起", () => {
+  const fake = createFakeSpawn();
+  const clock = createFakeClock();
+  const sup = Supervisor.createSupervisor({ spawnFn: fake.spawnFn, delayFn: clock.delayFn });
+
+  sup.start(BIN);
+  fake.children[0].emit("exit", 1, null);
+
+  const backoff = sup.status();
+  assert.strictEqual(backoff.state, "stopped", "退避等待期没有进程，状态是 stopped");
+  assert.strictEqual(backoff.attempt, 1, "attempt>0 表示这是崩溃退避中");
+  assert.strictEqual(backoff.pid, null, "退避期没有 pid");
+
+  // 退避期内用户手动点"启动" → 必须真的拉起（不能被 starting 早退分支吞掉）
+  sup.start(BIN);
+  assert.strictEqual(fake.children.length, 2, "退避期内手动启动 → 真的 spawn");
+  assert.strictEqual(sup.status().state, "starting");
+  assert.strictEqual(sup.status().attempt, 0, "手动启动 → 重启计数归零");
+
+  // 原来的退避计时器必须作废（否则到点会多拉一个）
+  clock.fire("backoff");
+  assert.strictEqual(fake.children.length, 2, "手动启动后原退避计时器必须作废");
+});
+
+// 什么使其变红：把空路径当成"沿用上次配置过的路径"（start 里对空串不重置
+// binaryPath）→ 实例没在跑的时候，这里会**再拉起一个进程**
+//（children.length 变 2）→ 断言红；在跑的时候则不会落 failed(noBinary) → 也红。
+test("supervisor: 已经配置过路径之后再 start(\"\") → failed(noBinary) 且不再 spawn", (t) => {
+  const fake = createFakeSpawn();
+  const sup = Supervisor.createSupervisor({ spawnFn: fake.spawnFn });
+  t.after(() => sup.dispose());
+
+  sup.start(BIN);
+  assert.strictEqual(fake.children.length, 1);
+  sup.stop(); // 实例停了，但路径还"配置过"
+
+  const s = sup.start(""); // 用户把路径清空了再点启动
+
+  assert.strictEqual(s.state, "failed");
+  assert.strictEqual(s.reason, "noBinary");
+  assert.strictEqual(fake.children.length, 1, "空路径不得沿用旧路径再拉一个进程");
+
+  // 实例正在跑的时候也一样：只落 failed(noBinary)，不再多拉一个
+  sup.start(BIN);
+  assert.strictEqual(fake.children.length, 2);
+  const s2 = sup.start("");
+  assert.strictEqual(s2.state, "failed");
+  assert.strictEqual(s2.reason, "noBinary");
+  assert.strictEqual(fake.children.length, 2, "空路径不得沿用旧路径再拉一个进程");
+});
+
+// 什么使其变红：行尾只去 "\n" 不去 "\r"（把 .replace(/\r$/, "") 去掉）
+// → 正则锚点前多一个 \r，解析不出地址 → 用例红。
+test("supervisor: \\r\\n 行尾的标记行也能解析出地址", (t) => {
+  const fake = createFakeSpawn();
+  const sup = Supervisor.createSupervisor({ spawnFn: fake.spawnFn });
+  t.after(() => sup.dispose());
+
+  sup.start(BIN);
+  fake.children[0].stdout.emit("data", "[local-instance] listening http://127.0.0.1:51234\r\n");
+
+  assert.strictEqual(sup.status().state, "running");
+  assert.strictEqual(sup.status().base, "http://127.0.0.1:51234");
+});
+
+// 什么使其变红：不按行缓冲（每来一个 chunk 就当一整行）→ 半行永远拼不起来
+// → 用例红（拿不到地址，停在 starting）。
+test("supervisor: 标记行跨两个 chunk 到达也能解析出地址", (t) => {
+  const fake = createFakeSpawn();
+  const sup = Supervisor.createSupervisor({ spawnFn: fake.spawnFn });
+  t.after(() => sup.dispose());
+
+  sup.start(BIN);
+  fake.children[0].stdout.emit("data", "[local-instance] listening http://127.0.0.1:5123");
+  assert.strictEqual(sup.status().state, "starting", "半行不算拿到地址");
+
+  fake.children[0].stdout.emit("data", "4\n");
+
+  assert.strictEqual(sup.status().state, "running");
+  assert.strictEqual(sup.status().base, "http://127.0.0.1:51234");
+});
+
+// 什么使其变红：dispose() 不清计时器（或不靠世代号作废）→ 把挂起的计时器
+// 全推一遍之后状态会被改（failed(noAddress)）或者又会拉起进程 → 用例红。
+test("supervisor: dispose() 之后挂起的计时器不再回调（不改状态、不再拉起）", () => {
+  const fake = createFakeSpawn();
+  const clock = createFakeClock();
+  const sup = Supervisor.createSupervisor({ spawnFn: fake.spawnFn, delayFn: clock.delayFn });
+
+  sup.start(BIN);
+  fake.children[0].emit("exit", 1, null); // → 排了退避
+  assert.strictEqual(clock.delaysOf("backoff").length, 1, "崩溃后确实排了退避");
+
+  sup.dispose();
+  const before = sup.status();
+
+  clock.fireAll(); // 把所有挂起计时器都推一遍
+
+  assert.strictEqual(fake.children.length, 1, "dispose 后不得再拉起任何进程");
+  assert.deepStrictEqual(sup.status(), before, "dispose 后计时器回调不得再改状态");
+});
+
+// 什么使其变红：dispose() 只 kill 一次、不排超时强杀 → fire("killEscalation")
+// 之后 killCalls 里没有 SIGKILL → 用例红。
+test("supervisor: dispose() → 先 kill，超时还没退就强杀（SIGKILL）", () => {
+  const fake = createFakeSpawn();
+  const clock = createFakeClock();
+  const sup = Supervisor.createSupervisor({
+    spawnFn: fake.spawnFn,
+    delayFn: clock.delayFn,
+    killGraceMs: 50,
+  });
+
+  sup.start(BIN);
+  sup.dispose();
+
+  assert.deepStrictEqual(fake.children[0].killCalls, ["default"], "先礼貌地 kill 一次");
+  assert.deepStrictEqual(clock.delaysOf("killEscalation"), [50], "排一个超时强杀");
+
+  clock.fire("killEscalation");
+
+  assert.deepStrictEqual(fake.children[0].killCalls, ["default", "SIGKILL"], "超时后强杀");
+});
+
+// 什么使其变红：强杀前不判断"进程是不是已经自己退了"（去掉 exitedProcs 判断）
+// → 已经退出的进程也会被补一刀 SIGKILL → 用例红。
+test("supervisor: 子进程已经自己退出 → 超时强杀不会再补一刀", () => {
+  const fake = createFakeSpawn();
+  const clock = createFakeClock();
+  const sup = Supervisor.createSupervisor({
+    spawnFn: fake.spawnFn,
+    delayFn: clock.delayFn,
+    killGraceMs: 50,
+  });
+
+  sup.start(BIN);
+  sup.dispose();
+  fake.children[0].emit("exit", 0, null); // 已经自己退了
+
+  clock.fire("killEscalation");
+
+  assert.deepStrictEqual(fake.children[0].killCalls, ["default"], "已经退了就不用再强杀");
+});
+
+// 什么使其变红：把 onState 外面那层 try/catch 去掉（异常直接冒泡）
+// → 第一次状态变化就把监督器带崩（后续状态不再推进）→ 用例红。
+test("supervisor: onState 回调抛错不拖垮监督器（异常走 onError 出口）", (t) => {
+  const fake = createFakeSpawn();
+  const errors = [];
+  const sup = Supervisor.createSupervisor({
+    spawnFn: fake.spawnFn,
+    onState: function () {
+      throw new Error("界面炸了");
+    },
+    onError: function (err, meta) {
+      errors.push({ message: err && err.message, where: meta && meta.where });
+    },
+  });
+  t.after(() => sup.dispose());
+
+  const s = sup.start(BIN);
+  assert.strictEqual(s.state, "starting", "回调抛错也要把状态推出去");
+  assert.strictEqual(errors.length >= 1, true, "回调异常必须走错误出口");
+  assert.strictEqual(errors[0].where, "onState");
+  assert.strictEqual(errors[0].message, "界面炸了");
+
+  fake.children[0].stdout.emit("data", LINE);
+  assert.strictEqual(sup.status().state, "running", "后续状态变化照常推进");
+});
+
+// 什么使其变红：没有注入 onError 时把回调异常直接抛出去 → start() 自己就抛
+// → 用例红（默认口径是"吞掉但不影响监督器"）。
+test("supervisor: 没有注入 onError 时，onState 抛错被静默吞掉但监督器照常工作", (t) => {
+  const fake = createFakeSpawn();
+  const sup = Supervisor.createSupervisor({
+    spawnFn: fake.spawnFn,
+    onState: function () {
+      throw new Error("界面炸了");
+    },
+  });
+  t.after(() => sup.dispose());
+
+  const s = sup.start(BIN);
+  assert.strictEqual(s.state, "starting");
+
+  fake.children[0].stdout.emit("data", LINE);
+  assert.strictEqual(sup.status().state, "running");
 });
