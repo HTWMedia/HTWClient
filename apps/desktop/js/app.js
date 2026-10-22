@@ -13,6 +13,7 @@
   function getLocalBinaryInput() { return document.getElementById("local-binary"); }
   function getLocalToggleBtn() { return document.getElementById("local-toggle"); }
   function getLocalStateEl() { return document.getElementById("local-state"); }
+  function getLocalEnabledInput() { return document.getElementById("local-enabled"); }
 
   // 本地模式未配置（输入框为空）时的状态文案。
   const LOCAL_NOT_CONFIGURED = "本地模式未配置";
@@ -108,11 +109,13 @@
   function setLocalPairResult(text) { const el = getLocalPairResultEl(); if (el) el.textContent = text; }
   function setLocalPairEnabled(on) { const b = getLocalPairBtn(); if (b) b.disabled = !on; }
 
-  // 配置的四个键必须一起写：主进程的 saveConfig 只认
-  // apiBase/apiKey/localBase/localBinary，少写一个键等于把另一个键清空
+  // 配置的五个键必须一起写：主进程的 saveConfig 只认
+  // apiBase/apiKey/localBase/localBinary/localEnabled，少写一个键等于把另一个键清空
   // （例如保存 AuthKey 时把本地地址抹掉）。
   // localBinary 走缓存（userLocalBinary），不直接读输入框：
   // 输入框里还没确认过的值不该跟着每次按键落盘。
+  // localEnabled 走总开关状态（localModeEnabled），不直接读勾选框 ——
+  // 勾选框是**显示**，状态才是事实（启动时要先读配置再回填勾选框）。
   function saveConfigAll(localBase) {
     if (!window.htw || !window.htw.saveConfig) return;
     const base = getBaseInput() ? getBaseInput().value.trim() : "";
@@ -122,6 +125,7 @@
       apiKey: key,
       localBase: localBase == null ? "" : localBase,
       localBinary: userLocalBinary,
+      localEnabled: localModeEnabled,
     });
   }
 
@@ -248,7 +252,7 @@
   // ---- 本地选路：把实例状态与能力清单喂给 api.js ----
   //
   // 判据本身全在 api.js 那边（setLocalRouting），这里只负责**提供事实**：
-  //  - enabled     用户总开关（默认关；设置页勾选与落盘由后续任务接）。
+  //  - enabled     用户总开关（默认关；设置页勾选与落盘见下面 onLocalEnabledChanged）。
   //  - ready       实例可达（探活通过）。
   //  - paired      已配对**且已解锁**（探活三态为 ready）——
   //                未配对 / 未解锁时鉴权层会 500，那时切过去只会拿到坏结果。
@@ -282,6 +286,18 @@
     localInstanceCompatible = false;
     capabilitiesStore = null;
     capabilitiesStoreBase = "";
+    syncLocalRouting();
+  }
+
+  // 总开关变化：立刻落盘 + 立刻把新状态喂给选路。
+  //
+  // 落盘走 saveConfigAll（五个键一起写）：既有四键一字不动，只多一个 localEnabled。
+  // 勾选框是**显示**，状态（localModeEnabled）才是事实 —— 两者同源，
+  // 免得出现「勾选框勾着、判据却说是关的」这种自相矛盾的状态。
+  function onLocalEnabledChanged() {
+    const el = getLocalEnabledInput();
+    localModeEnabled = !!(el && el.checked);
+    saveConfigAll(userLocalBase);
     syncLocalRouting();
   }
 
@@ -782,6 +798,9 @@
     // 地址一改，上一次探活的结果就不再作数（配对按钮与状态行跟着作废）。
     const baseInput = getLocalBaseInput();
     if (baseInput) baseInput.addEventListener("change", onLocalBaseChanged);
+    // 总开关：勾选 / 取消都要立刻落盘并生效。
+    const enabledInput = getLocalEnabledInput();
+    if (enabledInput) enabledInput.addEventListener("change", onLocalEnabledChanged);
   }
 
   function wireNav() {
@@ -833,6 +852,13 @@
       const bi = getLocalBinaryInput();
       if (bi) bi.value = userLocalBinary;
     }
+    // 总开关（config 第 5 键 localEnabled）：**默认关**。
+    // 配置里没有这个键 = 用户从没勾选过 → 当关。
+    // 布尔口径只认 true："true" / 1 都不是用户勾选出来的值，
+    // 当成"开"会把流量切到本地去 —— 那是最不该出的错。
+    localModeEnabled = saved.localEnabled === true;
+    const enabledInput = getLocalEnabledInput();
+    if (enabledInput) enabledInput.checked = localModeEnabled;
     // 本地地址要在 applyAuth 之前填好：applyAuth 会把配置整份写回，
     // 顺序反了会把刚读出来的本地地址又清空。
     if (saved.localBase) {
@@ -861,6 +887,9 @@
     getBaseInput().addEventListener("change", applyAuth);
     getKeyInput().addEventListener("input", applyAuth);
     applyAuth();
+    // 把总开关的事实喂给选路（enabled 是选路的第一条判据）。
+    // 不调的话 api.js 拿不到 enabled —— 启动时勾选过也不生效。
+    syncLocalRouting();
     if (window.HTWApi && window.HTWApi.onQuotaExceeded) window.HTWApi.onQuotaExceeded(showQuotaBanner);
     wireNav();
     wireLocal();

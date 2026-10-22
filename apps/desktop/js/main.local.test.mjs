@@ -462,6 +462,44 @@ test("配置读写包含 localBinary，既有三键一字不动", () => {
   }
 });
 
+// 配置的第 5 键：本地模式总开关 localEnabled（布尔，缺省 false = 不切本地）。
+// 既有四键一个都不能少；布尔口径只认 true（"true" / 1 都不算开）。
+// 什么使其变红：load/save 漏掉 localEnabled（开关每次启动都要重勾），
+// 或把它写成宽松的真值判断（字符串 "true" 也会被当成开 → 流量被切到本地去）。
+test("配置读写包含第 5 键 localEnabled（布尔，只认 true），既有四键一字不动", () => {
+  const load = sliceCall(mainJs, 'ipcMain.handle("htw:loadConfig"');
+  const save = sliceCall(mainJs, 'ipcMain.handle("htw:saveConfig"');
+  for (const key of ["apiBase", "apiKey", "localBase", "localBinary", "localEnabled"]) {
+    assert.ok(load.text.includes(key), `htw:loadConfig 必须读出 ${key}`);
+    assert.ok(save.text.includes(key), `htw:saveConfig 必须写入 ${key}`);
+  }
+  assert.ok(
+    /localEnabled\s*:\s*[^\n,]*localEnabled\s*===\s*true/.test(load.text),
+    "loadConfig 的 localEnabled 只认布尔 true（键不存在即缺省关）"
+  );
+  assert.ok(
+    /localEnabled\s*:\s*[^\n,]*localEnabled\s*===\s*true/.test(save.text),
+    "saveConfig 的 localEnabled 只认布尔 true"
+  );
+});
+
+// preload 的配置兜底也要带第 5 键（缺省关）：否则主进程通道断时，
+// 渲染层拿到的配置里没有这个键，开关状态就成了"未定义"。
+test("preload 的配置兜底带 localEnabled:false（缺省关）", () => {
+  const body = blockAfter(preloadJs, "function loadConfig()").text;
+  assert.ok(/localEnabled\s*:\s*false/.test(body), "loadConfig 的兜底必须带 localEnabled:false");
+});
+
+// 渲染层必须加载端点能力清单模块：它挂在 window.HTWLocalCapabilities 上，
+// 缺了它 app.js 就拉不到清单（清单永远为空 → 永远走云端，且没有任何报错提示）。
+test("index.html 加载了端点能力清单模块", () => {
+  const indexHtml = readFileSync(join(APP, "index.html"), "utf-8");
+  assert.ok(
+    indexHtml.includes('src="js/local-capabilities.js"'),
+    "index.html 必须加载 js/local-capabilities.js（否则渲染层拉不到端点能力清单）"
+  );
+});
+
 test("preload 暴露了本地实例的四个入口", () => {
   for (const name of ["localStart", "localStop", "localStatus", "onLocalEvent"]) {
     assert.ok(

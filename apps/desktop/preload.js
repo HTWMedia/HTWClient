@@ -68,10 +68,11 @@ function configPath() {
   return "htw-config.json";
 }
 // 读取持久化的 API 地址 / AuthKey（保存于应用数据目录，明文存储）。
-// 内容原样转发（含 localBase / localBinary），schema 不在此校验 —— 字段含义由调用方与 main.js 约定。
+// 内容原样转发（含 localBase / localBinary / localEnabled），schema 不在此校验 —— 字段含义由调用方与 main.js 约定。
+// 兜底里的 localEnabled 是 false（总开关缺省关）：主进程通道断时不该默认把流量切到本地。
 function loadConfig() {
   return ipcRenderer.invoke("htw:loadConfig").catch(function () {
-    return { apiBase: "", apiKey: "", localBase: "", localBinary: "" };
+    return { apiBase: "", apiKey: "", localBase: "", localBinary: "", localEnabled: false };
   });
 }
 function saveConfig(cfg) {

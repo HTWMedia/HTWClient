@@ -53,8 +53,11 @@ function readJsonFile(p, fallback) {
   return fallback;
 }
 
-// 配置的四个键：apiBase/apiKey/localBase + localBinary（本地实例可执行文件路径）。
+// 配置的五个键：apiBase/apiKey/localBase + localBinary（本地实例可执行文件路径）
+// + localEnabled（本地模式总开关，布尔）。
 // localBinary 不是秘密（只是本机上的一个文件路径），但每次启动重输一遍不可接受 —— 所以要落盘。
+// localEnabled 是**用户显式勾选**出来的总开关，缺省 false（= 不切本地）：
+//   布尔口径只认 true —— "true" / 1 这类取值都不是用户勾选出来的，当成"关"更安全。
 ipcMain.handle("htw:loadConfig", () => {
   const j = readJsonFile(configPath(), null) || {};
   return {
@@ -62,6 +65,7 @@ ipcMain.handle("htw:loadConfig", () => {
     apiKey: j.apiKey || "",
     localBase: j.localBase || "",
     localBinary: typeof j.localBinary === "string" ? j.localBinary : "",
+    localEnabled: j.localEnabled === true,
   };
 });
 ipcMain.handle("htw:saveConfig", (_e, cfg) => {
@@ -71,6 +75,7 @@ ipcMain.handle("htw:saveConfig", (_e, cfg) => {
       apiKey: (cfg && cfg.apiKey) || "",
       localBase: (cfg && cfg.localBase) || "",
       localBinary: typeof (cfg && cfg.localBinary) === "string" ? cfg.localBinary : "",
+      localEnabled: !!(cfg && cfg.localEnabled === true),
     }), "utf-8");
     return true;
   } catch (e) { return false; }

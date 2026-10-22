@@ -61,6 +61,12 @@
         <!-- 本地模式：填写本地实例地址 → 探活看状态 → 需要时一键配对。 -->
         <div class="card" id="local-card">
           <h3>本地模式</h3>
+          <!-- 总开关：默认关。用户显式勾选之后，本地实例支持的业务请求才可能走本机；
+               没勾选时一律走云端（勾选框的状态会落盘，重启后保持）。 -->
+          <div class="field">
+            <label><input type="checkbox" id="local-enabled" /> 启用本地模式</label>
+            <span class="hint">默认关闭。开启后，本地实例支持的业务请求走本机，其余仍走云端。</span>
+          </div>
           <div class="field">
             <label>本地实例地址</label>
             <input type="text" id="local-base" placeholder="http://127.0.0.1:51xxx" />
@@ -88,6 +94,7 @@
   <script src="libs/marked.min.js"></script>
   <script src="js/api.js"></script>
   <script src="js/local.js"></script>
+  <script src="js/local-capabilities.js"></script>
   <script src="js/tasks.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/skills/insight.js"></script>
