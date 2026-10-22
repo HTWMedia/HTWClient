@@ -79,6 +79,10 @@ function makeLocalEls() {
     "local-apply": makeNode("button"),
     "local-pair": makeNode("button"),
     "local-pair-result": makeNode("div"),
+    // 本地实例的启停块（id 与 index.html 一致）。
+    "local-binary": makeNode("input"),
+    "local-toggle": makeNode("button"),
+    "local-state": makeNode("div"),
   };
   els["api-base"].value = "https://htwmedia.dpdns.org";
   els["api-key"].value = "test-key";
@@ -108,6 +112,9 @@ async function bootApp(opts) {
   const calls = [];
   const saved = [];
   const registered = [];
+  // 本地实例监督器的桩：记录启停调用，收集状态事件的订阅者。
+  const localCalls = { start: [], stop: 0, status: 0 };
+  const localEventSubs = [];
   const route = opts.route || (() => READY_HEALTH);
 
   const docHandlers = {};
@@ -135,6 +142,31 @@ async function bootApp(opts) {
         calls.push({ method: method, path: path, body: body, apiKey: apiKey, base: base });
         return route(method, path, body, apiKey, base);
       },
+      // ---- 本地实例（监督器）----
+      // 形态照 preload：启动带上可执行文件路径；失败载荷是 { ok:false, errMsg }，
+      // **不含** state/base/pid/reason（渲染层不能把它当状态读）。
+      localStart: async (binaryPath) => {
+        localCalls.start.push(binaryPath);
+        return opts.localStartResult ||
+          { ok: true, state: "starting", base: "", reason: "", attempt: 0, pid: 4242 };
+      },
+      localStop: async () => {
+        localCalls.stop += 1;
+        return opts.localStopResult ||
+          { ok: true, state: "stopped", base: "", reason: "", attempt: 0, pid: null };
+      },
+      localStatus: async () => {
+        localCalls.status += 1;
+        return opts.localStatusResult ||
+          { state: "idle", base: "", reason: "", attempt: 0, pid: null };
+      },
+      onLocalEvent: (cb) => {
+        localEventSubs.push(cb);
+        return function () {
+          const i = localEventSubs.indexOf(cb);
+          if (i >= 0) localEventSubs.splice(i, 1);
+        };
+      },
     },
     addEventListener: () => {},
   };
@@ -157,6 +189,12 @@ async function bootApp(opts) {
     saved: saved,
     // 登记进 preload 白名单的地址（闸门放行的那些）。
     registered: registered,
+    // 本地实例监督器的调用记录（start 的入参、stop 的次数、status 的次数）。
+    localCalls: localCalls,
+    // 模拟主进程推送一次监督器状态事件。
+    emitLocalEvent: function (payload) {
+      localEventSubs.forEach((cb) => cb(payload));
+    },
     // app.js 暴露的 window.App（本地模式接线在 App.local 下）。
     App: win.App,
     restore: function () {
@@ -720,4 +758,163 @@ test("UI.showError: 其它错误仍是通用标题", () => {
     assert.strictEqual(box.children[0].textContent, "出错了");
     assert.strictEqual(box.children[1].textContent, "网络超时");
   });
+});
+
+// ---- 本地实例：启停与状态 ----
+//
+// 三条硬口径钉在这几个用例里：
+//  ① 失败载荷 { ok:false, errMsg } **不是状态** —— 当状态读会显示成"未启动"这类假状态；
+//  ② 地址来源：监督器发现的地址优先（那才是实例真正的地址），否则用用户保存过的；
+//  ③ 状态行必须显式区分「实例在跑」与「业务走本地」——本轮不切业务流量。
+
+// 点「启动本地实例」→ 监督器收到的是输入框里那个路径。
+// 什么使其变红：启动入参不取输入框的值（或干脆不传路径）→ start 记录里就不是那串路径。
+test("本地实例: 点启动按钮 → 以输入框里的可执行文件路径调用启动", async () => {
+  const app = await bootApp();
+  try {
+    app.els["local-binary"].value = "C:\\tools\\local-instance.exe";
+    await app.els["local-toggle"].fire("click");
+
+    assert.deepStrictEqual(app.localCalls.start, ["C:\\tools\\local-instance.exe"],
+      "启动必须带上输入框里的可执行文件路径");
+  } finally {
+    app.restore();
+  }
+});
+
+// 监督器报 running → 状态行说"本地实例运行中"，且探活/配对都改用它给的地址。
+// 什么使其变红：地址来源不优先用监督器的 base（或探活/配对仍走用户填的地址）
+//   → health.base / pair.base 就不是 127.0.0.1:51234。
+test("本地实例: 收到运行中事件 → 状态行显示运行中，探活与配对改用监督器给的地址", async () => {
+  const app = await bootApp({
+    route: (method, path) => {
+      if (path === "/api/v2/local/enroll")
+        return { status: 200, ok: true, data: { Ok: true, Data: { keyMaterial: "AAAABBBBCCCCDDDD", keyId: "aid-1", account: "a@x.com" } } };
+      if (path === "/api/local/pair")
+        return { status: 200, ok: true, data: { ok: true, data: { keyId: "aid-1" } } };
+      return NOT_PAIRED_HEALTH;
+    },
+  });
+  try {
+    app.emitLocalEvent({ state: "running", base: "http://127.0.0.1:51234", reason: "", attempt: 0, pid: 4321 });
+
+    const text = app.els["local-state"].textContent;
+    assert.ok(text.includes("本地实例运行中"), "状态行应显示本地实例运行中，实际：" + text);
+
+    await app.els["local-apply"].fire("click");
+    const health = app.calls.find((c) => c.path === "/api/v2/local/health");
+    assert.ok(health, "应发出一次探活请求");
+    assert.strictEqual(health.base, "http://127.0.0.1:51234", "探活必须走监督器发现的地址");
+
+    await app.els["local-pair"].fire("click");
+    const pair = app.calls.find((c) => c.path === "/api/local/pair");
+    assert.ok(pair, "应发出一次配对请求");
+    assert.strictEqual(pair.base, "http://127.0.0.1:51234", "配对必须走监督器发现的地址");
+  } finally {
+    app.restore();
+  }
+});
+
+// 失败事件带原因 → 状态行给出中文原因（不是把 reason 原样透给用户）。
+// 什么使其变红：failed 分支不翻译原因（或干脆不渲染）→ 状态行里没有那串中文。
+test("本地实例: 收到失败事件 → 状态行给出失败原因的中文", async () => {
+  const app = await bootApp();
+  try {
+    app.emitLocalEvent({ state: "failed", reason: "noAddress", base: "", attempt: 0, pid: null });
+
+    const text = app.els["local-state"].textContent;
+    assert.ok(text.includes("本地实例启动失败"), "状态行应说明启动失败，实际：" + text);
+    assert.ok(text.includes("未发现它的地址"), "状态行应给出失败原因的中文，实际：" + text);
+  } finally {
+    app.restore();
+  }
+});
+
+// 状态行不得暗示"业务流量已切到本地"。
+// 什么使其变红：运行中的文案改成"已切换本地 / 业务走本地"之类 → 下面的禁用说法断言变红。
+test("本地实例: 状态行不暗示业务流量已切本地", async () => {
+  const app = await bootApp();
+  try {
+    app.emitLocalEvent({ state: "running", base: "http://127.0.0.1:51234", reason: "", attempt: 0, pid: 4321 });
+
+    const text = app.els["local-state"].textContent;
+    assert.ok(text.includes("实例"), "状态行应说明这是本地实例，实际：" + text);
+    for (const bad of ["业务走本地", "已切换本地", "切到本地", "走本地", "流量已切", "已接本地"]) {
+      assert.ok(!text.includes(bad), "状态行不该出现暗示流量已切的说法（" + bad + "），实际：" + text);
+    }
+    // 反过来：必须显式说清业务请求仍走云端（本轮不切流量）。
+    assert.ok(text.includes("业务请求仍走云端"), "运行中应写明业务请求仍走云端，实际：" + text);
+  } finally {
+    app.restore();
+  }
+});
+
+// 崩溃退避期：没有单独的"退避中"状态，是 stopped + attempt>0 + pid===null。
+// 什么使其变红：退避判定去掉 attempt/pid 条件（或把退避期当成普通 stopped）
+//   → 状态行里就没有"退避"两个字。
+test("本地实例: 崩溃退避期（stopped + attempt>0 + 无进程）→ 状态行显示退避中", async () => {
+  const app = await bootApp();
+  try {
+    // 普通停止（没有崩溃重试计数）不该说"退避"。
+    app.emitLocalEvent({ state: "stopped", base: "", reason: "", attempt: 0, pid: null });
+    const plain = app.els["local-state"].textContent;
+    assert.ok(!plain.includes("退避"), "普通停止不该显示退避中，实际：" + plain);
+
+    app.emitLocalEvent({ state: "stopped", base: "", reason: "", attempt: 2, pid: null });
+    const text = app.els["local-state"].textContent;
+    assert.ok(text.includes("退避"), "崩溃退避期应显示退避中，实际：" + text);
+  } finally {
+    app.restore();
+  }
+});
+
+// 启动失败（IPC 失败载荷 { ok:false, errMsg }）→ 按"操作失败"显示 errMsg。
+// 什么使其变红：不判 ok===false（把失败载荷当状态读）→ 状态行会显示成"未启动"这类假状态。
+test("本地实例: 启动失败载荷 { ok:false } → 按操作失败显示 errMsg，不当状态读", async () => {
+  const app = await bootApp({
+    localStartResult: { ok: false, errMsg: "主进程通道不可用", error: "主进程通道不可用" },
+  });
+  try {
+    app.els["local-binary"].value = "C:\\tools\\local-instance.exe";
+    await app.els["local-toggle"].fire("click");
+
+    const text = app.els["local-state"].textContent;
+    assert.ok(text.includes("操作失败"), "失败载荷应按操作失败处理，实际：" + text);
+    assert.ok(text.includes("主进程通道不可用"), "应显示 errMsg 原文，实际：" + text);
+    assert.ok(!text.includes("未启动"), "失败载荷不该被当成「未启动」这类假状态，实际：" + text);
+  } finally {
+    app.restore();
+  }
+});
+
+// 事件里的失败载荷同样按"操作失败"处理。
+// 什么使其变红：事件处理不判 ok===false → 失败载荷会被当成没有 state 的事件丢掉，
+//   状态行停在上一句（断言里的 errMsg 就不出现）。
+test("本地实例: 事件载荷 { ok:false } → 按操作失败显示 errMsg", async () => {
+  const app = await bootApp();
+  try {
+    app.emitLocalEvent({ ok: false, errMsg: "监督器通道断了" });
+
+    const text = app.els["local-state"].textContent;
+    assert.ok(text.includes("操作失败"), "失败载荷应按操作失败处理，实际：" + text);
+    assert.ok(text.includes("监督器通道断了"), "应显示 errMsg 原文，实际：" + text);
+  } finally {
+    app.restore();
+  }
+});
+
+// 实例在跑时点同一个按钮 → 停止，而不是再启动一次。
+// 什么使其变红：按钮不按状态分流（永远走启动）→ stop 次数为 0、start 里多一条。
+test("本地实例: 实例在跑时点按钮 → 调停止，不调启动", async () => {
+  const app = await bootApp();
+  try {
+    app.emitLocalEvent({ state: "running", base: "http://127.0.0.1:51234", reason: "", attempt: 0, pid: 4321 });
+    app.els["local-binary"].value = "C:\\tools\\local-instance.exe";
+    await app.els["local-toggle"].fire("click");
+
+    assert.strictEqual(app.localCalls.stop, 1, "运行中点按钮应调停止");
+    assert.deepStrictEqual(app.localCalls.start, [], "运行中点按钮不该再调启动");
+  } finally {
+    app.restore();
+  }
 });
