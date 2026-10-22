@@ -148,6 +148,32 @@ contextBridge.exposeInMainWorld("htw", {
       if (i >= 0) streamEventListeners.splice(i, 1);
     };
   },
+  // ---- 本地实例（用户自备的本地可执行文件）----
+  // 拉起/停止/查状态都由主进程执行，preload 只做转发。
+  // 启动必须带上可执行文件路径：主进程不会沿用上次的路径。
+  localStart: (binaryPath) => ipcRenderer
+    .invoke("htw:localStart", String(binaryPath || ""))
+    // 主进程那边真出问题时不该让渲染层拿到一个未处理的 rejection。
+    .catch((e) => ({
+      state: "failed", base: "", reason: "noBinary", attempt: 0, pid: null,
+      error: String((e && e.message) || e),
+    })),
+  localStop: () => ipcRenderer
+    .invoke("htw:localStop")
+    .catch((e) => ({ state: "stopped", base: "", reason: "", attempt: 0, pid: null, error: String((e && e.message) || e) })),
+  localStatus: () => ipcRenderer
+    .invoke("htw:localStatus")
+    .catch((e) => ({ state: "idle", base: "", reason: "", attempt: 0, pid: null, error: String((e && e.message) || e) })),
+  // 状态订阅：主进程每次状态变化都推一次。返回取消订阅函数，形态与 onStreamEvent 一致，
+  // 渲染层换面板时用它解绑，免得旧回调继续收事件。
+  onLocalEvent: (cb) => {
+    if (typeof cb !== "function") return function () {};
+    const h = (_e, state) => { cb(state); };
+    ipcRenderer.on("htw:localEvent", h);
+    return function () {
+      ipcRenderer.removeListener("htw:localEvent", h);
+    };
+  },
   // Generic V2 caller. `body` is optional (omitted => GET).
   // baseOverride 用于大文件直连通道（可选，需在「设置」或环境变量中配置）。
   call: async (method, path, body, apiKey, baseOverride) => {

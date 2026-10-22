@@ -5,6 +5,7 @@ const http = require("http");
 const https = require("https");
 const { URL } = require("url");
 const { parseSseChunk } = require("./js/sse-parser.js");
+const { createSupervisor } = require("./js/local-supervisor.js");
 
 Menu.setApplicationMenu(null);
 
@@ -72,6 +73,41 @@ ipcMain.handle("htw:saveJson", (_e, name, data) => {
 ipcMain.handle("htw:openExternal", (_e, url) => {
   try { if (url) shell.openExternal(String(url)); return true; } catch (e) { return false; }
 });
+
+// ---- 本地实例（用户自备的本地可执行文件）----
+//
+// 桌面端只负责"把进程拉起来、把地址盯住、退出时不留孤儿"，
+// 真正的业务流量走哪条路由渲染层决定（本轮不切流量）。
+//
+// 监督器**懒创建**：用户没配置过本地实例时，主进程连监督器都不建，
+// 更不会 spawn 任何东西 —— 不能让"没开本地模式"的普通用户平白多出一个进程。
+let localSupervisor = null;
+function ensureLocalSupervisor() {
+  if (!localSupervisor) {
+    localSupervisor = createSupervisor({
+      // 状态一有变化就推给所有窗口：多窗口时每扇窗都要看到同一份状态，
+      // 所以走 getAllWindows 而不是只发给发起方。
+      onState: (state) => {
+        BrowserWindow.getAllWindows().forEach((w) => {
+          if (!w.isDestroyed()) w.webContents.send("htw:localEvent", state);
+        });
+      },
+      // 监督器把界面回调抛出的异常交到这里；不接也不影响状态推进，但记一笔便于排查。
+      onError: (err, info) => {
+        try { console.error("[local-supervisor]", err, info); } catch (e) { /* ignore */ }
+      },
+    });
+  }
+  return localSupervisor;
+}
+
+// 启动：路径**每次都必须带上**。空路径由监督器判 failed(noBinary)，
+// 它不会拿空路径去 spawn，也不会沿用上次配置过的路径。
+ipcMain.handle("htw:localStart", (_e, binaryPath) => ensureLocalSupervisor().start(String(binaryPath || "")));
+// 停止：用户主动停止后不再自动重启。
+ipcMain.handle("htw:localStop", () => ensureLocalSupervisor().stop());
+// 查状态：返回 { state, base, reason, attempt, pid }。
+ipcMain.handle("htw:localStatus", () => ensureLocalSupervisor().status());
 
 ipcMain.on("htw:allowBase", (_e, base) => {
   const o = originOf(base);
@@ -224,6 +260,11 @@ ipcMain.on("htw:unsubscribe", (_e, streamId) => {
 
 // 退出前把所有长连接断掉：进程不退的话，Cloudflare 侧的连接会一直挂到超时。
 app.on("before-quit", () => {
+  // 顺序要紧：**先停本地实例子进程，再断长连接**。
+  // 不停就会留下孤儿进程占着回环端口，下次启动直接撞端口。
+  // 先停子进程是为了把"进程没走干净"这件事挡在前面 —— 长连接断了可以重连，
+  // 孤儿进程留着却没人管。
+  if (localSupervisor) localSupervisor.dispose();
   streams.forEach((s) => { try { s.req.destroy(); } catch (e) { /* ignore */ } });
   streams.clear();
 });
