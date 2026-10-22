@@ -7,7 +7,7 @@
   "author": "HTW Media",
   "scripts": {
     "start": "electron .",
-    "test": "node --test js/api.test.cjs js/local.test.cjs js/local.block.test.cjs js/local-supervisor.test.cjs js/local-capabilities.test.cjs js/sse-parser.test.cjs js/tasks.test.cjs js/tasks.watch.test.cjs js/skills/workflow.test.cjs js/skills/workflow.mount.test.cjs js/skills/batch.test.cjs js/skills/batch.mount.test.cjs js/skills/tasks-panel.mount.test.cjs js/app.panels.test.mjs js/main.local.test.mjs",
+    "test": "node --test js/api.test.cjs js/local.test.cjs js/local.block.test.cjs js/local-supervisor.test.cjs js/local-capabilities.test.cjs js/call-headers.test.cjs js/ui.test.cjs js/sse-parser.test.cjs js/tasks.test.cjs js/tasks.watch.test.cjs js/skills/workflow.test.cjs js/skills/workflow.mount.test.cjs js/skills/batch.test.cjs js/skills/batch.mount.test.cjs js/skills/tasks-panel.mount.test.cjs js/app.panels.test.mjs js/main.local.test.mjs",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:mac": "electron-builder --mac"

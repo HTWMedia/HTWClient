@@ -323,6 +323,23 @@
     capabilitiesStoreBase = b;
     // 拉取失败不是错误：清单为空 = 本地无能力 = 全部走云端。
     try { await store.load(); } catch (e) { /* 拉不到就是"本地无能力" */ }
+    // 🔴 清单自报的协议版本再核一道（健康检查已比对过一次，这里是防御纵深：
+    //    健康响应不带版本的老实例握手不会拦）。对不上 → 清单作废，全部走云端；
+    //    读不到（null / 非数字）不拦 —— 老实例没有这个字段，不能把它当不兼容。
+    const LocalMod = window.HTWLocal;
+    const supported = (LocalMod && typeof LocalMod.SUPPORTED_PROTOCOL_VERSION === "number")
+      ? LocalMod.SUPPORTED_PROTOCOL_VERSION
+      : null;
+    const reported = (typeof store.protocolVersion === "number" && Number.isFinite(store.protocolVersion))
+      ? store.protocolVersion
+      : null;
+    if (supported !== null && reported !== null && reported !== supported) {
+      store.clear();
+      capabilitiesStore = null;
+      capabilitiesStoreBase = "";
+      syncLocalRouting();
+      return null;
+    }
     syncLocalRouting();
     return store;
   }

@@ -299,9 +299,12 @@ contextBridge.exposeInMainWorld("htw", {
         }
       );
 
-      req.on("error", (err) =>
-        resolve({ status: 0, ok: false, data: { errCode: 0, errMsg: err.message } })
-      );
+      req.on("error", () => {
+        // 与 call 出口同一口径（api.js 的网络失败出口）：网络类失败只给**中性中文陈述**，
+        // 不把英文原文（"socket hang up" / "ECONNRESET" 之类）透给用户。
+        // 4007（本地执行不可用）的语义不动 —— 这里不冒用它的码，也不谎称本地/云端哪一侧。
+        resolve({ status: 0, ok: false, data: { errCode: 0, errMsg: "网络连接失败，请检查网络或服务器状态。" } });
+      });
 
       // 分块写入以便回传进度：整块 write 时内核缓冲会一次性吞掉，
       // 界面只能显示"处理中…"。每块写完后回调 { loaded, total }。

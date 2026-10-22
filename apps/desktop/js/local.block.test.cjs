@@ -313,6 +313,29 @@ test("本地模式块: 监督器报 stopped → 选路判据失效，端点回�
 
 // 🔴 运行中的状态文案不能自相矛盾：总开关**关**着就说"业务请求仍走云端"；
 // **开**着就说清单内的业务请求走本机。一句固定文案会把总开关的样子说反。
+// 🔴 清单里的协议版本也要再核一道（健康检查已比过一次，防御纵深）：
+// 健康响应不带版本（老实例形态）握手不会拦，清单版本对不上 → 清单作废，端点走云端。
+test("本地模式块: 清单协议版本与客户端不匹配 → 清单作废，端点走云端", async () => {
+  const app = await bootApp({
+    route: (method, path) => {
+      if (path === "/api/v2/local/capabilities")
+        return { status: 200, ok: true, data: { protocolVersion: 2, endpoints: ["GET /api/v2/agent/voices"] } };
+      // 健康检查不带协议版本（老实例形态）：握手不会拦，清单侧必须再核一道。
+      return READY_HEALTH;
+    },
+  });
+  try {
+    app.App.local.setEnabled(true);
+    await app.els["local-apply"].fire("click");
+    assert.strictEqual(app.App.local.routing().hasStore, false, "版本对不上 → 清单不得进选路");
+    assert.strictEqual(api.resolveTarget("GET", "/api/v2/agent/voices"), "https://htwmedia.dpdns.org",
+      "端点走云端");
+    assert.strictEqual(api.localRouting.store, null, "选路判据里没有作废的清单");
+  } finally {
+    app.restore();
+  }
+});
+
 test("本地模式块: 运行中文案按总开关切换（不互相矛盾）", async () => {
   const app = await bootApp();
   try {
