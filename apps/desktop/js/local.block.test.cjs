@@ -3,6 +3,9 @@ const assert = require("node:assert");
 const api = require("./api.js");
 const Local = require("./local.js");
 const Caps = require("./local-capabilities.js");
+// 请求头物化的**同一份**口径（preload.call 直接用这个模块）：
+// 对请求头的断言建立在真实上线路径上，而不是在测试里另造一份规则。
+const Headers = require("./call-headers.js");
 
 /*
  * 本地模式设置块冒烟测试。
@@ -158,7 +161,10 @@ async function bootApp(opts) {
       loadConfig: async () => (opts.config || { apiBase: els["api-base"].value, apiKey: els["api-key"].value, localBase: "" }),
       saveConfig: (cfg) => { saved.push(cfg); return true; },
       call: async (method, path, body, apiKey, base) => {
-        calls.push({ method: method, path: path, body: body, apiKey: apiKey, base: base });
+        // 用 preload 同一份逻辑把实参物化成请求头：探活这类匿名请求
+        // 递下来的 apiKey 到底会不会变成AuthKey 头，由这份逻辑说了算。
+        const headers = Headers.buildCallHeaders(apiKey, body);
+        calls.push({ method: method, path: path, body: body, apiKey: apiKey, base: base, headers: headers });
         return route(method, path, body, apiKey, base);
       },
       // ---- 本地实例（监督器）----
@@ -237,11 +243,15 @@ test("本地模式块: 探活 ready → 状态行显示本地模式就绪（已�
     // 已就绪的实例不需要再配对：按钮保持禁用。
     assert.strictEqual(app.els["local-pair"].disabled, true, "已就绪时配对按钮应保持禁用");
 
-    // 探活走本地地址，且不带 AuthKey（健康检查不需要登录）。
+    // 探活走本地地址，且**请求头对象里没有 AuthKey 键**（健康检查不需要登录，
+    // 也不该把云端密钥递给本机进程 —— 连"空值的头"都不许出现，
+    // 断言建在真实上线的请求头上，不是实参形态上）。
     const health = app.calls.find((c) => c.path === "/api/v2/local/health");
     assert.ok(health, "应发出一次探活请求");
     assert.strictEqual(health.base, "http://127.0.0.1:51111");
-    assert.strictEqual(health.apiKey, undefined, "探活不应把 AuthKey 递给本机进程");
+    // 显式走省略通道：传 **null**（不是无意漏传的 undefined —— 那正是旧断言被骗过的原因）。
+    assert.strictEqual(health.apiKey, null, "探活必须显式传 null（省略通道哨兵），实际：" + String(health.apiKey));
+    assert.ok(!("AuthKey" in health.headers), "探活请求头不得带 AuthKey（空值头也不许），实际：" + JSON.stringify(health.headers));
 
     // 配置的键一起写，别把既有键丢掉（可执行文件路径是第 4 个键，
     // 「启用本地模式」总开关是第 5 个键）。
@@ -313,9 +323,13 @@ test("本地模式块: 一键配对成功 → 结果行提示成功，状态行�
     assert.ok(enroll, "应发出一次登记请求");
     assert.strictEqual(enroll.base, "https://htwmedia.dpdns.org", "登记走服务端地址");
     assert.strictEqual(enroll.apiKey, "test-key", "登记请求带 AuthKey");
+    assert.ok("AuthKey" in enroll.headers && enroll.headers.AuthKey === "test-key",
+      "登记的头仍带真 AuthKey（配对语义保持不变，实际：" + JSON.stringify(enroll.headers) + "）");
 
     const pair = app.calls.find((c) => c.path === "/api/local/pair");
     assert.ok(pair, "应发出一次配对请求");
+    assert.ok("AuthKey" in pair.headers && pair.headers.AuthKey === "test-key",
+      "配对的头仍带真 AuthKey（实际：" + JSON.stringify(pair.headers) + "）");
     assert.strictEqual(pair.base, "http://127.0.0.1:51111", "配对走本地实例地址");
     assert.strictEqual(pair.body.ServerUrl, "https://htwmedia.dpdns.org");
     assert.strictEqual(pair.body.Account, "a@x.com", "账号以登记响应回带值为准");

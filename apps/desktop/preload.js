@@ -7,6 +7,8 @@ const path = require("path");
 const http = require("http");
 const https = require("https");
 const { URL } = require("url");
+// call 请求头的唯一物化口径（省略通道也定义在这里：测试桩用同一份逻辑断言请求头）。
+const { buildCallHeaders } = require("./js/call-headers.js");
 
 const API_BASE = process.env.HTW_API_BASE || "https://htwmedia.dpdns.org";
 // 可选的大文件直连通道：默认关闭（空串），此时所有请求都走 API_BASE。
@@ -190,13 +192,14 @@ contextBridge.exposeInMainWorld("htw", {
   call: async (method, path, body, apiKey, baseOverride) => {
     const base = resolveBase(baseOverride);
     if (!isAllowedBase(base)) return baseRejected(base);
-    const headers = { AuthKey: apiKey || "" };
+    // 头物化走唯一口径（js/call-headers.js）：apiKey 为 null/undefined（省略通道）
+    // 时请求真的不带 AuthKey —— 探活/清单这类匿名请求连空值头都不发出去。
+    const headers = buildCallHeaders(apiKey, body);
     const init = { method, headers };
     // GET / DELETE 等不带体的请求，body 必须是 undefined：
     // Chromium 的 fetch 遇到 method=GET 且 body 非空会直接抛
     // "Request with GET/HEAD method cannot have body"。
     if (body !== undefined && body !== null) {
-      headers["Content-Type"] = "application/json";
       init.body = typeof body === "string" ? body : JSON.stringify(body);
     }
     const res = await fetch(`${base}${path}`, init);

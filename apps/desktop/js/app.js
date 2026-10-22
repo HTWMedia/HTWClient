@@ -508,7 +508,10 @@
     return {
       call: async function (method, path) {
         // 不带 AuthKey：健康检查不需要登录，也不该把云端密钥递给本机进程。
-        const res = await window.htw.call(method, pathOf(path), undefined, undefined, localBase);
+        // 🔴 显式传 **null**（省略通道哨兵）：preload 头物化对 null/undefined 一律
+        //    不建 AuthKey 键 —— 连"空值的头"都不出现（空值头在实例侧也会被当作
+        //    "带了凭据"处理）。探活与端点清单共用这一条 transport，两个出口同时覆盖。
+        const res = await window.htw.call(method, pathOf(path), undefined, null, localBase);
         const status = res ? res.status : 0;
         if (typeof status !== "number" || status < 200 || status >= 300) {
           const e = new Error("HTTP " + status);
