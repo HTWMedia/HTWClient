@@ -428,7 +428,18 @@ test("normalize: errCode:0 的壳不算失败（0 = 没有错误）", () => {
 });
 
 // 判定面仍然要接住真正的错误码：0 之外的非零码照旧判失败。
+// 🔴 夹具必须保持 **HTTP 200 + 无 ok 字段** 的形状：它钉的是 api.js 的兜底分支
+// （ok === undefined && 失败壳码）—— 该分支目前只有这条覆盖；
+// 夹具改成非 2xx 会被 `if (!res.ok)` 分支先接住，兜底就没人看了。
 test("normalize: errCode 非 0 的壳仍判失败", () => {
+  const r = api.normalize({ ok: true, status: 200, data: { errCode: 403, errMsg: "本进程不是本地实例，不接受配对。" } });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.code, 403);
+  assert.strictEqual(r.message, "本进程不是本地实例，不接受配对。");
+});
+
+// 非 2xx 变体单独钉住：`if (!res.ok)` 分支对同一壳的表现必须与兜底分支一致。
+test("normalize: 非 2xx 失败壳同样判失败（403 变体）", () => {
   const r = api.normalize({ ok: false, status: 403, data: { errCode: 403, errMsg: "本进程不是本地实例，不接受配对。" } });
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.code, 403);
@@ -469,10 +480,12 @@ function routingWindow(respond) {
       },
       upload: async (method, path, filePaths, fields, headers, onProgress, fileField, base) => {
         seen.upload.push({ method, path, fields, headers, fileField, base });
+        if (typeof respond === "function") return await respond(base, method, path);
         return { ok: true, status: 200, data: { ok: true, data: {} } };
       },
       download: async (method, path, key, base) => {
         seen.download.push({ method, path, key, base });
+        if (typeof respond === "function") return await respond(base, method, path);
         return { ok: true, status: 200 };
       },
       subscribeTask: (streamId, domain, taskId, key, base) => {
@@ -829,4 +842,73 @@ test("本地失败: 选路未命中走云端，云端失败不带 localFailed �
     assert.strictEqual(countByBase(seen, CLOUD), 1);
     assert.strictEqual(countByBase(seen, LOCAL), 0, "清单未命中就不该碰本地");
   });
+});
+
+// ④ download 出口：选路命中本地、返回失败 → 标记挂在 **Error 对象**上，
+// throw 契约不变（调用方仍收到抛出）。什么使其变红：download 的 throw 分支不打标记。
+test("本地失败: download 选路命中本地、返回失败 → Error 带 localFailed/localUnavailable 标记", async () => {
+  await withRouting({
+    endpoints: ["GET /api/v2/edit/output"],
+    respond: (base) => {
+      if (base === LOCAL) return { ok: false, status: 0, data: null, error: "fetch failed" };
+      return { ok: true, status: 200 };
+    },
+  }, async (api, seen) => {
+    let err = null;
+    try { await api.download("GET", "/api/v2/edit/output"); } catch (e) { err = e; }
+    assert.ok(err, "download 失败仍要抛出（throw 契约不破坏）");
+    assert.strictEqual(err.localFailed, true, "本地已选定且失败 → 错误对象必须带 localFailed 标记");
+    assert.strictEqual(err.localUnavailable, true, "网络类失败同时带 localUnavailable 标记");
+    assert.strictEqual(err.message, "fetch failed", "文案不变（只加标记）");
+
+    // 云端失败不带标记：错误挂在原样 throw 上。
+    let cloudErr = null;
+    try { await api.download("GET", "/api/v2/other/output"); } catch (e) { cloudErr = e; }
+    if (cloudErr) {
+      assert.strictEqual(cloudErr.localFailed, undefined, "云端失败不许带本地失败标记");
+      assert.strictEqual(cloudErr.localUnavailable, undefined, "云端失败不许带本地不可用标记");
+    }
+  });
+});
+
+// ⑤ 分片上传出口：选路命中本地（分片端点在清单）、分片失败 → 收敛到 markLocalFailed
+// 口径（localFailed 标记 + "本地执行失败："前缀），不再是裸的中文分片异常。
+// 什么使其变红：chunkedUpload 失败只抛裸 Error、不带标记。
+test("本地失败: 分片上传选路本地、分片失败 → localFailed 标记 + 文案前缀，不发合并请求", async () => {
+  await withRouting({
+    endpoints: ["POST /api/v2/files/chunk"],
+    respond: (base) => {
+      if (base === LOCAL) return { ok: false, status: 500, data: { ok: false, errCode: 500, errMsg: "本地实例内部错误" } };
+      return { ok: true, status: 200, data: { ok: true, data: {} } };
+    },
+  }, async (api, seen) => {
+    let err = null;
+    try { await api.upload("POST", "/api/v2/image/recognize", [bigFile()], {}); } catch (e) { err = e; }
+    assert.ok(err, "分片失败要抛出错误");
+    assert.strictEqual(err.localFailed, true, "本地已选定且分片失败 → 必须带 localFailed 标记");
+    assert.ok(/^本地执行失败：/.test(err.message), "失败文案带前缀，实际：" + err.message);
+    assert.ok(/本地实例内部错误/.test(err.message), "原始原因留在文案里，实际：" + err.message);
+    assert.strictEqual(err.code, 500, "原始错误码要透传");
+    assert.strictEqual(seen.call.filter((c) => c.path === "/api/v2/files/complete").length, 0,
+      "分片失败不得发合并请求");
+  });
+});
+
+// M2：失败标记的重建不能丢字段 —— 旧实现按白名单重建，把 data / raw 之外的扩展字段抹掉了。
+// 正确做法是展开原形状再覆写标记字段。
+test("本地失败: markLocalFailed 不丢原形状的扩展字段（data/raw 等）", () => {
+  const shape = { ok: false, code: "E1", message: "实例出错", raw: { a: 1 }, data: { b: 2 }, route: "local" };
+  const marked = api.markLocalFailed(shape);
+  assert.strictEqual(marked.ok, false);
+  assert.strictEqual(marked.localFailed, true);
+  assert.ok(/^本地执行失败：/.test(marked.message), "文案带前缀，实际：" + marked.message);
+  assert.deepStrictEqual(marked.raw, { a: 1 }, "raw 不能被丢");
+  assert.deepStrictEqual(marked.data, { b: 2 }, "data 不能被丢");
+  assert.strictEqual(marked.route, "local", "其它扩展字段也要保留");
+  // localUnavailable 分支同样不丢字段。
+  const un = api.markLocalFailed({ ok: false, code: 4007, localUnavailable: true,
+    message: "本地执行不可用，请检查网络或服务器状态。", data: { c: 3 } });
+  assert.strictEqual(un.localUnavailable, true);
+  assert.strictEqual(un.localFailed, true);
+  assert.deepStrictEqual(un.data, { c: 3 }, "localUnavailable 分支同样不能丢 data");
 });

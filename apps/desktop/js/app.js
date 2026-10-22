@@ -41,15 +41,19 @@
   //  - failed ≠ 实例已停（进程正跑时收到 start("") 也会翻成 failed）：
   //    所以失败文案只说"启动失败"，不说"已停止"。
   //
-  // ⚠️ 本轮**不切业务流量**：状态行必须显式区分「实例在跑」与「业务走本地」。
-  // 运行中的文案写明"业务请求仍走云端"，免得用户以为业务已经切到本机。
+  // ⚠️ 状态行必须显式区分「实例在跑」与「业务走本地」：
+  //    运行中的文案按**总开关**走 —— 开：清单内的业务请求走本机（说清哪些走本机）；
+  //    关：业务请求仍走云端。一句固定文案会把开关的实际样子说反。
   const LOCAL_INSTANCE_TEXTS = {
     idle: "本地实例：请先填写可执行文件路径。",
     starting: "本地实例：正在启动…",
     stopping: "本地实例：正在停止…",
     stopped: "本地实例：已停止。",
-    running: "本地实例运行中（地址 {base}）。业务请求仍走云端。",
     backoff: "本地实例崩溃退避中，稍后会自动重试。",
+  };
+  const LOCAL_RUNNING_TEXTS = {
+    enabled: "本地实例运行中（地址 {base}）。清单内的业务请求走本机。",
+    disabled: "本地实例运行中（地址 {base}）。业务请求仍走云端。",
   };
   // 失败原因 → 中文（键是监督器的机器契约取值）。
   const LOCAL_INSTANCE_REASON_TEXTS = {
@@ -378,7 +382,9 @@
     const p = payload || {};
     const st = String(p.state || "");
     if (st === "running") {
-      setLocalStateText(LOCAL_INSTANCE_TEXTS.running.replace("{base}", String(p.base || "")));
+      // 运行中的文案按总开关走（LOCAL_RUNNING_TEXTS）：文案与开关的实际样子不能互相矛盾。
+      const template = localModeEnabled ? LOCAL_RUNNING_TEXTS.enabled : LOCAL_RUNNING_TEXTS.disabled;
+      setLocalStateText(template.replace("{base}", String(p.base || "")));
     } else if (st === "failed") {
       const why = LOCAL_INSTANCE_REASON_TEXTS[p.reason] || String(p.reason || "原因未知");
       setLocalStateText("本地实例启动失败：" + why + "。");

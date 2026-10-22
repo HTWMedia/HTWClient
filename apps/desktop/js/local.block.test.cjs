@@ -311,6 +311,26 @@ test("本地模式块: 监督器报 stopped → 选路判据失效，端点回�
   }
 });
 
+// 🔴 运行中的状态文案不能自相矛盾：总开关**关**着就说"业务请求仍走云端"；
+// **开**着就说清单内的业务请求走本机。一句固定文案会把总开关的样子说反。
+test("本地模式块: 运行中文案按总开关切换（不互相矛盾）", async () => {
+  const app = await bootApp();
+  try {
+    const runningPayload = { ok: true, state: "running", base: "http://127.0.0.1:51111", reason: "", attempt: 1, pid: 4242 };
+    app.emitLocalEvent(runningPayload);
+    const offText = app.els["local-state"].textContent;
+    assert.ok(/业务请求仍走云端/.test(offText), "总开关关 → 文案写走云端，实际：" + offText);
+
+    app.App.local.setEnabled(true);
+    app.emitLocalEvent(runningPayload);
+    const onText = app.els["local-state"].textContent;
+    assert.ok(/清单内的业务请求走本机/.test(onText), "总开关开 → 文案写走本机，实际：" + onText);
+    assert.ok(!/业务请求仍走云端/.test(onText), "开着的文案不得保留旧说法，实际：" + onText);
+  } finally {
+    app.restore();
+  }
+});
+
 test("本地模式块: 地址为空 → 状态行显示本地模式未配置，配对按钮禁用", async () => {
   const app = await bootApp();
   try {

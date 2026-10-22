@@ -184,13 +184,13 @@
   function markLocalFailed(norm) {
     if (!norm || norm.ok !== false) return norm;
     if (norm.localFailed) return norm;
+    // 🔴 **展开原形状再覆写标记**：失败形状可能带着 data / raw 之类的扩展字段
+    //    （raw 是排查凭据，data 是上游回带内容），白名单重建会把它们抹掉 —— 都不能丢。
     if (norm.localUnavailable) {
-      return { ok: false, code: norm.code, localUnavailable: true, localFailed: true,
-        message: norm.message, raw: norm.raw };
+      return Object.assign({}, norm, { localUnavailable: true, localFailed: true });
     }
     const detail = norm.message ? String(norm.message) : "未知错误";
-    return { ok: false, code: norm.code, localFailed: true,
-      message: LOCAL_FAILED_PREFIX + detail, raw: norm.raw };
+    return Object.assign({}, norm, { localFailed: true, message: LOCAL_FAILED_PREFIX + detail });
   }
 
   async function call(method, path, body, baseOverride) {
@@ -291,7 +291,27 @@
             uploadBase
           );
           const norm = normalize(res);
-          if (!norm.ok) { const e = new Error("分片 " + i + " 上传失败: " + (norm.message || norm.code)); e.httpError = true; failed = e; return; }
+          if (!norm.ok) {
+            // 🔴 本地已选定但分片执行失败：收敛到 markLocalFailed 口径
+            //    （localFailed 标记 + "本地执行失败："前缀），不抛裸的分片异常；
+            //    throw 契约不变（调用方仍收到 Error），只是错误体带上了明确的标记。
+            const chunkLocal = !!(_localBase && uploadBase === _localBase);
+            if (chunkLocal) {
+              const marked = markLocalFailed(norm);
+              const e = new Error(marked.message + "（分片 " + i + "）");
+              e.httpError = true;
+              e.localFailed = true;
+              e.code = norm.code;
+              if (marked.localUnavailable === true) e.localUnavailable = true;
+              e.raw = norm.raw;
+              failed = e;
+            } else {
+              const e = new Error("分片 " + i + " 上传失败: " + (norm.message || norm.code));
+              e.httpError = true;
+              failed = e;
+            }
+            return;
+          }
           done++;
           report();
         } catch (e) { failed = e; return; }
@@ -448,9 +468,20 @@
   async function download(method, path, baseOverride) {
     if (!_key) throw keyError();
     // baseOverride 优先（显式指定）；否则由选路决定。
-    const target = baseOverride || resolveTarget(method, path);
+    const routedLocal = !baseOverride && shouldUseLocal(method, path);
+    const target = baseOverride || (routedLocal ? _localBase : _base);
+    const localSelected = routedLocal && !!(_localBase && target === _localBase);
     const res = await window.htw.download(method, path, _key, target);
-    if (res && !res.ok && res.error) throw new Error(res.error);
+    if (res && !res.ok && res.error) {
+      // 失败仍按既有契约**抛出**；本地已选定的失败把标记挂在 Error 对象上
+      // （throw 契约不变），界面据此把"本地失败"与云端失败分开显示。
+      const e = new Error(res.error);
+      if (localSelected) {
+        e.localFailed = true;
+        if (isNetworkFailure(e)) e.localUnavailable = true;
+      }
+      throw e;
+    }
     return res;
   }
 
@@ -513,6 +544,8 @@
     hasKey: hasKey, authHeader: authHeader,
     call: call, get: get, post: post, upload: upload, download: download,
     normalize: normalize, pollTask: pollTask, onQuotaExceeded: onQuotaExceeded,
+    // 失败标记（可单测：界面层 / 汇总层也用它判别本地失败）。
+    markLocalFailed: markLocalFailed,
     LOCAL_UNAVAILABLE_CODE: LOCAL_UNAVAILABLE_CODE,
     LOCAL_UNAVAILABLE_MESSAGE: LOCAL_UNAVAILABLE_MESSAGE,
     subscribeTask: subscribeTask, unsubscribeTask: unsubscribeTask,
