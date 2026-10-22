@@ -242,6 +242,10 @@
   // 单文件且超过该阈值时走分片上传，规避反向代理 / Cloudflare 的 body 大小限制 (413)。
   // 单片 10MB；需确保反向代理 client_max_body_size >= 单片大小（建议 16m），Cloudflare 免费版单请求 100MB 上限内。
   const CHUNK_SIZE = 10 * 1024 * 1024;
+  // 分片上传的实际请求端点：选路输入是**它本身**，不是被拆分的原始业务端点。
+  // 清单只收"能在本机独立执行"的端点 —— 清单没有分片端点 ⇒ 分片上传永不路由本地
+  // （原始端点命中也不能把大文件文件端点带进本机）。
+  const CHUNK_UPLOAD_PATH = "/api/v2/files/chunk";
 
   function genUploadId() {
     const buf = new Uint8Array(16);
@@ -257,9 +261,10 @@
     const total = Math.max(1, Math.ceil(full.length / CHUNK_SIZE));
     // 大文件走分片上传；若配置了直连通道（_directBase）则走它，否则走 _base。
     // 🔴 **直连语义不能被改坏**：分片上传的直连站是"源站直传"优化，与本地无关。
-    //    所以选路的口径是：命中本地 → 本地基地址；**未命中 → 仍然是直连站**
-    //    （不是云端 _base —— 那会把既有的大文件直传行为改掉）。
-    const uploadBase = shouldUseLocal(method, path) ? _localBase : _directBase;
+    //    所以选路的口径是：分片端点（CHUNK_UPLOAD_PATH）命中清单 → 本地基地址；
+    //    **未命中 → 仍然是直连站**（不是云端 _base —— 那会把既有的大文件直传行为改掉）。
+    //    注意输入是分片端点本身，不是被拆分的原始业务端点（path 只是给合并请求带回去用的）。
+    const uploadBase = shouldUseLocal("POST", CHUNK_UPLOAD_PATH) ? _localBase : _directBase;
     let failed = null;
     let next = 0;
     let done = 0;

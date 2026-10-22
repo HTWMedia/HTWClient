@@ -410,7 +410,13 @@
     supervisorSnapshot = payload;
     adoptSupervisorBase(payload.base);
     renderLocalState(payload);
-    if (payload.state !== "running") return;
+    if (payload.state !== "running") {
+      // 🔴 监督器报非 running（停止 / 退避 / 失败 / 启动中）：实例不保证活着，
+      // 之前探活得到的"就绪 / 已配对"立刻作废 —— 不然实例都停了，
+      // 业务请求还往本机发。端点选路整体回到云端；等下次 running 事件重新探活再恢复。
+      resetLocalRouting();
+      return;
+    }
     // 实例跑起来了 → 地址回填 + 自动探活。
     // 为什么地址要回填：端口是系统随机分配的，桌面端只能从子进程上报里拿。
     // 用户把它手工抄进输入框，抄错一个字符就全白搭 —— 监督器报什么就是什么。

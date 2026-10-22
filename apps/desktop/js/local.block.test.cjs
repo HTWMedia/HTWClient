@@ -282,6 +282,35 @@ test("本地模式块: 探活 500 → 不算就绪，状态行给失败文案，
   }
 });
 
+// 🔴 就绪判据也必须**跟着监督器走**：实例报非 running（停止/退避/失败）时，
+// 之前探活得到的"就绪+已配对"立刻作废 —— 不然实例都停了，业务请求还往本机发。
+test("本地模式块: 监督器报 stopped → 选路判据失效，端点回到云端", async () => {
+  const app = await bootApp({
+    route: (method, path) => {
+      if (path === "/api/v2/local/capabilities")
+        return { status: 200, ok: true, data: { protocolVersion: 1, endpoints: ["GET /api/v2/agent/voices"] } };
+      return READY_HEALTH;
+    },
+  });
+  try {
+    // 先把前提立起来：总开关开 + 探活就绪 + 已配对 + 清单命中。
+    app.App.local.setEnabled(true);
+    await app.els["local-apply"].fire("click");
+    assert.strictEqual(app.App.local.routing().ready, true, "前提：实例已就绪");
+    assert.strictEqual(app.App.local.routing().paired, true, "前提：已配对且解锁");
+    assert.strictEqual(api.resolveTarget("GET", "/api/v2/agent/voices"), "http://127.0.0.1:51111",
+      "前提：清单内的端点走本地");
+    // 监督器状态事件（真实上线路径：主进程推送）报 stopped。
+    app.emitLocalEvent({ ok: true, state: "stopped", base: "", reason: "", attempt: 0, pid: null });
+    assert.strictEqual(api.localRouting.ready, false, "监督器报非 running → 就绪判据必须失效");
+    assert.strictEqual(api.localRouting.paired, false, "配对判据一并失效");
+    assert.strictEqual(api.resolveTarget("GET", "/api/v2/agent/voices"), "https://htwmedia.dpdns.org",
+      "端点回到云端");
+  } finally {
+    app.restore();
+  }
+});
+
 test("本地模式块: 地址为空 → 状态行显示本地模式未配置，配对按钮禁用", async () => {
   const app = await bootApp();
   try {

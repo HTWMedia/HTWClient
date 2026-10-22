@@ -594,15 +594,37 @@ test("选路: upload 命中走本地、未命中走云端", async () => {
   });
 });
 
-test("选路: chunkedUpload 命中走本地、未命中仍是直连站", async () => {
+// 🔴 分片上传的选路输入是**分片端点本身**（/api/v2/files/chunk），不是原始端点。
+// 清单只收"能在本机独立执行"的端点，文件/分片类端点不在清单里 ——
+// 也就是说：**清单没有 chunk 端点 ⇒ 分片上传永不路由本地**，
+// 哪怕原始业务端点在清单里命中也不行。
+// 什么使其变红：chunkedUpload 拿原始端点去选路 → 原始端点命中就把分片打到了本地。
+test("选路: 分片上传按分片端点选路（清单无 chunk 端点 ⇒ 分片永不路由本地）", async () => {
   await withRouting({ endpoints: ["POST /api/v2/image/recognize"] }, async (api, seen) => {
-    // 命中：分片与合并都打本地。
+    // 原始端点在清单里命中，但清单没有 chunk 端点 → 分片与合并都不许打本地。
+    await api.upload("POST", "/api/v2/image/recognize", [bigFile()], {});
+    const chunkBases = seen.upload.map((u) => u.base);
+    assert.ok(chunkBases.every((b) => b === DIRECT),
+      "清单没有分片端点 → 分片打不打本地？实际：" + chunkBases.join(","));
+    assert.ok(chunkBases.every((b) => b !== LOCAL), "分片不得路由本地");
+    const completeBases = seen.call.filter((c) => c.path === "/api/v2/files/complete").map((c) => c.base);
+    assert.ok(completeBases.every((b) => b === DIRECT), "合并请求同样不打本地，实际：" + completeBases.join(","));
+  });
+});
+
+test("选路: chunkedUpload 分片端点在清单里 → 分片与合并走本地", async () => {
+  await withRouting({ endpoints: ["POST /api/v2/files/chunk"] }, async (api, seen) => {
+    // 分片端点命中：分片与合并都打本地。
     await api.upload("POST", "/api/v2/image/recognize", [bigFile()], {});
     assert.strictEqual(seen.upload[0].base, LOCAL, "命中的分片上传走本地");
     assert.strictEqual(seen.upload[0].path, "/api/v2/files/chunk", "分片路径逐字不变");
     assert.strictEqual(seen.call[0].base, LOCAL, "合并请求与分片同一个 base");
     assert.strictEqual(seen.call[0].path, "/api/v2/files/complete", "合并路径逐字不变");
+  });
+});
 
+test("选路: chunkedUpload 未命中仍是直连站", async () => {
+  await withRouting({ endpoints: ["GET /api/v2/agent/voices"] }, async (api, seen) => {
     // 未命中：直连站语义不能被改坏（不是云端 _base）。
     const beforeUpload = seen.upload.length;
     const beforeCall = seen.call.length;
