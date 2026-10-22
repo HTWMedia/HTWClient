@@ -245,6 +245,68 @@
   // 三态文案与状态判定都在 js/local.js（机器契约只在那里翻译），
   // 这里只做接线：读地址 → 登记基地址 → 探活 → 显示状态 → 允许配对。
 
+  // ---- 本地选路：把实例状态与能力清单喂给 api.js ----
+  //
+  // 判据本身全在 api.js 那边（setLocalRouting），这里只负责**提供事实**：
+  //  - enabled     用户总开关（默认关；设置页勾选与落盘由后续任务接）。
+  //  - ready       实例可达（探活通过）。
+  //  - paired      已配对**且已解锁**（探活三态为 ready）——
+  //                未配对 / 未解锁时鉴权层会 500，那时切过去只会拿到坏结果。
+  //  - compatible  协议版本握手通过。
+  //  - store       端点能力清单（js/local-capabilities.js 的 store）。
+  let localModeEnabled = false;
+  let localInstanceReady = false;
+  let localInstancePaired = false;
+  let localInstanceCompatible = false;
+  let capabilitiesStore = null;
+  let capabilitiesStoreBase = "";
+
+  // 把当前事实喂给 api.js。任何一次状态变化后都要调一次 ——
+  // 不调的话 api.js 会拿着上一次的状态选路（地址都换了还往老地址发）。
+  function syncLocalRouting() {
+    const api = window.HTWApi;
+    if (!api || typeof api.setLocalRouting !== "function") return;
+    api.setLocalRouting({
+      enabled: localModeEnabled,
+      ready: localInstanceReady,
+      paired: localInstancePaired,
+      compatible: localInstanceCompatible,
+      store: capabilitiesStore,
+    });
+  }
+
+  // 选路判据整体作废（实例没起来 / 地址变了 / 没配置）：一律走云端。
+  function resetLocalRouting() {
+    localInstanceReady = false;
+    localInstancePaired = false;
+    localInstanceCompatible = false;
+    capabilitiesStore = null;
+    capabilitiesStoreBase = "";
+    syncLocalRouting();
+  }
+
+  // 实例就绪后拉一次端点能力清单。
+  // 清单**与实例生命周期绑定**：地址变了就重新拉（缓存按地址记）。
+  // 拉不到 / 为空 → store 查不到任何端点 → 选路全走云端（不报错、不阻断）。
+  async function loadCapabilitiesStore(base) {
+    const Caps = window.HTWLocalCapabilities;
+    const b = String(base || "").trim();
+    if (!Caps || typeof Caps.createStore !== "function" || !b) {
+      capabilitiesStore = null;
+      capabilitiesStoreBase = "";
+      syncLocalRouting();
+      return null;
+    }
+    if (capabilitiesStore && capabilitiesStoreBase === b) return capabilitiesStore;
+    const store = Caps.createStore({ base: b, transport: localTransport(b) });
+    capabilitiesStore = store;
+    capabilitiesStoreBase = b;
+    // 拉取失败不是错误：清单为空 = 本地无能力 = 全部走云端。
+    try { await store.load(); } catch (e) { /* 拉不到就是"本地无能力" */ }
+    syncLocalRouting();
+    return store;
+  }
+
   // ---- 本地实例：启停与状态 ----
   // 状态文案与判定口径见 LOCAL_INSTANCE_TEXTS 上面的注释。
 
@@ -449,6 +511,8 @@
     const localBase = currentLocalBase();
     if (!Local || typeof Local.probeHealth !== "function") {
       confirmedLocalState = null;
+      // 选路判据作废：模块都不在，本地实例不可用 → 走云端。
+      resetLocalRouting();
       setLocalStatus(LOCAL_MODULE_MISSING_TEXT);
       setLocalPairEnabled(false);
       return { ok: false, state: "invalid", message: LOCAL_MODULE_MISSING_TEXT };
@@ -460,9 +524,10 @@
       r = { ok: false, state: "unreachable", message: (e && e.message) ? e.message : String(e) };
     }
     if (!r || r.ok !== true) {
-      // 探活失败 = 未就绪：配对必须被状态自检拦下。
+      // 探活失败 = 未就绪：配对必须被状态自检拦下，选路也一并作废。
       confirmedLocalState = null;
       localProtocolMismatch = false;
+      resetLocalRouting();
       setLocalStatus((r && r.message) ? r.message : "无法连接本地实例，请先启动或检查地址。");
       setLocalPairEnabled(false);
       return r;
@@ -482,6 +547,13 @@
     if (supported !== null && typeof version === "number" && version !== supported) {
       confirmedLocalState = null;
       localProtocolMismatch = true;
+      // 实例可达但握手不兼容 → 选路走云端（ready 为真、compatible 为假）。
+      localInstanceReady = true;
+      localInstancePaired = false;
+      localInstanceCompatible = false;
+      capabilitiesStore = null;
+      capabilitiesStoreBase = "";
+      syncLocalRouting();
       setLocalStatus(LOCAL_PROTOCOL_MISMATCH_TEXT);
       setLocalPairEnabled(false);
       setLocalPairResult(LOCAL_PROTOCOL_MISMATCH_TEXT);
@@ -491,6 +563,21 @@
     // 状态文案取机器契约的映射表（不在这里另造一套说法）。
     const text = (Local.STATE_TEXT && Local.STATE_TEXT[r.state]) || r.message || "";
     confirmedLocalState = r.state;
+    // ---- 选路判据 ----
+    // 实例可达（ready）与握手兼容（compatible）：探活过了 + 版本对上了。
+    // 已配对**且已解锁**才算 paired：探活三态里只有 ready 满足
+    // （notPaired / pairedNotUnlocked 时鉴权层会 500，不能切本地）。
+    localInstanceReady = true;
+    localInstanceCompatible = true;
+    localInstancePaired = (r.state === "ready");
+    if (localInstancePaired) {
+      // 就绪了才拉清单：没配对时拉到的清单也用不上。
+      await loadCapabilitiesStore(localBase);
+    } else {
+      capabilitiesStore = null;
+      capabilitiesStoreBase = "";
+    }
+    syncLocalRouting();
     setLocalStatus(text);
     // 配对按钮的可用性跟着三态走：
     // - notPaired（还没配过对）→ 可以配对，这正是「一键配对」的主用例；
@@ -511,6 +598,9 @@
     if (norm.ok && norm.base === userLocalBase) return;
     confirmedLocalState = null;
     localProtocolMismatch = false;
+    // 地址一改，上一次探活的结果作废 → 选路判据也一并作废
+    // （不然会拿着旧地址的就绪状态往新地址发请求）。
+    resetLocalRouting();
     setLocalStatus(LOCAL_BASE_CHANGED_TEXT);
     setLocalPairEnabled(false);
     setLocalPairResult("");
@@ -533,6 +623,8 @@
       userLocalBase = "";
       confirmedLocalState = null;
       localProtocolMismatch = false;
+      // 关闭本地模式 → 选路判据整体作废（清单也清掉：地址没了，清单无意义）。
+      resetLocalRouting();
       if (api && api.setLocalBase) api.setLocalBase("");
       saveConfigAll("");
       setLocalStatus(LOCAL_NOT_CONFIGURED);
@@ -557,6 +649,8 @@
     confirmedLocalState = null;
     // 换了地址，之前那次探活的版本判定也作废（新地址还没探过）。
     localProtocolMismatch = false;
+    // 换了地址，之前的清单与就绪判据也作废（清单与实例生命周期绑定）。
+    resetLocalRouting();
     // 登记 = 进 preload 白名单。登记失败（地址格式非法）不落盘、不生效。
     const res = api && api.setLocalBase ? api.setLocalBase(base) : null;
     if (res && res.ok === false) {
@@ -823,6 +917,22 @@
       toggle: toggleLocal,
       stateOf: function () { return supervisorSnapshot; },
       base: currentLocalBase,
+      // 本地选路状态（给 api.js 的判据用；后续任务接总开关时也走这里）。
+      routing: function () {
+        return {
+          enabled: localModeEnabled,
+          ready: localInstanceReady,
+          paired: localInstancePaired,
+          compatible: localInstanceCompatible,
+          hasStore: !!capabilitiesStore,
+        };
+      },
+      // 总开关（默认关）。设置页勾选与落盘接上以后由它驱动。
+      setEnabled: function (on) {
+        localModeEnabled = !!on;
+        syncLocalRouting();
+        return localModeEnabled;
+      },
     },
   };
 })();

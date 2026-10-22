@@ -429,8 +429,293 @@ test("normalize: errCode:0 的壳不算失败（0 = 没有错误）", () => {
 
 // 判定面仍然要接住真正的错误码：0 之外的非零码照旧判失败。
 test("normalize: errCode 非 0 的壳仍判失败", () => {
-  const r = api.normalize({ ok: true, status: 200, data: { errCode: 403, errMsg: "本进程不是本地实例，不接受配对。" } });
+  const r = api.normalize({ ok: false, status: 403, data: { errCode: 403, errMsg: "本进程不是本地实例，不接受配对。" } });
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.code, 403);
   assert.strictEqual(r.message, "本进程不是本地实例，不接受配对。");
+});
+
+// =====================================================================
+// 选路（端点能力清单）
+// =====================================================================
+//
+// 选路的判据全在 api.js 里（setLocalRouting / resolveTarget），这里用
+// **真模块**（js/local-capabilities.js）的 store 喂清单：
+// 造一个假的 store 只能测出"参数传对了"，测不出"路径模式匹配"，
+// 而那正是清单最容易出错的地方（模式匹配不是前缀匹配）。
+const Caps = require("./local-capabilities.js");
+
+const CLOUD = "https://htwmedia.dpdns.org";
+const LOCAL = "http://127.0.0.1:51111";
+const DIRECT = "https://direct.example.com";
+
+// 5 个出口都能记账的桩窗口。
+function routingWindow() {
+  const seen = { call: [], upload: [], download: [], subscribe: [] };
+  const win = {
+    // genUploadId 用 window.crypto（Node 里没有 window.self）。
+    crypto: globalThis.crypto,
+    htw: {
+      apiBase: CLOUD,
+      localBase: LOCAL,
+      directBase: DIRECT,
+      registerBase: () => {},
+      call: async (method, path, body, key, base) => {
+        seen.call.push({ method, path, body, key, base });
+        return { ok: true, status: 200, data: { ok: true, data: {} } };
+      },
+      upload: async (method, path, filePaths, fields, headers, onProgress, fileField, base) => {
+        seen.upload.push({ method, path, fields, headers, fileField, base });
+        return { ok: true, status: 200, data: { ok: true, data: {} } };
+      },
+      download: async (method, path, key, base) => {
+        seen.download.push({ method, path, key, base });
+        return { ok: true, status: 200 };
+      },
+      subscribeTask: (streamId, domain, taskId, key, base) => {
+        seen.subscribe.push({ streamId, domain, taskId, key, base });
+        return Promise.resolve({ ok: true });
+      },
+    },
+  };
+  return { win, seen };
+}
+
+// 造一份清单（真 store：模式匹配、查询串剥除都走真逻辑）。
+async function makeStore(endpoints) {
+  const store = Caps.createStore({
+    base: LOCAL,
+    transport: {
+      call: async () => ({ ok: true, status: 200, data: { protocolVersion: 1, endpoints: endpoints } }),
+    },
+  });
+  await store.load();
+  return store;
+}
+
+// 装上选路状态再跑一段断言。opts 缺省即"全满足"。
+async function withRouting(opts, fn) {
+  const o = opts || {};
+  const { win, seen } = routingWindow();
+  await withStubWindow(win, async (localApi) => {
+    localApi.setKey("test-key");
+    localApi.setLocalRouting({
+      enabled: o.enabled !== false,
+      ready: o.ready !== false,
+      paired: o.paired !== false,
+      compatible: o.compatible !== false,
+      store: o.store === null ? null : (o.store || await makeStore(o.endpoints || [])),
+    });
+    return await fn(localApi, seen);
+  });
+}
+
+// 小文件（整包上传用）。
+function smallFile(name) {
+  const buf = new ArrayBuffer(8);
+  return { name: name || "a.bin", buffer: buf };
+}
+
+// 大文件（超过单片 10MB，走分片上传）。
+function bigFile() {
+  return { name: "big.bin", buffer: new ArrayBuffer(10 * 1024 * 1024 + 1024) };
+}
+
+// ① 总开关关 → 云端。
+// 什么使其变红：把 setLocalRouting 里的 enabled 判据去掉
+// （或让 shouldUseLocal 不看 enabled）→ 命中清单也会切本地 → 这条红。
+test("选路: 总开关关 → 走云端（即使清单命中）", async () => {
+  await withRouting({ enabled: false, endpoints: ["GET /api/v2/agent/voices"] }, async (api, seen) => {
+    await api.call("GET", "/api/v2/agent/voices");
+    assert.strictEqual(seen.call[0].base, CLOUD, "总开关关着就必须走云端");
+  });
+});
+
+// ② 开关开 + 就绪 + 清单命中 → 本地。
+// 什么使其变红：shouldUseLocal 恒假 / 不查 store / 不剥查询串 → 这条红。
+test("选路: 开关开 + 就绪 + 清单命中 → 走本地", async () => {
+  await withRouting({ endpoints: ["GET /api/v2/agent/voices"] }, async (api, seen) => {
+    await api.call("GET", "/api/v2/agent/voices");
+    assert.strictEqual(seen.call[0].base, LOCAL, "命中的端点该走本地");
+  });
+});
+
+// ③ 开关开但未配对 → 云端。
+// 什么使其变红：去掉 paired 判据 → 这条红。
+test("选路: 未配对 → 走云端", async () => {
+  await withRouting({ paired: false, endpoints: ["GET /api/v2/agent/voices"] }, async (api, seen) => {
+    await api.call("GET", "/api/v2/agent/voices");
+    assert.strictEqual(seen.call[0].base, CLOUD, "没配对就不能切本地（那时鉴权层会 500）");
+  });
+});
+
+// ④ 开关开但握手不兼容 → 云端。
+// 什么使其变红：去掉 compatible 判据 → 这条红。
+test("选路: 握手不兼容 → 走云端", async () => {
+  await withRouting({ compatible: false, endpoints: ["GET /api/v2/agent/voices"] }, async (api, seen) => {
+    await api.call("GET", "/api/v2/agent/voices");
+    assert.strictEqual(seen.call[0].base, CLOUD, "版本对不上就不能切本地");
+  });
+});
+
+// ⑤ 开关开 + 就绪但清单未命中 → 云端。
+// 什么使其变红：把 store.has 的结果当"恒命中" → 这条红。
+test("选路: 清单未命中 → 走云端", async () => {
+  await withRouting({ endpoints: ["GET /api/v2/agent/voices"] }, async (api, seen) => {
+    await api.call("GET", "/api/v2/creation/types");
+    assert.strictEqual(seen.call[0].base, CLOUD, "清单里没有的端点走云端");
+  });
+});
+
+// ⑤之二：实例没就绪 → 云端。
+// 什么使其变红：去掉 ready 判据 → 这条红。
+test("选路: 实例未就绪 → 走云端", async () => {
+  await withRouting({ ready: false, endpoints: ["GET /api/v2/agent/voices"] }, async (api, seen) => {
+    await api.call("GET", "/api/v2/agent/voices");
+    assert.strictEqual(seen.call[0].base, CLOUD, "实例没就绪就走云端");
+  });
+});
+
+// ⑥ 五个出口各自的 base。
+// 什么使其变红：任一出口仍硬传 _base（或 chunkedUpload 未命中时不走直连站）→ 对应那条红。
+test("选路: upload 命中走本地、未命中走云端", async () => {
+  await withRouting({ endpoints: ["POST /api/v2/image/recognize"] }, async (api, seen) => {
+    await api.upload("POST", "/api/v2/image/recognize", [smallFile()], {});
+    assert.strictEqual(seen.upload[0].base, LOCAL, "命中的上传端点走本地");
+    assert.strictEqual(seen.upload[0].method, "POST", "方法逐字不变");
+    assert.strictEqual(seen.upload[0].path, "/api/v2/image/recognize", "路径逐字不变");
+    assert.deepStrictEqual(seen.upload[0].headers, { AuthKey: "test-key" }, "切本地仍带 AuthKey 头");
+
+    await api.upload("POST", "/api/v2/voice/upload", [smallFile()], {});
+    assert.strictEqual(seen.upload[1].base, CLOUD, "清单外的上传端点走云端");
+  });
+});
+
+test("选路: chunkedUpload 命中走本地、未命中仍是直连站", async () => {
+  await withRouting({ endpoints: ["POST /api/v2/image/recognize"] }, async (api, seen) => {
+    // 命中：分片与合并都打本地。
+    await api.upload("POST", "/api/v2/image/recognize", [bigFile()], {});
+    assert.strictEqual(seen.upload[0].base, LOCAL, "命中的分片上传走本地");
+    assert.strictEqual(seen.upload[0].path, "/api/v2/files/chunk", "分片路径逐字不变");
+    assert.strictEqual(seen.call[0].base, LOCAL, "合并请求与分片同一个 base");
+    assert.strictEqual(seen.call[0].path, "/api/v2/files/complete", "合并路径逐字不变");
+
+    // 未命中：直连站语义不能被改坏（不是云端 _base）。
+    const beforeUpload = seen.upload.length;
+    const beforeCall = seen.call.length;
+    await api.upload("POST", "/api/v2/voice/upload", [bigFile()], {});
+    assert.strictEqual(seen.upload[beforeUpload].base, DIRECT, "未命中时仍是直连站");
+    assert.strictEqual(seen.call[beforeCall].base, DIRECT, "未命中时合并请求也仍是直连站");
+  });
+});
+
+test("选路: download 命中走本地、未命中走云端", async () => {
+  await withRouting({ endpoints: ["GET /api/v2/edit/output"] }, async (api, seen) => {
+    await api.download("GET", "/api/v2/edit/output");
+    assert.strictEqual(seen.download[0].base, LOCAL, "命中的下载端点走本地");
+    assert.strictEqual(seen.download[0].key, "test-key", "切本地仍带 AuthKey");
+
+    await api.download("GET", "/api/v2/other/output");
+    assert.strictEqual(seen.download[1].base, CLOUD, "清单外的下载端点走云端");
+  });
+});
+
+test("选路: subscribeTask 命中走本地、未命中走云端（且支持 baseOverride）", async () => {
+  await withRouting({ endpoints: ["GET /api/v2/stream/{domain}/{taskId}"] }, async (api, seen) => {
+    api.subscribeTask("edit", "T1");
+    assert.strictEqual(seen.subscribe[0].base, LOCAL, "命中的订阅走本地");
+    assert.strictEqual(seen.subscribe[0].key, "test-key", "切本地仍带 AuthKey");
+
+    // 显式指定的 base 优先于选路。
+    api.subscribeTask("edit", "T3", "https://explicit.example.com");
+    assert.strictEqual(seen.subscribe[1].base, "https://explicit.example.com", "显式 base 优先");
+  });
+
+  // 清单里没有订阅端点 → 走云端。
+  await withRouting({ endpoints: ["GET /api/v2/other"] }, async (api, seen) => {
+    api.subscribeTask("voice", "T2");
+    assert.strictEqual(seen.subscribe[0].base, CLOUD, "清单外的订阅走云端");
+  });
+});
+
+// ⑦ pollTask 按同一选路结果取 base。
+// 什么使其变红：pollTask 不再把 base 传给 fetcher → 这条红。
+test("选路: pollTask 把选路结果作为 base 传给 fetcher", async () => {
+  await withRouting({ endpoints: ["GET /api/v2/task/{id}"] }, async (api) => {
+    const bases = [];
+    const r = await api.pollTask("abc", {
+      interval: 1,
+      timeout: 1000,
+      fetcher: async (id, base) => {
+        bases.push(base);
+        return { ok: true, data: { status: "done", result: 1 } };
+      },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(bases, [LOCAL], "fetcher 拿到的 base 该是本地");
+  });
+});
+
+test("选路: pollTask 清单未命中时把云端 base 传给 fetcher（默认 fetcher 也一样）", async () => {
+  await withRouting({ endpoints: ["GET /api/v2/other"] }, async (api, seen) => {
+    const bases = [];
+    await api.pollTask("abc", {
+      interval: 1,
+      timeout: 1000,
+      fetcher: async (id, base) => {
+        bases.push(base);
+        return { ok: true, data: { status: "done" } };
+      },
+    });
+    assert.deepStrictEqual(bases, [CLOUD], "清单外轮询走云端");
+
+    // 默认 fetcher：请求本身也打云端。
+    await api.pollTask("abc", { interval: 1, timeout: 20 });
+    assert.strictEqual(seen.call[seen.call.length - 1].base, CLOUD, "默认 fetcher 的请求也走云端");
+  });
+});
+
+// 请求带查询串时仍要命中：匹配前必须先剥掉 `?` 之后的部分。
+// 什么使其变红：pathForMatch 不剥查询串 → 这条红。
+test("选路: 请求带查询串时仍命中（匹配前先剥查询串）", async () => {
+  await withRouting({ endpoints: ["GET /api/v2/agent/voices"] }, async (api, seen) => {
+    await api.call("GET", "/api/v2/agent/voices?x=1");
+    assert.strictEqual(seen.call[0].base, LOCAL, "带查询串也该命中");
+    assert.strictEqual(seen.call[0].path, "/api/v2/agent/voices?x=1", "路径本身逐字不变");
+  });
+});
+
+// 清单按"方法 + 路径模式"匹配，不是前缀匹配。
+// 什么使其变红：把模式匹配改成前缀匹配 / 不比方法 → 这条红。
+test("选路: 清单按方法 + 路径模式匹配（不是前缀匹配）", async () => {
+  await withRouting({ endpoints: ["GET /api/v2/voice/status/{taskId}"] }, async (api, seen) => {
+    await api.call("GET", "/api/v2/voice/status/123");
+    assert.strictEqual(seen.call[0].base, LOCAL, "占位符段要能命中");
+
+    await api.call("GET", "/api/v2/voice/status");
+    assert.strictEqual(seen.call[1].base, CLOUD, "前缀不算命中");
+
+    await api.call("POST", "/api/v2/voice/status/123");
+    assert.strictEqual(seen.call[2].base, CLOUD, "方法不匹配不算命中");
+  });
+});
+
+// 除 base 外，方法 / 路径 / 体 / 头逐字不变（"客户端零端点改动"仍然成立）。
+// 什么使其变红：切本地时改写方法 / 路径 / 体 → 这条红。
+test("选路: 切本地只换 base，方法 / 路径 / 体逐字不变", async () => {
+  const body = { a: 1, b: "x" };
+  await withRouting({ endpoints: ["POST /api/v2/market-video/product-info"] }, async (api, seen) => {
+    await api.call("POST", "/api/v2/market-video/product-info", body);
+    assert.deepStrictEqual(seen.call[0], {
+      method: "POST", path: "/api/v2/market-video/product-info",
+      body: body, key: "test-key", base: LOCAL,
+    });
+  });
+});
+
+// resolveTarget 是可单测的纯函数：默认（没喂状态）一律云端。
+// 什么使其变红：默认状态不是"全关" → 这条红。
+test("选路: resolveTarget 默认走云端（没喂状态就是不走本地）", () => {
+  const fresh = require("./api.js");
+  assert.strictEqual(fresh.resolveTarget("GET", "/api/v2/agent/voices"), "https://htwmedia.dpdns.org");
 });

@@ -75,6 +75,74 @@
     _localBase = n.base;
     return { ok: true, base: n.base };
   }
+  // ---- 本地选路（端点能力清单）----
+  //
+  // 切本地的判据是**全部满足**（任一条不满足 → 该端点走云端）：
+  //  ① 用户总开关开着（默认关）；
+  //  ② 本地实例就绪（探活通过）；
+  //  ③ 已配对**且已解锁**（未解锁时鉴权层会 500，切过去只会拿到一个坏结果）；
+  //  ④ 协议握手兼容；
+  //  ⑤ 本地地址已登记（没地址就没地方切）；
+  //  ⑥ 端点能力清单命中（方法 + 路径模式，不是前缀匹配）。
+  //
+  // 🔴 这是**选路阶段**的判断：本地没就绪就走云端，不是"先发本地、失败再回云端"。
+  //    已选定本地后执行失败**不回落**（重副作用端点双跑比报错更糟）。
+  let _localRouting = {
+    enabled: false, ready: false, paired: false, compatible: false, store: null,
+  };
+
+  // 由 app.js 调用：把用户总开关、实例就绪判据与能力清单喂进来。
+  // 布尔字段一律只认 true：undefined / 0 / "false" 都当"不满足"，
+  // 免得某个上游把字符串 "false" 当成开着（那会把流量切到本地去）。
+  function setLocalRouting(state) {
+    const s = state || {};
+    _localRouting = {
+      enabled: s.enabled === true,
+      ready: s.ready === true,
+      paired: s.paired === true,
+      compatible: s.compatible === true,
+      store: (s.store && typeof s.store.has === "function") ? s.store : null,
+    };
+  }
+
+  // 清单匹配用的路径：**先剥掉查询串与片段**。
+  // 清单里写的是端点路径（"/api/v2/voice/status/{id:int}"），而实际请求常常带查询串
+  // （"?x=1"）—— 不剥掉的话匹配必然失败，白名单永远不命中，
+  // 症状是"本地模式开着却什么都不走本地"（静默不生效，最难查的一种）。
+  function pathForMatch(path) {
+    const s = String(path == null ? "" : path);
+    let end = s.length;
+    const q = s.indexOf("?");
+    if (q >= 0 && q < end) end = q;
+    const h = s.indexOf("#");
+    if (h >= 0 && h < end) end = h;
+    return s.slice(0, end);
+  }
+
+  // 这个端点该不该走本地。
+  function shouldUseLocal(method, path) {
+    if (!_localRouting.enabled) return false;
+    if (!_localRouting.ready) return false;
+    if (!_localRouting.paired) return false;
+    if (!_localRouting.compatible) return false;
+    if (!_localBase) return false;
+    const store = _localRouting.store;
+    if (!store || typeof store.has !== "function") return false;
+    const m = typeof method === "string" ? method : "";
+    if (!m) return false;
+    let hit = false;
+    // 清单判据抛异常时按"不命中"处理：判成命中会把请求发到本地去，
+    // 而本地多半没有这个端点 —— 宁可走云端。
+    try { hit = store.has(m, pathForMatch(path)) === true; } catch (e) { hit = false; }
+    return hit;
+  }
+
+  // 选路结果：命中本地 → 本地基地址；否则 → 云端基地址。
+  // 除 base 外，方法 / 路径 / 体 / 头一律不变（"客户端零端点改动"仍然成立）。
+  function resolveTarget(method, path) {
+    return shouldUseLocal(method, path) ? _localBase : _base;
+  }
+
   function hasKey() { return !!_key; }
   function authHeader() { return { AuthKey: _key }; }
 
@@ -101,7 +169,9 @@
     if (!_key) throw keyError();
     // 默认带上当前服务端地址：不传的话 preload 会退回它的内置默认值，
     // 「设置」里改过的地址就失效了。
-    const target = baseOverride || _base;
+    // 🔴 baseOverride 是**显式指定**，优先于选路（配对等流程要打固定地址）；
+    //    不显式指定时由选路决定：命中本地走本地，否则走云端。
+    const target = baseOverride || resolveTarget(method, path);
     let res;
     try {
       res = await window.htw.call(method, path, body, _key, target);
@@ -141,7 +211,10 @@
     const uploadId = genUploadId();
     const total = Math.max(1, Math.ceil(full.length / CHUNK_SIZE));
     // 大文件走分片上传；若配置了直连通道（_directBase）则走它，否则走 _base。
-    const uploadBase = _directBase;
+    // 🔴 **直连语义不能被改坏**：分片上传的直连站是"源站直传"优化，与本地无关。
+    //    所以选路的口径是：命中本地 → 本地基地址；**未命中 → 仍然是直连站**
+    //    （不是云端 _base —— 那会把既有的大文件直传行为改掉）。
+    const uploadBase = shouldUseLocal(method, path) ? _localBase : _directBase;
     let failed = null;
     let next = 0;
     let done = 0;
@@ -218,7 +291,10 @@
         );
       }
     }
-    const res = await window.htw.upload(method, path, filePaths, fields, authHeader(), onProgress, fileField, _base);
+    // 整包上传的 base 由选路决定（命中本地 → 本地，否则 → 云端）。
+    // 除 base 外，方法 / 路径 / 文件 / 字段 / 头一律不变。
+    const target = resolveTarget(method, path);
+    const res = await window.htw.upload(method, path, filePaths, fields, authHeader(), onProgress, fileField, target);
     return normalize(res);
   }
 
@@ -314,16 +390,27 @@
 
   async function download(method, path, baseOverride) {
     if (!_key) throw keyError();
-    const res = await window.htw.download(method, path, _key, baseOverride || _base);
+    // baseOverride 优先（显式指定）；否则由选路决定。
+    const target = baseOverride || resolveTarget(method, path);
+    const res = await window.htw.download(method, path, _key, target);
     if (res && !res.ok && res.error) throw new Error(res.error);
     return res;
   }
 
   // SSE 订阅转发。streamId 用 "域:任务标识" 作键，主进程据此去重连接。
-  function subscribeTask(domain, taskId) {
+  //
+  // 订阅的路径由主进程按 base + "/api/v2/stream/{domain}/{taskId}" 发起，
+  // 所以选路必须用**同一个路径**去比清单 —— 否则命中判据与实际请求对不上。
+  function streamPath(domain, taskId) {
+    return "/api/v2/stream/" + encodeURIComponent(domain) + "/" + encodeURIComponent(taskId);
+  }
+
+  // baseOverride：显式指定时优先于选路（与 call / download 同一口径）。
+  function subscribeTask(domain, taskId, baseOverride) {
     const streamId = domain + ":" + taskId;
     if (!window.htw || !window.htw.subscribeTask) return null;
-    window.htw.subscribeTask(streamId, domain, taskId, _key, _base);
+    const target = baseOverride || resolveTarget("GET", streamPath(domain, taskId));
+    window.htw.subscribeTask(streamId, domain, taskId, _key, target);
     return streamId;
   }
   function unsubscribeTask(streamId) {
@@ -334,12 +421,17 @@
     opts = opts || {};
     const interval = opts.interval || 2000;
     const timeout = opts.timeout || 600000;
-    const fetcher = opts.fetcher || ((id) => call("GET", "/api/v2/task/" + id));
+    // 轮询打向哪台机器由**同一套选路**决定（任务态在哪台机器上发起，就在哪台轮询）。
+    // base 传给 fetcher：自定义 fetcher 可以自己决定用哪个 base，
+    // 默认 fetcher 直接把它交给 call（显式 base 优先于再次选路，结果一致）。
+    const path = "/api/v2/task/" + taskId;
+    const base = resolveTarget("GET", path);
+    const fetcher = opts.fetcher || ((id, b) => call("GET", "/api/v2/task/" + id, undefined, b));
     const start = Date.now();
     while (true) {
       let r;
       try {
-        r = await fetcher(taskId);
+        r = await fetcher(taskId, base);
       } catch (e) {
         return { ok: false, code: "NETWORK", message: e && e.message ? e.message : String(e), raw: e };
       }
@@ -357,6 +449,10 @@
   return {
     setKey: setKey, setBase: setBase, setDirectBase: setDirectBase,
     setLocalBase: setLocalBase,
+    // 本地选路：喂状态（app.js）+ 查结果（可单测的纯函数）。
+    setLocalRouting: setLocalRouting,
+    resolveTarget: resolveTarget,
+    shouldUseLocal: shouldUseLocal,
     hasKey: hasKey, authHeader: authHeader,
     call: call, get: get, post: post, upload: upload, download: download,
     normalize: normalize, pollTask: pollTask, onQuotaExceeded: onQuotaExceeded,
@@ -365,6 +461,7 @@
     subscribeTask: subscribeTask, unsubscribeTask: unsubscribeTask,
     get base() { return _base; }, get directBase() { return _directBase; },
     get localBase() { return _localBase; },
+    get localRouting() { return _localRouting; },
   };
 });
 
