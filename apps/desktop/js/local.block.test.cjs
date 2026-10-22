@@ -1427,3 +1427,68 @@ test("本地模式总开关: 清单拉取失败 → 空清单 → 全走云端�
     resetRouting();
   }
 });
+
+// ---- AI 通道端点选路（2026-10-22 凭据消费落地）----
+//
+// 清单新收 4 条 AI 凭据现取类端点（服务器侧 `LocalCapabilityCatalog`）。
+// 桌面端**代码零改动**：解析（METHOD /path 模式）与选路没有特判，多 4 条字符串自动生效。
+// 这 8 条用例钉的就是"自动生效"：
+//  含 → 走本地（切到了新条目，本地模式第一次能承接 AI 业务）；
+//  不含 → 仍走云端（清单是全量的，命中不到就绝不切本地 —— 不许有"AI 端点特判"）。
+//
+// 🔴 api.js 是模块单例：每条用例收尾必须 resetRouting()（与既有总开关用例同一纪律）。
+
+const AI_ENDPOINTS = [
+  { method: "POST", path: "/api/v2/image/recognize" },
+  { method: "POST", path: "/api/v2/image/chat" },
+  { method: "POST", path: "/api/v2/market-video/product-info" },
+  { method: "POST", path: "/api/v2/market-video/generate-script" },
+];
+
+for (const ep of AI_ENDPOINTS) {
+  const label = `${ep.method} ${ep.path}`;
+
+  // 什么使其变红：解析器对新条目失效（方法没认 POST / 位置占位符编译错）→ 仍回 CLOUD_BASE。
+  test(`本地模式总开关: AI 通道端点 ${label} 在清单 → 走本地`, async () => {
+    const app = await bootApp({
+      config: { apiBase: CLOUD_BASE, apiKey: "test-key", localBase: LOCAL_BASE, localEnabled: true },
+      route: makeRoute(() => ({ status: 200, ok: true, data: { endpoints: [label] } })),
+    });
+    try {
+      await app.els["local-apply"].fire("click");
+
+      // 前提钉死：清单真的进来了、真的按"方法 + 路径"登记。
+      assert.strictEqual(
+        api.localRouting.store.has(ep.method, ep.path), true,
+        "前提：清单条目应已喂给 api.js（否则下面的断言没有意义）"
+      );
+      assert.strictEqual(api.resolveTarget(ep.method, ep.path), LOCAL_BASE,
+        "清单命中的 AI 端点应走本地实例");
+    } finally {
+      app.restore();
+      resetRouting();
+    }
+  });
+
+  // 什么使其变红：出现"AI 端点特判"（明明不在清单里却切了本地）→ 仍回 LOCAL_BASE。
+  test(`本地模式总开关: AI 通道端点 ${label} 不在清单 → 仍走云端`, async () => {
+    const app = await bootApp({
+      config: { apiBase: CLOUD_BASE, apiKey: "test-key", localBase: LOCAL_BASE, localEnabled: true },
+      route: makeRoute(() => ({ status: 200, ok: true, data: { endpoints: CAPS_LIST } })),
+    });
+    try {
+      await app.els["local-apply"].fire("click");
+
+      // 前提钉死：这一轮清单里**没有**它（只有 CAPS_LIST 那条语音状态）。
+      assert.strictEqual(
+        api.localRouting.store.has(ep.method, ep.path), false,
+        "前提：本轮清单确实不含该端点"
+      );
+      assert.strictEqual(api.resolveTarget(ep.method, ep.path), CLOUD_BASE,
+        "清单没有这条 → 必须走云端（不许按端点类型特判）");
+    } finally {
+      app.restore();
+      resetRouting();
+    }
+  });
+}
