@@ -93,7 +93,15 @@ function makeLocalEls(opts) {
     "local-state": makeNode("div"),
     // 本地模式总开关（id 与 index.html 一致）：默认**不勾选**（总开关默认关）。
     "local-enabled": makeNode("input"),
+    // 检查更新 / 一键更新 / 重启并启用（id 与 index.html 一致）：
+    // 两个流程按钮初始隐藏（hidden 属性），状态行常在。
+    "local-check-update": makeNode("button"),
+    "local-update": makeNode("button"),
+    "local-restart-enable": makeNode("button"),
+    "local-update-status": makeNode("div"),
   };
+  els["local-update"].hidden = true;
+  els["local-restart-enable"].hidden = true;
   els["api-base"].value = "https://htwmedia.dpdns.org";
   els["api-key"].value = "test-key";
   els["local-base"].value = opts.localBase !== undefined ? opts.localBase : "http://127.0.0.1:51111";
@@ -137,6 +145,8 @@ async function bootApp(opts) {
   // 本地实例监督器的桩：记录启停调用，收集状态事件的订阅者。
   const localCalls = { start: [], stop: 0, status: 0 };
   const localEventSubs = [];
+  // 一键更新三通道的调用记录（含阶段次序）。
+  const pkgCalls = { order: [], download: [], prepare: [], extract: [] };
   const route = opts.route || (() => READY_HEALTH);
 
   const docHandlers = {};
@@ -192,6 +202,24 @@ async function bootApp(opts) {
           if (i >= 0) localEventSubs.splice(i, 1);
         };
       },
+      // ---- 一键更新的三个通道（下载 / 建目录 / 解压）----
+      // 默认全成功；行为用 opts.packageDownloadResult 等覆盖，调用记录进 pkgCalls
+      // （order 记录阶段次序 —— 流程的步骤顺序本身就是被钉的口径）。
+      packageDownload: async (p) => {
+        pkgCalls.order.push("download");
+        pkgCalls.download.push(p);
+        return opts.packageDownloadResult || { ok: true, sizeBytes: 2621440, sha256: "ab".repeat(32) };
+      },
+      packagePrepareDir: async (p) => {
+        pkgCalls.order.push("prepare");
+        pkgCalls.prepare.push(p);
+        return opts.packagePrepareDirResult || { ok: true };
+      },
+      packageExtract: async (p) => {
+        pkgCalls.order.push("extract");
+        pkgCalls.extract.push(p);
+        return opts.packageExtractResult || { ok: true };
+      },
     },
     addEventListener: () => {},
   };
@@ -219,6 +247,8 @@ async function bootApp(opts) {
     registered: registered,
     // 本地实例监督器的调用记录（start 的入参、stop 的次数、status 的次数）。
     localCalls: localCalls,
+    // 一键更新三通道的调用记录（含阶段次序）。
+    pkgCalls: pkgCalls,
     // 模拟主进程推送一次监督器状态事件。
     emitLocalEvent: function (payload) {
       localEventSubs.forEach((cb) => cb(payload));
@@ -1492,3 +1522,370 @@ for (const ep of AI_ENDPOINTS) {
     }
   });
 }
+
+// ---- 检查更新 / 一键更新（spec 2026-10-24 本地包分发 §3.2）----
+//
+// 流程的三步各钉几个口径：
+//  ① 检查更新：manifest 走云端 + 探活缓存里的实例 version 比对 → 三态文案与按钮显隐；
+//  ② 一键更新：下载 → 独占建目录 → 解压，阶段次序与失败分支（旧配置旧目录零触碰）；
+//  ③ 重启并启用：stop → 换 localBinary → start → 重探活，启动失败回退配置。
+
+const MANIFEST_PATH = "/api/v2/local/package/manifest";
+const MANIFEST_SHA = "ab".repeat(32);
+
+// manifest 响应夹具（服务器 OkApi 信封）。over 覆盖字段（如 protocolVersion: 2）。
+function manifestResponse(version, over) {
+  return {
+    status: 200,
+    ok: true,
+    data: {
+      Ok: true,
+      Data: Object.assign(
+        { version: version, sha256: MANIFEST_SHA, sizeBytes: 2621440, protocolVersion: 1 },
+        over || {}
+      ),
+    },
+  };
+}
+
+// 检查更新前置：先探活（拿到实例 version），再点「检查更新」。
+async function probeThenCheck(app) {
+  await app.els["local-apply"].fire("click");
+  await app.els["local-check-update"].fire("click");
+}
+
+// 🔴 manifest 走**云端**：该路径不在本地能力清单 → 选路自动走云（这是被钉的口径，
+//    走到本地实例上只会 404）。
+test("检查更新: manifest 请求打到云端服务地址（不带 baseOverride）", async () => {
+  const app = await bootApp();
+  try {
+    await app.els["local-apply"].fire("click");
+    await app.els["local-check-update"].fire("click");
+
+    const m = app.calls.find((c) => c.path === MANIFEST_PATH);
+    assert.ok(m, "应发出一次 manifest 请求");
+    assert.strictEqual(m.base, "https://htwmedia.dpdns.org", "manifest 必须走云端");
+    assert.ok("AuthKey" in m.headers && m.headers.AuthKey === "test-key",
+      "manifest 走既有 AuthKey 鉴权面");
+  } finally {
+    app.restore();
+  }
+});
+
+// 三态之一：有新版 → 状态行带版本与体积，「一键更新」出现，「重启并启用」保持隐藏。
+test("检查更新: 有新版 → 状态行带版本与大小，一键更新出现、重启按钮隐藏", async () => {
+  const app = await bootApp({
+    route: (method, path) => (path === MANIFEST_PATH ? manifestResponse("2.0.0") : READY_HEALTH),
+  });
+  try {
+    await probeThenCheck(app);
+
+    const t = app.els["local-update-status"].textContent;
+    assert.ok(t.includes("发现新版本"), "应有新版文案，实际：" + t);
+    assert.ok(t.includes("2.0.0"), "文案应带服务器包版本，实际：" + t);
+    assert.ok(t.includes("2.5 MB"), "文案应带包体积（2621440B = 2.5MB），实际：" + t);
+    assert.strictEqual(app.els["local-update"].hidden, false, "有新版 → 一键更新出现");
+    assert.strictEqual(app.els["local-restart-enable"].hidden, true, "还没下载解压 → 重启按钮隐藏");
+    assert.strictEqual(app.App.local.update.stateOf().manifest.version, "2.0.0",
+      "清单应缓存下来（一键更新用它，不隐式重发请求）");
+  } finally {
+    app.restore();
+  }
+});
+
+// 三态之二：已是最新（实例 version 与 manifest version 相等）→ 不出任何按钮。
+test("检查更新: 已是最新 → 状态行说已是最新，两个按钮都隐藏", async () => {
+  const app = await bootApp({
+    route: (method, path) => (path === MANIFEST_PATH ? manifestResponse("1.0.0") : READY_HEALTH),
+  });
+  try {
+    await probeThenCheck(app);
+
+    const t = app.els["local-update-status"].textContent;
+    assert.ok(t.includes("已是最新"), "应说已是最新，实际：" + t);
+    assert.ok(t.includes("1.0.0"), "文案应带当前版本，实际：" + t);
+    assert.strictEqual(app.els["local-update"].hidden, true);
+    assert.strictEqual(app.els["local-restart-enable"].hidden, true);
+  } finally {
+    app.restore();
+  }
+});
+
+// 三态支线：实例没启动 / 版本读不到 → 只展示服务器有包，不下版本结论，不出按钮。
+test("检查更新: 实例版本未知 → 只展示服务器有包（不比对），两个按钮都隐藏", async () => {
+  const app = await bootApp({
+    // 探活夹具不带 version（老实例 / 未启动的形态）→ comparePackage 走 unknown。
+    route: (method, path) => {
+      if (path === MANIFEST_PATH) return manifestResponse("2.0.0");
+      return { status: 200, ok: true, data: { ok: true, mode: "local", state: "notPaired", credentialsUnlocked: false } };
+    },
+  });
+  try {
+    await probeThenCheck(app);
+
+    const t = app.els["local-update-status"].textContent;
+    assert.ok(t.includes("服务器有可用包"), "unknown 只展示服务器有包，实际：" + t);
+    assert.ok(t.includes("2.0.0"), "仍要展示包版本，实际：" + t);
+    assert.ok(!t.includes("已是最新") && !t.includes("发现新版本"),
+      "unknown 不得下版本结论，实际：" + t);
+    assert.strictEqual(app.els["local-update"].hidden, true, "不知道版本就不给一键更新");
+  } finally {
+    app.restore();
+  }
+});
+
+// 三态之三：服务器未提供（404 形状如实透传）。
+test("检查更新: 服务器未提供包（404）→ 状态行显示服务器文案，按钮全隐藏", async () => {
+  const app = await bootApp({
+    route: (method, path) => {
+      if (path === MANIFEST_PATH)
+        return { status: 404, ok: false, data: { errCode: 404, errMsg: "服务器未提供本地实例包" } };
+      return READY_HEALTH;
+    },
+  });
+  try {
+    await probeThenCheck(app);
+
+    assert.strictEqual(app.els["local-update-status"].textContent, "服务器未提供本地实例包",
+      "404 的服务器契约文案应如实透传");
+    assert.strictEqual(app.els["local-update"].hidden, true);
+    assert.strictEqual(app.els["local-restart-enable"].hidden, true);
+    assert.strictEqual(app.App.local.update.stateOf().manifest, null, "失败时不得留下旧清单缓存");
+  } finally {
+    app.restore();
+  }
+});
+
+// protocolVersion 附注：**新包**的协议刻度与客户端支持的对不上 → 更新后握手会被拦，先说清。
+test("检查更新: 新包协议版本与客户端不匹配 → 文案附「更新后需重新配对探活」", async () => {
+  const app = await bootApp({
+    route: (method, path) => (path === MANIFEST_PATH ? manifestResponse("2.0.0", { protocolVersion: 2 }) : READY_HEALTH),
+  });
+  try {
+    await probeThenCheck(app);
+
+    const t = app.els["local-update-status"].textContent;
+    assert.ok(t.includes("发现新版本"), "前提：仍是有新版");
+    assert.ok(t.includes("协议版本不兼容") && t.includes("重新配对探活"),
+      "应附协议不兼容的提示，实际：" + t);
+  } finally {
+    app.restore();
+  }
+});
+
+// 一键更新成功路径：阶段次序（下载 → 建目录 → 解压）、通道参数、按钮切换、配置零触碰。
+test("一键更新: 成功 → 按序调下载/建目录/解压，参数正确，重启按钮出现，配置零触碰", async () => {
+  const app = await bootApp({
+    route: (method, path) => (path === MANIFEST_PATH ? manifestResponse("2.0.0") : READY_HEALTH),
+  });
+  try {
+    await probeThenCheck(app);
+    app.els["local-binary"].value = "C:\\tools\\local-instance.exe";
+    const savedBefore = app.saved.length;
+    await app.els["local-update"].fire("click");
+
+    // 阶段次序被钉死：下载 → 建目录 → 解压。
+    assert.deepStrictEqual(app.pkgCalls.order, ["download", "prepare", "extract"],
+      "阶段次序必须是下载、建目录、解压，实际：" + JSON.stringify(app.pkgCalls.order));
+    // 下载参数：云端固定下载端点 + AuthKey 头 + 目标 zip + 清单里的校验值。
+    const dl = app.pkgCalls.download[0];
+    assert.strictEqual(dl.url, "https://htwmedia.dpdns.org/api/v2/local/package");
+    assert.strictEqual(dl.headers.AuthKey, "test-key");
+    assert.strictEqual(dl.destPath, "C:\\tools\\HTWLocal-2.0.0.zip");
+    assert.strictEqual(dl.expectedSha256, MANIFEST_SHA);
+    // 建目录与解压参数：localBinary 父目录下的版本化目录。
+    assert.strictEqual(app.pkgCalls.prepare[0].destDir, "C:\\tools\\HTWLocal-2.0.0");
+    assert.strictEqual(app.pkgCalls.extract[0].destDir, "C:\\tools\\HTWLocal-2.0.0");
+    assert.strictEqual(app.pkgCalls.extract[0].zipPath, "C:\\tools\\HTWLocal-2.0.0.zip");
+
+    // 成功后：重启按钮出现，一键更新藏起，状态行说"已就绪"。
+    assert.strictEqual(app.els["local-restart-enable"].hidden, false, "下载解压成功 → 重启并启用出现");
+    assert.strictEqual(app.els["local-update"].hidden, true);
+    assert.ok(app.els["local-update-status"].textContent.includes("已就绪"),
+      "状态行应提示已就绪，实际：" + app.els["local-update-status"].textContent);
+    // 旧配置零触碰：整个流程没有写配置（localBinary 还是空，监督器也没被动过）。
+    assert.strictEqual(app.saved.length, savedBefore, "下载/解压阶段不许落盘配置");
+    assert.deepStrictEqual(app.localCalls.start, [], "流程中不许启停实例");
+  } finally {
+    app.restore();
+  }
+});
+
+// 失败分支一：下载失败 → 文案如实透传，后面两阶段一步都不走，配置零触碰。
+test("一键更新: 下载失败 → 人话报错，建目录/解压不执行，重启按钮不出现", async () => {
+  const app = await bootApp({
+    route: (method, path) => (path === MANIFEST_PATH ? manifestResponse("2.0.0") : READY_HEALTH),
+    packageDownloadResult: { ok: false, message: "下载失败：服务器返回状态 500。" },
+  });
+  try {
+    await probeThenCheck(app);
+    app.els["local-binary"].value = "C:\\tools\\local-instance.exe";
+    await app.els["local-update"].fire("click");
+
+    assert.strictEqual(app.els["local-update-status"].textContent, "下载失败：服务器返回状态 500。",
+      "失败文案如实透传");
+    assert.strictEqual(app.pkgCalls.prepare.length, 0, "下载失败 → 不建目录");
+    assert.strictEqual(app.pkgCalls.extract.length, 0, "下载失败 → 不解压");
+    assert.strictEqual(app.els["local-restart-enable"].hidden, true, "失败 → 重启按钮不出现");
+  } finally {
+    app.restore();
+  }
+});
+
+// 失败分支二：目标目录已存在 → 人话报错不覆盖（解压不执行）。
+test("一键更新: 目录已存在 → 人话报错不覆盖，解压不执行", async () => {
+  const app = await bootApp({
+    route: (method, path) => (path === MANIFEST_PATH ? manifestResponse("2.0.0") : READY_HEALTH),
+    packagePrepareDirResult: {
+      ok: false,
+      message: "更新目录已存在：C:\\tools\\HTWLocal-2.0.0。为避免覆盖已有文件，本次更新已停止；可手动删除该目录后重试。",
+    },
+  });
+  try {
+    await probeThenCheck(app);
+    app.els["local-binary"].value = "C:\\tools\\local-instance.exe";
+    await app.els["local-update"].fire("click");
+
+    const t = app.els["local-update-status"].textContent;
+    assert.ok(t.includes("已存在"), "要报目录已存在，实际：" + t);
+    assert.ok(!t.includes("sha256"), "错误文案不得外露技术词，实际：" + t);
+    assert.strictEqual(app.pkgCalls.extract.length, 0, "目录没建成就不许解压");
+    assert.strictEqual(app.els["local-restart-enable"].hidden, true);
+  } finally {
+    app.restore();
+  }
+});
+
+// 失败分支三：解压失败 → 人话报错（带退出码），重启按钮不出现。
+test("一键更新: 解压失败 → 人话报错，重启按钮不出现", async () => {
+  const app = await bootApp({
+    route: (method, path) => (path === MANIFEST_PATH ? manifestResponse("2.0.0") : READY_HEALTH),
+    packageExtractResult: { ok: false, message: "解压更新包失败（解压程序退出码 2）。请重试；若反复失败，更新包可能已损坏。" },
+  });
+  try {
+    await probeThenCheck(app);
+    app.els["local-binary"].value = "C:\\tools\\local-instance.exe";
+    await app.els["local-update"].fire("click");
+
+    const t = app.els["local-update-status"].textContent;
+    assert.ok(t.includes("解压更新包失败"), "要报解压失败，实际：" + t);
+    assert.strictEqual(app.els["local-restart-enable"].hidden, true, "失败 → 不得进入就绪态");
+    assert.strictEqual(app.App.local.update.stateOf().staged, null, "失败不得留下暂存");
+  } finally {
+    app.restore();
+  }
+});
+
+// 流程守卫：没检查过就点一键更新 → 拦下，一个通道都不调。
+test("一键更新: 未检查更新就点 → 守卫拦下，不发任何下载请求", async () => {
+  const app = await bootApp();
+  try {
+    app.els["local-binary"].value = "C:\\tools\\local-instance.exe";
+    await app.els["local-update"].fire("click");
+
+    assert.strictEqual(app.els["local-update-status"].textContent, "请先检查更新");
+    assert.strictEqual(app.pkgCalls.order.length, 0, "没检查过就不该动任何通道");
+  } finally {
+    app.restore();
+  }
+});
+
+// 流程守卫：没填可执行文件路径 → 拦下（连下载都不发 —— 下载目的地都定不了）。
+test("一键更新: 未填可执行文件路径 → 守卫拦下，不发下载请求", async () => {
+  const app = await bootApp({
+    route: (method, path) => (path === MANIFEST_PATH ? manifestResponse("2.0.0") : READY_HEALTH),
+  });
+  try {
+    await probeThenCheck(app);
+    app.els["local-binary"].value = "";
+    await app.els["local-update"].fire("click");
+
+    assert.strictEqual(app.els["local-update-status"].textContent, "请先填写本地实例可执行文件路径。");
+    assert.strictEqual(app.pkgCalls.order.length, 0);
+  } finally {
+    app.restore();
+  }
+});
+
+// 重启并启用（实例未在跑）：不调 stop，换配置落盘，start 带新 exe，随后重探活。
+test("重启并启用: 成功 → localBinary 落盘指向新目录里的同名 exe，start 带新路径，重探活", async () => {
+  const app = await bootApp({
+    route: (method, path) => (path === MANIFEST_PATH ? manifestResponse("2.0.0") : READY_HEALTH),
+  });
+  try {
+    await probeThenCheck(app);
+    app.els["local-binary"].value = "C:\\tools\\local-instance.exe";
+    await app.els["local-update"].fire("click");
+    assert.deepStrictEqual(app.localCalls.start, [], "前提：实例未在跑");
+
+    const healthBefore = app.calls.filter((c) => c.path === "/api/v2/local/health").length;
+    await app.els["local-restart-enable"].fire("click");
+
+    assert.strictEqual(app.localCalls.stop, 0, "实例没在跑就不该调停止");
+    assert.deepStrictEqual(app.localCalls.start, ["C:\\tools\\HTWLocal-2.0.0\\local-instance.exe"],
+      "启动必须带新目录里与旧 exe 同名的文件");
+    const cfg = app.saved[app.saved.length - 1];
+    assert.strictEqual(cfg.localBinary, "C:\\tools\\HTWLocal-2.0.0\\local-instance.exe",
+      "localBinary 必须落盘指向新 exe");
+    assert.strictEqual(app.els["local-binary"].value, "C:\\tools\\HTWLocal-2.0.0\\local-instance.exe",
+      "输入框要回填新路径（显示与配置同一份字面量）");
+    const healthAfter = app.calls.filter((c) => c.path === "/api/v2/local/health").length;
+    assert.ok(healthAfter > healthBefore, "重启后应重探活");
+    assert.ok(app.els["local-update-status"].textContent.includes("已切换到新版本"),
+      "状态行应说已切换，实际：" + app.els["local-update-status"].textContent);
+    assert.strictEqual(app.els["local-restart-enable"].hidden, true, "切完重启按钮收起");
+  } finally {
+    app.restore();
+  }
+});
+
+// 重启并启用（实例在跑）：先 stop 再换再启。
+test("重启并启用: 实例在跑 → 先调停止，再换配置启动", async () => {
+  const app = await bootApp({
+    route: (method, path) => (path === MANIFEST_PATH ? manifestResponse("2.0.0") : READY_HEALTH),
+  });
+  try {
+    // 让监督器先报 running（真实上线路径：主进程推送）。
+    app.emitLocalEvent({ state: "running", base: "http://127.0.0.1:51234", reason: "", attempt: 0, pid: 4321 });
+    await new Promise((r) => setTimeout(r, 0));
+
+    await app.els["local-check-update"].fire("click");
+    app.els["local-binary"].value = "C:\\tools\\local-instance.exe";
+    await app.els["local-update"].fire("click");
+    await app.els["local-restart-enable"].fire("click");
+
+    assert.strictEqual(app.localCalls.stop, 1, "实例在跑必须先停止");
+    assert.deepStrictEqual(app.localCalls.start, ["C:\\tools\\HTWLocal-2.0.0\\local-instance.exe"]);
+  } finally {
+    app.restore();
+  }
+});
+
+// 启动失败 → 配置回退到旧 exe（旧目录零触碰的口径同样管到这里），人话报错。
+test("重启并启用: 新版本启动失败 → 配置回退到旧 exe，人话报错", async () => {
+  const app = await bootApp({
+    route: (method, path) => (path === MANIFEST_PATH ? manifestResponse("2.0.0") : READY_HEALTH),
+    localStartResult: { ok: false, errMsg: "找不到该可执行文件" },
+  });
+  try {
+    await probeThenCheck(app);
+    app.els["local-binary"].value = "C:\\tools\\local-instance.exe";
+    await app.els["local-update"].fire("click");
+    await app.els["local-restart-enable"].fire("click");
+
+    const t = app.els["local-update-status"].textContent;
+    assert.ok(t.includes("已恢复原版本配置"), "要说明配置已回退，实际：" + t);
+    assert.ok(t.includes("找不到该可执行文件"), "要带失败原因，实际：" + t);
+    const cfg = app.saved[app.saved.length - 1];
+    assert.strictEqual(cfg.localBinary, "C:\\tools\\local-instance.exe",
+      "配置必须回退到旧 exe");
+    assert.strictEqual(app.els["local-binary"].value, "C:\\tools\\local-instance.exe",
+      "输入框也要回退到旧 exe");
+    // 新目录完好、只是启动没起来：重启按钮保持可点（用户排除故障后可直接重试，
+    // 不必重新下载 —— 重下会撞上"目录已存在"的独占创建）。
+    assert.strictEqual(app.els["local-restart-enable"].hidden, false,
+      "启动失败但新目录就绪 → 重启按钮保持可点（可直接重试）");
+  } finally {
+    app.restore();
+  }
+});

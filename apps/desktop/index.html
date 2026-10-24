@@ -87,6 +87,15 @@
             <button class="btn" type="button" id="local-toggle">启动本地实例</button>
           </div>
           <div class="hint" id="local-state">本地实例：未启动</div>
+          <!-- 检查更新 / 一键更新：本地实例包由服务器下发（清单与下载都走云端）。
+               「一键更新」只在检查出新版后出现；「重启并启用」在下载解压成功后出现。
+               更新成功之前，旧版本目录与配置零触碰。 -->
+          <div class="row">
+            <button class="btn" type="button" id="local-check-update">检查更新</button>
+            <button class="btn" type="button" id="local-update" hidden>一键更新</button>
+            <button class="btn" type="button" id="local-restart-enable" hidden>重启并启用</button>
+          </div>
+          <div class="hint" id="local-update-status"></div>
           <!-- 最近请求：逐请求选路可观测性。每条请求走了本机还是云端看这里
                （最近 8 条；数据源在 js/api.js 的选路记录，只在本轮内存里，重启清零）。 -->
           <div class="hint">最近请求</div>

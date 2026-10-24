@@ -156,4 +156,30 @@ function extractPackage(opts) {
   });
 }
 
-module.exports = { downloadPackage, extractPackage };
+// 为新版本目录做准备（**独占创建**：已存在即失败，绝不覆盖）。
+// 入参 destDir；返回 { ok:true } 或 { ok:false, message }（message 是人话）。
+//
+// extractPackage 只挡"目录不存在"，不校验目录空不空（信任调用方）——
+// 这里的职责就是把"调用方保证"落成代码：目录要么是刚建出来的（必然为空），
+// 要么就报错不解压。已有同名目录（上次更新留下的半成品 / 用户自己的文件）
+// 一律停手，覆盖别人的文件比让用户手动删一次目录糟糕得多。
+function ensureNewDir(destDir) {
+  const d = String(destDir || "");
+  if (!d) {
+    return { ok: false, message: "更新目录未指定，无法准备解压位置。" };
+  }
+  let st = null;
+  try { st = fs.statSync(d); } catch (e) { /* 读不到 = 不存在，正是要建的新目录 */ }
+  if (st) {
+    return { ok: false, message: "更新目录已存在：" + d + "。为避免覆盖已有文件，本次更新已停止；可手动删除该目录后重试。" };
+  }
+  try {
+    // 非递归：父目录必须已存在（父目录是本地实例所在目录，本就存在）。
+    fs.mkdirSync(d);
+  } catch (e) {
+    return { ok: false, message: "无法创建更新目录：" + d + "。请检查磁盘空间与权限后重试。" };
+  }
+  return { ok: true };
+}
+
+module.exports = { downloadPackage, extractPackage, ensureNewDir };

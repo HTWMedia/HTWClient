@@ -6,21 +6,21 @@ test("probeHealth: ready", async () => {
   const r = await Local.probeHealth("http://127.0.0.1:51111", {
     call: async () => ({ status: 200, ok: true, data: { ok: true, mode: "local", state: "ready", credentialsUnlocked: true, version: "9.9.9-abc" } }),
   });
-  assert.deepStrictEqual(r, { ok: true, state: "ready", message: "本地模式就绪", protocolVersion: null });
+  assert.deepStrictEqual(r, { ok: true, state: "ready", message: "本地模式就绪", protocolVersion: null, version: "9.9.9-abc" });
 });
 
 test("probeHealth: notPaired", async () => {
   const r = await Local.probeHealth("http://127.0.0.1:51111", {
     call: async () => ({ status: 200, ok: true, data: { ok: true, mode: "local", state: "notPaired", credentialsUnlocked: false } }),
   });
-  assert.deepStrictEqual(r, { ok: true, state: "notPaired", message: "本地实例未配对", protocolVersion: null });
+  assert.deepStrictEqual(r, { ok: true, state: "notPaired", message: "本地实例未配对", protocolVersion: null, version: null });
 });
 
 test("probeHealth: pairedNotUnlocked", async () => {
   const r = await Local.probeHealth("http://127.0.0.1:51111", {
     call: async () => ({ status: 200, ok: true, data: { ok: true, mode: "local", state: "pairedNotUnlocked", credentialsUnlocked: false } }),
   });
-  assert.deepStrictEqual(r, { ok: true, state: "pairedNotUnlocked", message: "已配对，待解锁（本地实例重启后出现）", protocolVersion: null });
+  assert.deepStrictEqual(r, { ok: true, state: "pairedNotUnlocked", message: "已配对，待解锁（本地实例重启后出现）", protocolVersion: null, version: null });
 });
 
 test("probeHealth: v2 信封包裹（PascalCase Data + 内层 state）", async () => {
@@ -31,7 +31,7 @@ test("probeHealth: v2 信封包裹（PascalCase Data + 内层 state）", async (
       data: { Ok: true, Data: { ok: true, mode: "local", state: "ready", credentialsUnlocked: true, version: "1.2.3" } },
     }),
   });
-  assert.deepStrictEqual(r, { ok: true, state: "ready", message: "本地模式就绪", protocolVersion: null });
+  assert.deepStrictEqual(r, { ok: true, state: "ready", message: "本地模式就绪", protocolVersion: null, version: "1.2.3" });
 });
 
 test("probeHealth: mode:server → 该地址不是本地实例", async () => {
@@ -141,6 +141,68 @@ test("probeHealth: protocolVersion 不是数字 → 当作 null（不猜）", as
     }),
   });
   assert.strictEqual(r.protocolVersion, null);
+});
+
+// ---- 探活透出 version（检查更新的实例侧输入）----
+//
+// version 是 health 响应里**给人看**的信息版本号：只透传字符串，用于展示与
+// comparePackage 的相等比对。判据仍然只有 protocolVersion 整数 —— 两者不混。
+
+// 什么使其变红：version 被当作判据去比 / 数字被原样透出（拿去比大小等于没比）。
+test("probeHealth: version 非字符串（数字）→ null（判据仍是 protocolVersion，不混用）", async () => {
+  const r = await Local.probeHealth("http://127.0.0.1:51111", {
+    call: async () => ({
+      status: 200,
+      ok: true,
+      data: { ok: true, mode: "local", state: "ready", credentialsUnlocked: true, version: 123 },
+    }),
+  });
+  assert.strictEqual(r.version, null);
+  assert.strictEqual(r.ok, true, "version 读不到不影响探活成功");
+});
+
+// 什么使其变红：只读小写 version（PascalCase 字段读不到 → 检查更新永远走 unknown）。
+test("probeHealth: version 大小写双兼容（Version 也认，原样透传字符串）", async () => {
+  const r = await Local.probeHealth("http://127.0.0.1:51111", {
+    call: async () => ({
+      status: 200,
+      ok: true,
+      data: { Ok: true, Data: { ok: true, mode: "local", state: "ready", credentialsUnlocked: true, Version: "0.5.0+8f2a1c" } },
+    }),
+  });
+  assert.strictEqual(r.version, "0.5.0+8f2a1c");
+});
+
+// ---- comparePackage：检查更新的三态纯函数 ----
+//
+// 相等 latest / 不等 update / 任何一边读不到 unknown。
+// 🔴 unknown 绝不能被推断成 latest：把"不知道"说成"已是最新"，
+//    用户会永远停在一个旧实例上。
+
+test("comparePackage: 版本相等 → latest", () => {
+  assert.strictEqual(Local.comparePackage("1.0.0+abc", "1.0.0+abc"), "latest");
+});
+
+test("comparePackage: 版本不等 → update", () => {
+  assert.strictEqual(Local.comparePackage("2.0.0", "1.0.0"), "update");
+  assert.strictEqual(Local.comparePackage("1.0.0", "2.0.0"), "update",
+    "方向不敏感：只判相等与否，不猜谁新谁旧（版本刻度不可比）");
+});
+
+test("comparePackage: 实例版本读不到（null / undefined / 空串）→ unknown", () => {
+  assert.strictEqual(Local.comparePackage("2.0.0", null), "unknown");
+  assert.strictEqual(Local.comparePackage("2.0.0", undefined), "unknown");
+  assert.strictEqual(Local.comparePackage("2.0.0", ""), "unknown");
+});
+
+test("comparePackage: manifest 缺 version → unknown（不误报已是最新）", () => {
+  assert.strictEqual(Local.comparePackage(null, "1.0.0"), "unknown");
+  assert.strictEqual(Local.comparePackage("", "1.0.0"), "unknown");
+});
+
+test("comparePackage: 非字符串输入 → unknown（不抛错）", () => {
+  assert.strictEqual(Local.comparePackage(123, "1.0.0"), "unknown");
+  assert.strictEqual(Local.comparePackage("2.0.0", {}), "unknown");
 });
 
 // 客户端钉住自己支持的协议版本（与服务器 LocalProtocol.Version 对齐 = 1）。

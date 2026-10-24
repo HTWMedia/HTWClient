@@ -128,12 +128,13 @@
     return undefined;
   }
 
-  // 探活本地实例。返回 { ok, state, message, protocolVersion }：
+  // 探活本地实例。返回 { ok, state, message, protocolVersion, version }：
   // - ok:true  → state 为三态之一（notPaired / pairedNotUnlocked / ready），message 为对应文案；
   //               protocolVersion 为实例报的协议版本（整数）；读不到就是 null。
+  //               version 为实例自报的信息版本号（字符串，给人看 / 检查更新比对用）；读不到就是 null。
   // - ok:false → state 为 server（该地址不是本地实例）/ unreachable（连不上）/
   //             serverError（实例回了错误）/ invalid（响应不可识别）。
-  //             失败时**不带** protocolVersion：没有实例可谈，谈版本没有意义。
+  //             失败时**不带** protocolVersion / version：没有实例可谈，谈版本没有意义。
   async function probeHealth(base, transport) {
     const call = transport && transport.call;
     let res;
@@ -174,7 +175,35 @@
     const protocolVersion = typeof rawVersion === "number" && Number.isFinite(rawVersion)
       ? rawVersion
       : null;
-    return { ok: true, state: state, message: STATE_TEXT[state], protocolVersion: protocolVersion };
+    // 信息版本号（给人看）：health 响应里的 version（InformationalVersion）。
+    // 🔴 与 protocolVersion **不混用**：握手判据仍然只认上面的整数；
+    //    这里的字符串只用于展示与检查更新的相等比对（comparePackage）。
+    // 只透传**字符串**：读不到（老实例没有这个字段）或类型不对，一律 null —— 不猜、不编。
+    const rawInfoVersion = readFirst(inner, ["version", "Version"]);
+    const version = typeof rawInfoVersion === "string" && rawInfoVersion
+      ? rawInfoVersion
+      : null;
+    return { ok: true, state: state, message: STATE_TEXT[state], protocolVersion: protocolVersion, version: version };
+  }
+
+  // ---- 检查更新：包版本比对（纯函数）----
+  //
+  // manifest 的 version（服务器包版本）与实例 health 的 version（实例自报版本）
+  // 都是**给人看**的版本号，这里只做字符串相等比对，三态输出：
+  //  - 'latest'  相等（已是最新）；
+  //  - 'update'  不等（有新版）；
+  //  - 'unknown' 任何一边读不到（实例未启动 / 探活失败 / 老实例不带 version / manifest 缺字段）。
+  //
+  // 🔴 读不到一律 'unknown'，绝不推断成 'latest'：把"不知道"说成"已是最新"，
+  //    用户会永远停在一个旧实例上 —— 这比"不知道"糟得多。UI 对 'unknown' 只展示
+  //    "服务器有包"，不做版本结论。
+  // 🔴 判据**不混入** protocolVersion：那是机器握手刻度（见 SUPPORTED_PROTOCOL_VERSION），
+  //    这里只比给人看的版本串。
+  function comparePackage(manifestVersion, instanceVersion) {
+    const m = typeof manifestVersion === "string" ? manifestVersion.trim() : "";
+    const i = typeof instanceVersion === "string" ? instanceVersion.trim() : "";
+    if (!m || !i) return "unknown";
+    return m === i ? "latest" : "update";
   }
 
   // ---- 一键配对协议 ----
@@ -242,6 +271,7 @@
 
   return {
     probeHealth: probeHealth,
+    comparePackage: comparePackage,
     validateServerUrl: validateServerUrl,
     normalizeLocalBase: normalizeLocalBase,
     pairFlow: pairFlow,

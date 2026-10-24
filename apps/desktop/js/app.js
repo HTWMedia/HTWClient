@@ -15,6 +15,10 @@
   function getLocalStateEl() { return document.getElementById("local-state"); }
   function getLocalRoutingEl() { return document.getElementById("local-routing"); }
   function getLocalEnabledInput() { return document.getElementById("local-enabled"); }
+  function getLocalCheckUpdateBtn() { return document.getElementById("local-check-update"); }
+  function getLocalUpdateBtn() { return document.getElementById("local-update"); }
+  function getLocalRestartEnableBtn() { return document.getElementById("local-restart-enable"); }
+  function getLocalUpdateStatusEl() { return document.getElementById("local-update-status"); }
 
   // 本地模式未配置（输入框为空）时的状态文案。
   const LOCAL_NOT_CONFIGURED = "本地模式未配置";
@@ -65,6 +69,30 @@
   // 操作失败（IPC 失败载荷）的前缀。失败**不是**状态，别混进上面的状态文案里。
   const LOCAL_INSTANCE_OP_FAILED_PREFIX = "本地实例操作失败：";
 
+  // ---- 检查更新 / 一键更新的状态文案 ----
+  //
+  // 口径：三态（已是最新 / 有新版 / 服务器未提供）+ 一条独立支线（实例版本未知）。
+  // 服务器包清单（manifest）与下载端点的失败文案**如实透传**（404 的「服务器未提供
+  // 本地实例包」是服务器端契约文案，网络失败走 api.js 的中性中文），这里不另造一套。
+  const UPDATE_LATEST_PREFIX = "已是最新（当前 ";
+  const UPDATE_HAS_NEW_PREFIX = "发现新版本：";
+  const UPDATE_UNKNOWN_PREFIX = "服务器有可用包：";
+  const UPDATE_INSTANCE_UNKNOWN_TEXT = "未检测到本地实例版本（实例未启动或版本未知），不比对。";
+  // manifest 的 protocolVersion 与客户端支持的刻度对不上时的附注（更新后握手会被拦，先说清）。
+  const UPDATE_PROTOCOL_INCOMPAT_TEXT = "协议版本不兼容，更新后需重新配对探活";
+  const UPDATE_DOWNLOADING_TEXT = "下载中…";
+  const UPDATE_PREPARING_TEXT = "正在准备更新目录…";
+  const UPDATE_EXTRACTING_TEXT = "解压中…";
+  const UPDATE_READY_TEXT = "新版本已就绪。点击「重启并启用」切换到新版本。";
+  const UPDATE_SWITCHED_PREFIX = "已切换到新版本 ";
+  const UPDATE_RESTART_FAILED_PREFIX = "新版本启动失败，已恢复原版本配置。";
+  // 流程守卫文案（没满足前置条件就点了按钮）。
+  const UPDATE_NEED_CHECK_TEXT = "请先检查更新";
+  const UPDATE_NEED_BINARY_TEXT = "请先填写本地实例可执行文件路径。";
+  const UPDATE_NO_DIR_TEXT = "无法确定本地实例所在目录，请检查可执行文件路径。";
+  // 通用兜底（能力面的失败载荷正常都带人话 message，这里只兜 message 缺失的形状）。
+  const UPDATE_STEP_FAILED_TEXT = "更新失败，请重试。";
+
   // 用户保存过的本地地址（点过「保存并探活」就落盘，探活失败也不清空 ——
   // 地址本身是用户填的，探活失败只是实例没起来，不该把地址从配置里抹掉）。
   // 只有「保存并探活」按钮能改它 —— 输入框里还没保存过的值不算数，
@@ -83,6 +111,15 @@
   // 所以探活与配对都优先用它；没有它时才用用户保存过的地址。
   let supervisorSnapshot = null;
   let supervisorBase = "";
+  // ---- 检查更新 / 一键更新的流程状态 ----
+  // 最近一次成功的包清单（manifest data）：一键更新只用这份缓存，
+  // 「先检查、后更新」是显式两步，不隐式重发清单请求。
+  let lastPackageManifest = null;
+  // 最近一次探活拿到的实例信息版本号（comparePackage 的实例侧输入；探活失败即清空）。
+  let lastInstanceVersion = null;
+  // 一键更新暂存（下载解压都成功后才有值）：「重启并启用」据此切换。
+  // 🔴 任何一步失败都保持 null —— 失败不该让界面进入"已就绪待重启"的假状态。
+  let stagedUpdate = null;
 
   function localBaseValue() {
     const input = getLocalBaseInput();
@@ -522,6 +559,230 @@
     return await callSupervisor("localStart", p);
   }
 
+  // ---- 检查更新 / 一键更新 ----
+  //
+  // 流程（spec §3.2）：检查更新（manifest + 实例 version 比对，三态）→ 一键更新
+  // （下载 → 校验 → 建新版本目录 → 解压，全部成功才提示重启）→ 重启并启用
+  // （stop → 换 localBinary → start → 重探活）。
+  // 🔴 旧版本零触碰：下载 / 解压的任何一步失败，localBinary 配置与旧目录原样不动，
+  //    实例照常可启 —— 配置的落盘只发生在「重启并启用」里，且启动失败会回退。
+
+  function setUpdateStatus(text) { const el = getLocalUpdateStatusEl(); if (el) el.textContent = text; }
+  // 按钮显隐只认 true：没点出来的按钮一律藏（hidden 是显示，状态在流程变量里）。
+  function setUpdateButtons(state) {
+    const s = state || {};
+    const u = getLocalUpdateBtn();
+    const r = getLocalRestartEnableBtn();
+    if (u) u.hidden = s.update !== true;
+    if (r) r.hidden = s.restart !== true;
+  }
+
+  // 包体积 → 人话（MB，一位小数；小于 0.1MB 或缺数就不显示体积，不编）。
+  function formatPackageSize(bytes) {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n <= 0) return "";
+    const mb = n / (1024 * 1024);
+    return (mb >= 100 ? String(Math.round(mb)) : mb.toFixed(1)) + " MB";
+  }
+
+  // manifest 的协议刻度与客户端支持的对不上 → 附注一句（两边都读到才比，缺了不猜）。
+  // 🔴 比的是**新包**的 protocolVersion 与客户端钉住的刻度：对不上意味着更新后
+  //    握手会被拦（需再更新客户端），先说清"更新后需重新配对探活"。
+  function protocolNote(data) {
+    const Local = window.HTWLocal;
+    const supported = (Local && typeof Local.SUPPORTED_PROTOCOL_VERSION === "number")
+      ? Local.SUPPORTED_PROTOCOL_VERSION : null;
+    const reported = (data && typeof data.protocolVersion === "number" && Number.isFinite(data.protocolVersion))
+      ? data.protocolVersion : null;
+    return (supported !== null && reported !== null && reported !== supported)
+      ? "。" + UPDATE_PROTOCOL_INCOMPAT_TEXT
+      : "";
+  }
+
+  // 渲染层没有 path 模块：按「最后一个分隔符」把可执行文件路径切成父目录与文件名。
+  // 切不出来（没有分隔符 / 以分隔符结尾）就返回 null —— 路径不合规，报错，不猜。
+  // 同时带回路径实际用的分隔符（拼新目录 / 新 exe 用路径自己的分隔符，不跨平台硬编码）。
+  function splitBinaryPath(p) {
+    const s = String(p || "");
+    const i = Math.max(s.lastIndexOf("\\"), s.lastIndexOf("/"));
+    if (i <= 0 || i >= s.length - 1) return null;
+    return { dir: s.slice(0, i), name: s.slice(i + 1), sep: s.indexOf("\\") !== -1 ? "\\" : "/" };
+  }
+
+  // 版本串要拼进目录名 / 文件名：只认安全字符（字母数字与 . _ + -，且不以符号开头）。
+  // manifest 来自服务器，带分隔符或 ".." 的版本串绝不能进路径 —— 这是一道入口闸。
+  const SAFE_VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
+  function isSafeVersionText(v) {
+    return typeof v === "string" && SAFE_VERSION_RE.test(v);
+  }
+
+  function setLocalBinaryInputValue(value) {
+    const bi = getLocalBinaryInput();
+    if (bi) bi.value = String(value == null ? "" : value);
+  }
+
+  // 检查更新：manifest（走云端）+ 探活缓存里的实例 version → 三态文案。
+  async function checkLocalUpdate() {
+    const api = window.HTWApi;
+    const Local = window.HTWLocal;
+    setUpdateButtons({});
+    if (!api || typeof api.packageManifest !== "function" ||
+        !Local || typeof Local.comparePackage !== "function") {
+      setUpdateStatus(LOCAL_MODULE_MISSING_TEXT);
+      return { ok: false, message: LOCAL_MODULE_MISSING_TEXT };
+    }
+    let r;
+    try {
+      r = await api.packageManifest();
+    } catch (e) {
+      // 网络失败在 api.js 已换成中性中文的 Error：形状化后照失败支线显示。
+      r = { ok: false, message: (e && e.message) ? e.message : String(e) };
+    }
+    if (!r || r.ok !== true) {
+      lastPackageManifest = null;
+      // 失败如实透传：404 的「服务器未提供本地实例包」、鉴权 / 网络失败各自带自己的文案。
+      const msg = (r && r.message) ? String(r.message) : UPDATE_STEP_FAILED_TEXT;
+      setUpdateStatus(msg);
+      return { ok: false, message: msg };
+    }
+    const data = r.data || {};
+    lastPackageManifest = data;
+    const sizeText = formatPackageSize(data.sizeBytes);
+    const desc = String(data.version == null ? "" : data.version) + (sizeText ? "（" + sizeText + "）" : "");
+    const cmp = Local.comparePackage(data.version, lastInstanceVersion);
+    if (cmp === "latest") {
+      setUpdateStatus(UPDATE_LATEST_PREFIX + lastInstanceVersion + "）");
+      return { ok: true, compare: "latest", version: data.version };
+    }
+    if (cmp === "update") {
+      setUpdateStatus(UPDATE_HAS_NEW_PREFIX + desc + protocolNote(data));
+      setUpdateButtons({ update: true });
+      return { ok: true, compare: "update", version: data.version };
+    }
+    // unknown：实例未启动 / 读不到版本 —— 只展示服务器有包，不下版本结论。
+    setUpdateStatus(UPDATE_UNKNOWN_PREFIX + desc + "。" + UPDATE_INSTANCE_UNKNOWN_TEXT);
+    return { ok: true, compare: "unknown", version: data.version };
+  }
+
+  // 一键更新：下载（能力面处理 .part 临时文件与校验，失败即不留残件）→
+  // 独占创建新版本目录 → 解压。任何一步失败：旧配置旧目录零触碰，人话报错。
+  async function oneClickUpdate() {
+    const htw = window.htw;
+    const m = lastPackageManifest;
+    if (!m || !isSafeVersionText(m.version)) {
+      // 没检查过 / manifest 版本串不合规：不去猜，让人先点「检查更新」。
+      setUpdateStatus(UPDATE_NEED_CHECK_TEXT);
+      return { ok: false, message: UPDATE_NEED_CHECK_TEXT };
+    }
+    const binary = localBinaryValue() || userLocalBinary;
+    if (!binary) {
+      setUpdateStatus(UPDATE_NEED_BINARY_TEXT);
+      return { ok: false, message: UPDATE_NEED_BINARY_TEXT };
+    }
+    const parts = splitBinaryPath(binary);
+    if (!parts) {
+      setUpdateStatus(UPDATE_NO_DIR_TEXT);
+      return { ok: false, message: UPDATE_NO_DIR_TEXT };
+    }
+    const key = getKeyInput() ? String(getKeyInput().value || "").trim() : "";
+    if (!key) {
+      setUpdateStatus(LOCAL_KEY_REQUIRED_TEXT);
+      return { ok: false, message: LOCAL_KEY_REQUIRED_TEXT };
+    }
+    if (!htw || typeof htw.packageDownload !== "function" ||
+        typeof htw.packagePrepareDir !== "function" || typeof htw.packageExtract !== "function") {
+      setUpdateStatus(LOCAL_MODULE_MISSING_TEXT);
+      return { ok: false, message: LOCAL_MODULE_MISSING_TEXT };
+    }
+    const version = String(m.version);
+    const destDir = parts.dir + parts.sep + "HTWLocal-" + version;
+    const zipPath = parts.dir + parts.sep + "HTWLocal-" + version + ".zip";
+    const serverBase = ((getBaseInput() ? getBaseInput().value.trim() : "") ||
+      (window.HTWApi && window.HTWApi.base) || "").replace(/\/+$/, "");
+    // 阶段一：下载。url 走云端固定下载端点；带 AuthKey 头（下载端点走既有鉴权面）。
+    setUpdateStatus(UPDATE_DOWNLOADING_TEXT);
+    let dl;
+    try {
+      dl = await htw.packageDownload({
+        url: serverBase + "/api/v2/local/package",
+        headers: { AuthKey: key },
+        destPath: zipPath,
+        expectedSha256: String(m.sha256 || ""),
+      });
+    } catch (e) {
+      dl = { ok: false, message: (e && e.message) ? e.message : String(e) };
+    }
+    if (!dl || dl.ok !== true) {
+      const msg = (dl && dl.message) ? String(dl.message) : UPDATE_STEP_FAILED_TEXT;
+      setUpdateStatus(msg);
+      return { ok: false, stage: "download", message: msg };
+    }
+    // 阶段二：独占创建新版本目录（已存在即人话报错，绝不覆盖）。
+    setUpdateStatus(UPDATE_PREPARING_TEXT);
+    let prep;
+    try { prep = await htw.packagePrepareDir({ destDir: destDir }); }
+    catch (e) { prep = { ok: false, message: (e && e.message) ? e.message : String(e) }; }
+    if (!prep || prep.ok !== true) {
+      const msg = (prep && prep.message) ? String(prep.message) : UPDATE_STEP_FAILED_TEXT;
+      setUpdateStatus(msg);
+      return { ok: false, stage: "prepare", message: msg };
+    }
+    // 阶段三：解压到新目录。
+    setUpdateStatus(UPDATE_EXTRACTING_TEXT);
+    let ex;
+    try { ex = await htw.packageExtract({ zipPath: zipPath, destDir: destDir }); }
+    catch (e) { ex = { ok: false, message: (e && e.message) ? e.message : String(e) }; }
+    if (!ex || ex.ok !== true) {
+      const msg = (ex && ex.message) ? String(ex.message) : UPDATE_STEP_FAILED_TEXT;
+      setUpdateStatus(msg);
+      return { ok: false, stage: "extract", message: msg };
+    }
+    // 全部成功 → 暂存 + 出「重启并启用」。
+    stagedUpdate = { destDir: destDir, zipPath: zipPath, exeName: parts.name, sep: parts.sep, version: version };
+    setUpdateStatus(UPDATE_READY_TEXT);
+    setUpdateButtons({ update: false, restart: true });
+    return { ok: true, stage: "extracted", destDir: destDir };
+  }
+
+  // 重启并启用：监督器 stop → saveConfig 换 localBinary → start → 重探活。
+  // 🔴 启动失败立即把配置回退到旧 exe（旧目录零触碰的口径同样管到这里）：
+  //    用户手里的旧实例目录原封未动，随时可以再启动。
+  async function restartAndEnable() {
+    const staged = stagedUpdate;
+    if (!staged) {
+      // 没做过一键更新就点不了这条流程（按钮平时也藏着的兜底）。
+      setUpdateStatus(UPDATE_NEED_CHECK_TEXT);
+      return { ok: false, message: UPDATE_NEED_CHECK_TEXT };
+    }
+    const oldBinary = userLocalBinary || localBinaryValue();
+    const newBinary = staged.destDir + staged.sep + staged.exeName;
+    // 实例在跑才停；没跑就直接换配置启动（监督器管不到的手工实例由用户自己停）。
+    if (localInstanceAlive()) {
+      const st = await callSupervisor("localStop");
+      if (st && st.ok === false) {
+        setUpdateStatus(UPDATE_RESTART_FAILED_PREFIX + String(st.errMsg || "原因未知"));
+        return { ok: false, stage: "stop", message: String(st.errMsg || "原因未知") };
+      }
+    }
+    // 换配置（落盘 + 输入框回填显示，两边同一份字面量）。
+    setLocalBinaryInputValue(newBinary);
+    confirmLocalBinary(newBinary);
+    const startRes = await callSupervisor("localStart", newBinary);
+    if (startRes && startRes.ok === false) {
+      setLocalBinaryInputValue(oldBinary);
+      confirmLocalBinary(oldBinary);
+      const msg = UPDATE_RESTART_FAILED_PREFIX + String(startRes.errMsg || "原因未知");
+      setUpdateStatus(msg);
+      return { ok: false, stage: "start", message: msg };
+    }
+    stagedUpdate = null;
+    setUpdateButtons({});
+    setUpdateStatus(UPDATE_SWITCHED_PREFIX + staged.version + "。");
+    // 重探活：监督器 running 事件也会自动探一次，这里显式再探，状态行立刻反映新实例。
+    try { await probeLocal(); } catch (e) { /* 探活失败只体现在状态行上 */ }
+    return { ok: true, stage: "restarted", binary: newBinary };
+  }
+
   // 把完整 URL 拆成 path（preload 的 call 是 base + path 拼出来的，
   // 直接把完整 URL 当 path 传过去会拼出坏地址）。
   function pathOf(url) {
@@ -560,6 +821,7 @@
     const localBase = currentLocalBase();
     if (!Local || typeof Local.probeHealth !== "function") {
       confirmedLocalState = null;
+      lastInstanceVersion = null;
       // 选路判据作废：模块都不在，本地实例不可用 → 走云端。
       resetLocalRouting();
       setLocalStatus(LOCAL_MODULE_MISSING_TEXT);
@@ -575,6 +837,8 @@
     if (!r || r.ok !== true) {
       // 探活失败 = 未就绪：配对必须被状态自检拦下，选路也一并作废。
       confirmedLocalState = null;
+      // 实例版本同样作废：检查更新不能拿上一个实例的版本去比。
+      lastInstanceVersion = null;
       localProtocolMismatch = false;
       resetLocalRouting();
       setLocalStatus((r && r.message) ? r.message : "无法连接本地实例，请先启动或检查地址。");
@@ -606,12 +870,16 @@
       setLocalStatus(LOCAL_PROTOCOL_MISMATCH_TEXT);
       setLocalPairEnabled(false);
       setLocalPairResult(LOCAL_PROTOCOL_MISMATCH_TEXT);
+      // 实例在跑且自报了版本：检查更新仍可用它比对（不兼容不影响"看有没有新版"）。
+      lastInstanceVersion = (typeof r.version === "string" && r.version) ? r.version : null;
       return { ok: false, state: "protocolMismatch", message: LOCAL_PROTOCOL_MISMATCH_TEXT, protocolVersion: version };
     }
     localProtocolMismatch = false;
     // 状态文案取机器契约的映射表（不在这里另造一套说法）。
     const text = (Local.STATE_TEXT && Local.STATE_TEXT[r.state]) || r.message || "";
     confirmedLocalState = r.state;
+    // 实例信息版本号：检查更新的比对输入（探活成功才更新，失败已清空）。
+    lastInstanceVersion = (typeof r.version === "string" && r.version) ? r.version : null;
     // ---- 选路判据 ----
     // 实例可达（ready）与握手兼容（compatible）：探活过了 + 版本对上了。
     // 已配对**且已解锁**才算 paired：探活三态里只有 ready 满足
@@ -845,6 +1113,13 @@
     // 本地实例的启停按钮。
     const toggle = getLocalToggleBtn();
     if (toggle) toggle.addEventListener("click", function () { return toggleLocal(); });
+    // 检查更新 / 一键更新 / 重启并启用（一键更新流程的三步，spec §3.2）。
+    const checkUpdateBtn = getLocalCheckUpdateBtn();
+    if (checkUpdateBtn) checkUpdateBtn.addEventListener("click", function () { return checkLocalUpdate(); });
+    const updateBtn = getLocalUpdateBtn();
+    if (updateBtn) updateBtn.addEventListener("click", function () { return oneClickUpdate(); });
+    const restartEnableBtn = getLocalRestartEnableBtn();
+    if (restartEnableBtn) restartEnableBtn.addEventListener("click", function () { return restartAndEnable(); });
     // 订阅监督器状态：主进程每次状态变化推一次。
     if (window.htw && typeof window.htw.onLocalEvent === "function") {
       try { window.htw.onLocalEvent(onSupervisorEvent); } catch (e) { /* 订阅失败不影响设置页 */ }
@@ -1002,6 +1277,19 @@
       toggle: toggleLocal,
       stateOf: function () { return supervisorSnapshot; },
       base: currentLocalBase,
+      // 检查更新 / 一键更新 / 重启并启用（供测试驱动；流程状态见 update.stateOf）。
+      update: {
+        check: checkLocalUpdate,
+        run: oneClickUpdate,
+        restart: restartAndEnable,
+        stateOf: function () {
+          return {
+            manifest: lastPackageManifest,
+            instanceVersion: lastInstanceVersion,
+            staged: stagedUpdate,
+          };
+        },
+      },
       // 本地选路状态（给 api.js 的判据用；后续任务接总开关时也走这里）。
       routing: function () {
         return {

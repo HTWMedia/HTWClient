@@ -10,7 +10,7 @@ const { URL } = require("url");
 // call 请求头的唯一物化口径（省略通道也定义在这里：测试桩用同一份逻辑断言请求头）。
 const { buildCallHeaders } = require("./js/call-headers.js");
 // 本地更新包的下载校验与解压（真实实现在 js/local-package.js，可被测试直测）。
-const { downloadPackage, extractPackage } = require("./js/local-package.js");
+const { downloadPackage, extractPackage, ensureNewDir } = require("./js/local-package.js");
 
 const API_BASE = process.env.HTW_API_BASE || "https://htwmedia.dpdns.org";
 // 可选的大文件直连通道：默认关闭（空串），此时所有请求都走 API_BASE。
@@ -357,6 +357,14 @@ contextBridge.exposeInMainWorld("htw", {
     return extractPackage(params).catch((e) => ({
       ok: false, message: "解压更新包失败，请重试。",
     }));
+  },
+  // 为新版本目录做准备（独占创建：已存在即人话报错，绝不覆盖）。
+  // 解压目标目录由**流程层**负责创建（extractPackage 只挡"目录不存在"），
+  // 渲染层没有文件系统能力，创建动作经这里转发到 js/local-package.js。
+  packagePrepareDir: (params) => {
+    return Promise.resolve()
+      .then(() => ensureNewDir(params && params.destDir))
+      .catch(() => ({ ok: false, message: "准备更新目录失败，请重试。" }));
   },
   // 下载二进制（如成片视频）。桌面端用 AuthKey 头鉴权，无法像 web 端那样靠
   // 会话 Cookie 直接给 <video> 设 src，因此这里取 ArrayBuffer 回渲染进程转 Blob。

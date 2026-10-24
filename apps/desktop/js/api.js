@@ -612,6 +612,16 @@
 
   const get = (p) => call("GET", p);
   const post = (p, b) => call("POST", p, b);
+
+  // 服务器更新包清单（本地包分发 §3.2 的「检查更新」入口）。
+  // 🔴 该路径**不在**本地端点能力清单里 → shouldUseLocal 永不命中 → 选路自动走云端，
+  //    这正是它的正确去向（包由服务器管理，本机实例没有这个端点）。
+  //    因此刻意**不加** baseOverride：显式指定反而会绕过「设置里改过的服务端地址」。
+  // 404（服务器未提供包）与其它失败形状由 call/normalize 如实透传，调用方按形状显示。
+  async function packageManifest() {
+    return await call("GET", "/api/v2/local/package/manifest");
+  }
+
   return {
     setKey: setKey, setBase: setBase, setDirectBase: setDirectBase,
     setLocalBase: setLocalBase,
@@ -621,6 +631,7 @@
     shouldUseLocal: shouldUseLocal,
     hasKey: hasKey, authHeader: authHeader,
     call: call, get: get, post: post, upload: upload, download: download,
+    packageManifest: packageManifest,
     normalize: normalize, pollTask: pollTask, onQuotaExceeded: onQuotaExceeded,
     // 失败标记（可单测：界面层 / 汇总层也用它判别本地失败）。
     markLocalFailed: markLocalFailed,

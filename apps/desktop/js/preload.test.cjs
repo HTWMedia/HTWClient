@@ -168,3 +168,26 @@ test("preload 暴露了本地更新包的两个入口", () => {
   assert.strictEqual(typeof htw.packageDownload, "function", "缺 packageDownload");
   assert.strictEqual(typeof htw.packageExtract, "function", "缺 packageExtract");
 });
+
+// ---- packagePrepareDir：新版本目录的独占创建（解压目标由流程层建好）----
+
+test("preload packagePrepareDir: 新目录创建成功；已存在 → 人话报错不覆盖", async () => {
+  const htw = loadPreload();
+  assert.strictEqual(typeof htw.packagePrepareDir, "function", "缺 packagePrepareDir");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "htw-prep-"));
+  try {
+    const target = path.join(dir, "HTWLocal-2.0.0");
+    const first = await htw.packagePrepareDir({ destDir: target });
+    assert.strictEqual(first.ok, true, "新目录应创建成功，实际：" + JSON.stringify(first));
+    assert.ok(fs.statSync(target).isDirectory());
+
+    fs.writeFileSync(path.join(target, "keep.txt"), "keep-me");
+    const second = await htw.packagePrepareDir({ destDir: target });
+    assert.strictEqual(second.ok, false, "已存在的目录必须拒绝");
+    assert.ok(/已存在/.test(second.message), "失败文案要说清目录已存在，实际：" + second.message);
+    assert.strictEqual(fs.readFileSync(path.join(target, "keep.txt"), "utf-8"), "keep-me",
+      "既有文件必须原样保留");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

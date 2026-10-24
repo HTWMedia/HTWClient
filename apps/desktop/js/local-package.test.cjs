@@ -17,7 +17,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { EventEmitter } = require("node:events");
 
-const { downloadPackage, extractPackage } = require("./local-package.js");
+const { downloadPackage, extractPackage, ensureNewDir } = require("./local-package.js");
 
 // 内置小 zip（tar -a -cf 生成，362 字节）：pkg/probe.txt，内容见下。
 // 预置 base64 而不是测试内现打包：打包产物依赖系统 tar 的 zip 能力，
@@ -225,6 +225,53 @@ test("extractPackage: tar 非零退出 → 人话报错并带上退出码", asyn
 
     assert.strictEqual(r.ok, false);
     assert.ok(/退出码 2/.test(r.message), "失败文案要带上退出码，实际：" + r.message);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---- ensureNewDir：新版本目录的独占创建 ----
+//
+// 任务 2 的 concern（extractPackage 不校验目录空不空，信任调用方）由流程层
+// 用本函数兑现：目录要么是刚建出来的（必然为空），要么就报错不解压。
+
+test("ensureNewDir: 目录不存在 → 创建成功且确实是目录", () => {
+  const dir = mkTempDir();
+  try {
+    const target = path.join(dir, "HTWLocal-2.0.0");
+    const r = ensureNewDir(target);
+    assert.strictEqual(r.ok, true, "新目录应创建成功，实际：" + JSON.stringify(r));
+    assert.ok(fs.statSync(target).isDirectory(), "创建出来的必须是目录");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureNewDir: 目录已存在 → 拒绝（人话说清『已存在』），绝不覆盖", () => {
+  const dir = mkTempDir();
+  try {
+    const target = path.join(dir, "HTWLocal-2.0.0");
+    fs.mkdirSync(target);
+    // 里面放一个既有文件：独占创建的语义就是它一个字节都不能被动。
+    const keep = path.join(target, "keep.txt");
+    fs.writeFileSync(keep, "keep-me");
+    const r = ensureNewDir(target);
+    assert.strictEqual(r.ok, false, "已存在的目录必须拒绝");
+    assert.ok(/已存在/.test(r.message), "失败文案要说清目录已存在，实际：" + r.message);
+    assert.strictEqual(fs.readFileSync(keep, "utf-8"), "keep-me", "既有文件必须原样保留");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureNewDir: 父目录不存在 → 创建失败（人话），不递归补建", () => {
+  const dir = mkTempDir();
+  try {
+    // 父目录不存在：非递归创建必须失败 —— 父目录应是本地实例所在目录，
+    // 它不存在说明可执行文件路径本身有问题，静默补建反而把错误藏起来。
+    const r = ensureNewDir(path.join(dir, "no-such-parent", "HTWLocal-2.0.0"));
+    assert.strictEqual(r.ok, false);
+    assert.ok(/无法创建/.test(r.message), "失败文案要说清创建失败，实际：" + r.message);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
