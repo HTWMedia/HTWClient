@@ -216,8 +216,8 @@
 
       var state = { kind: "market-video", tpl: null };
 
-      // kind 切换行：切到 cut-same 时追加模板搜索卡片
-      var kindRow = UI.el("div", { class: "wf-row" });
+      // kind 切换行：切到 cut-same 时追加模板搜索卡片。下划线页签样式（.wf-kind-tabs）。
+      var kindRow = UI.el("div", { class: "wf-tabs wf-kind-tabs" });
       var kindTip = UI.el("div", { class: "wf-hint", text: KINDS[0].tip });
       KINDS.forEach(function (k, i) {
         // 不用 wf-tab：那是面板页签的类，面板内的类型切换用它会被计数/选择器误伤

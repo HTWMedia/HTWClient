@@ -55,6 +55,19 @@ Skills.marketing = {
       UI.el("div", { class: "progress-area-bar" }, [UI.el("div", { class: "progress-area-fill", id: "mv-progress-bar", style: "width:0%" })]),
     ]);
     var resultCard = UI.el("div", { class: "result-area", id: "mv-result-card", style: "display:none;margin-top:16px" });
+    // AI 辅助按钮是次级操作：降为 secondary、内联到所属字段的标题行右侧，
+    // 不与主操作「生成成片」抢层级（htw 2026-10-24：要一眼看出模块主次）。
+    function fieldWithAction(labelText, input, btn) {
+      return UI.el("div", { class: "field" }, [
+        UI.el("div", { class: "row", style: "justify-content:space-between;margin-bottom:4px" }, [
+          UI.el("label", { text: labelText, style: "margin:0" }),
+          btn,
+        ]),
+        input,
+      ]);
+    }
+    sellPointBtn.classList.add("secondary");
+    scriptBtn.classList.add("secondary");
     var errBox = UI.el("div", { id: "mv-err", style: "margin:12px 0 0;font-size:13px;color:#d33" });
 
     UI.mount(root, UI.el("div", {}, [
@@ -62,10 +75,8 @@ Skills.marketing = {
       UI.el("div", { class: "card" }, [
         materialPick,
         field("商品名称（必填）", productName),
-        UI.el("div", { class: "row" }, [sellPointBtn]),
-        field("核心卖点（每行一个）", sellPoints),
-        field("营销口播文案", script),
-        UI.el("div", { class: "row" }, [scriptBtn]),
+        fieldWithAction("核心卖点（每行一个）", sellPoints, sellPointBtn),
+        fieldWithAction("营销口播文案（可 AI 生成）", script, scriptBtn),
         field("画幅比例", ratio),
         field("时长", duration),
         field("优惠活动（可选）", discount),

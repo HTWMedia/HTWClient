@@ -283,9 +283,6 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
   background: rgba(255, 201, 77, 0.12); color: #facc15; border: 1px solid rgba(250, 204, 21, 0.35);
   border-radius: 8px; padding: 8px 12px; font-size: 12px; margin-bottom: 14px;
 }
-.tp-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
-.tp-tab { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
-.tp-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .tp-hint { color: var(--muted); font-size: 13px; margin-bottom: 14px; line-height: 1.6; }
 .tp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .tp-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
@@ -358,7 +355,25 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 
 /* ── 工作流面板（选题 → 成片 → 包装 → 发布）── */
 /* 页签条：下划线式 tab（batch / workflow 共用），内容合在一张 .wf-body 卡里。 */
-.wf-tabs { display: flex; gap: 2px; margin-bottom: 0; border-bottom: 1px solid var(--border); }
+/* 下划线式页签：顶层面板页签（batch/workflow 的 wf-*、topics 的 tp-*）与
+   卡内类型切换（wf-kind）同一语言。🔴 用 .btn.xxxx 提升优先级压过 button.btn
+   的蓝底（0,2,0 > 0,1,1），否则非激活态仍是蓝按钮。 */
+.wf-tabs, .tp-tabs { display: flex; gap: 2px; margin-bottom: 0; border-bottom: 1px solid var(--border); }
+.btn.wf-tab, .btn.tp-tab {
+  background: transparent; color: var(--muted);
+  border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  padding: 8px 16px; margin-bottom: -1px;
+}
+.btn.wf-tab:hover, .btn.tp-tab:hover { background: transparent; color: var(--text); }
+.btn.wf-tab.active, .btn.tp-tab.active { background: transparent; color: var(--accent); border-color: transparent; border-bottom-color: var(--accent); }
+.btn.wf-kind {
+  background: transparent; color: var(--muted);
+  border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  padding: 6px 12px; margin-bottom: -1px;
+}
+.btn.wf-kind:hover { background: transparent; color: var(--text); }
+.btn.wf-kind.active { background: transparent; color: var(--accent); border-color: transparent; border-bottom-color: var(--accent); }
+.wf-kind-tabs { margin-bottom: 8px; }
 .wf-tab {
   background: transparent; color: var(--muted);
   border: 0; border-bottom: 2px solid transparent; border-radius: 0;
@@ -372,9 +387,12 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .wf-section:first-child { padding-top: 2px; }
 .wf-section h3 { margin: 0 0 10px; }
 .wf-hint { color: var(--muted); font-size: 13px; margin-bottom: 10px; line-height: 1.6; }
-/* 面板内的类型选择钮（批次类型 / 内容形态）保持按钮样式，与页签区分。 */
-.wf-type, .wf-kind { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
-.wf-type.active, .wf-kind.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+/* 内容形态选择钮（workflow）保持按钮样式；批次类型已改下划线页签（.btn.wf-kind）。 */
+.wf-type { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+.wf-type.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* 主操作按钮（每模块只有一个）：比次级按钮大一号、带光晕，一眼看出主次。 */
+.btn.primary { padding: 10px 28px; font-size: 15px; font-weight: 600; box-shadow: 0 2px 10px rgba(79, 140, 255, .35); }
 .wf-empty { color: var(--muted); font-size: 13px; background: var(--panel-2); border: 1px dashed var(--border); border-radius: 10px; padding: 18px; text-align: center; }
 .wf-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
 .wf-row .input { flex: 1; min-width: 200px; }
