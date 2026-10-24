@@ -18,6 +18,10 @@
     "npmRebuild": false,
     "files": [
       "**/*",
+      "!js/*.test.cjs",
+      "!js/*.test.mjs",
+      "!js/**/*.test.*",
+      "!test/**",
       "assets/icon.ico",
       "assets/icon.icns"
     ],
