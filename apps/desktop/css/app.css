@@ -357,10 +357,24 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .detail-steps { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 
 /* ── 工作流面板（选题 → 成片 → 包装 → 发布）── */
-.wf-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
-.wf-tab, .wf-type, .wf-kind { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
-.wf-tab.active, .wf-type.active, .wf-kind.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+/* 页签条：下划线式 tab（batch / workflow 共用），内容合在一张 .wf-body 卡里。 */
+.wf-tabs { display: flex; gap: 2px; margin-bottom: 0; border-bottom: 1px solid var(--border); }
+.wf-tab {
+  background: transparent; color: var(--muted);
+  border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  padding: 8px 16px; margin-bottom: -1px;
+}
+.wf-tab:hover { color: var(--text); background: transparent; }
+.wf-tab.active { background: transparent; color: var(--accent); border-color: transparent; border-bottom-color: var(--accent); }
+.wf-body { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px; }
+.wf-section { padding: 14px 0; }
+.wf-section + .wf-section { border-top: 1px solid var(--border); }
+.wf-section:first-child { padding-top: 2px; }
+.wf-section h3 { margin: 0 0 10px; }
 .wf-hint { color: var(--muted); font-size: 13px; margin-bottom: 10px; line-height: 1.6; }
+/* 面板内的类型选择钮（批次类型 / 内容形态）保持按钮样式，与页签区分。 */
+.wf-type, .wf-kind { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+.wf-type.active, .wf-kind.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .wf-empty { color: var(--muted); font-size: 13px; background: var(--panel-2); border: 1px dashed var(--border); border-radius: 10px; padding: 18px; text-align: center; }
 .wf-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
 .wf-row .input { flex: 1; min-width: 200px; }

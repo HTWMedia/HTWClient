@@ -179,7 +179,10 @@
       tabs.appendChild(b);
     });
     panel.appendChild(tabs);
-    panel.appendChild(body);
+    // 整块容器：页签内容合在一张卡里（内部用 .wf-section 分节），不再是一堆散卡片。
+    var bodyCard = UI.el("div", { class: "wf-body" });
+    bodyCard.appendChild(body);
+    panel.appendChild(bodyCard);
 
     function renderTab(key) {
       UI.clear(body);
@@ -247,7 +250,7 @@
       }));
       var mktMat = UI.fileInput({ label: "商品素材（可多选，整批共用）", multiple: true });
       var mktMsg = UI.el("div", { class: "wf-hint" });
-      var mktCard = UI.el("div", { class: "card" }, [
+      var mktCard = UI.el("div", { class: "wf-section" }, [
         UI.el("h3", { text: "商品条目" }),
         itemsText,
         UI.el("div", { class: "wf-row" }, [
@@ -297,7 +300,7 @@
           })
           .catch(function (e) { tplMsg.textContent = errText(e); });
       });
-      var tplCard = UI.el("div", { class: "card" }, [
+      var tplCard = UI.el("div", { class: "wf-section" }, [
         UI.el("h3", { text: "选模板" }),
         UI.el("div", { class: "wf-row" }, [tplKeyword, tplSearchBtn]),
         tplMsg,
@@ -406,7 +409,7 @@
         msg.parentNode.appendChild(UI.el("div", { class: "wf-notice", text: sum.lines.join("\n") }));
       }
 
-      wrap.appendChild(UI.el("div", { class: "card" }, [
+      wrap.appendChild(UI.el("div", { class: "wf-section" }, [
         UI.el("h3", { text: "批次类型" }),
         kindRow,
         kindTip,
@@ -414,11 +417,11 @@
       ]));
       wrap.appendChild(tplCard);
       wrap.appendChild(mktCard);
-      wrap.appendChild(UI.el("div", { class: "card" }, [
+      wrap.appendChild(UI.el("div", { class: "wf-section" }, [
         UI.el("h3", { text: "素材文件" }),
         vidMat,
       ]));
-      wrap.appendChild(UI.el("div", { class: "card" }, [
+      wrap.appendChild(UI.el("div", { class: "wf-section" }, [
         UI.el("div", { class: "wf-row" }, [go]),
         msg,
       ]));
@@ -434,7 +437,7 @@
       var idInput = UI.el("input", { class: "input", placeholder: "批次 ID（提交后自动填入）", value: lastBatchId });
       var loadBtn = UI.el("button", { class: "btn", text: "查询" });
       var region = UI.el("div");
-      wrap.appendChild(UI.el("div", { class: "card" }, [
+      wrap.appendChild(UI.el("div", { class: "wf-section" }, [
         UI.el("div", { class: "wf-row" }, [idInput, loadBtn]),
       ]));
       wrap.appendChild(region);
