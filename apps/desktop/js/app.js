@@ -13,6 +13,7 @@
   function getLocalBinaryInput() { return document.getElementById("local-binary"); }
   function getLocalToggleBtn() { return document.getElementById("local-toggle"); }
   function getLocalStateEl() { return document.getElementById("local-state"); }
+  function getLocalRoutingEl() { return document.getElementById("local-routing"); }
   function getLocalEnabledInput() { return document.getElementById("local-enabled"); }
 
   // 本地模式未配置（输入框为空）时的状态文案。
@@ -808,6 +809,27 @@
     return r;
   }
 
+  // ---- 最近请求列表（逐请求选路可观测性）----
+  // 数据源唯一在 api.js（routingHistory / onRouting）；行文案与末 8 条截断的口径
+  // 都在 js/ui.js 的 renderRoutingList，这里只接线：启动渲染一次缓冲里已有的记录
+  // （重启后设置页不是空瞎猜，而是显示本轮已经发生过的请求），之后每次新记录重渲染。
+  // 总开关关闭时照常工作——云端请求也记，用户正是要分辨"走了本机还是云端"。
+  function refreshRoutingList() {
+    const box = getLocalRoutingEl();
+    const api = window.HTWApi;
+    if (!box || !window.UI || typeof window.UI.renderRoutingList !== "function") return;
+    const history = (api && typeof api.routingHistory === "function") ? api.routingHistory() : [];
+    window.UI.renderRoutingList(box, history);
+  }
+
+  function wireRoutingList() {
+    const api = window.HTWApi;
+    refreshRoutingList();
+    if (api && typeof api.onRouting === "function") {
+      try { api.onRouting(function () { refreshRoutingList(); }); } catch (e) { /* 订阅失败不影响设置页 */ }
+    }
+  }
+
   // 🔴 接线**只做一次**：boot() 的成功路径与失败路径都会调 wireLocal，
   // 不加防重的话同一个按钮会绑上两个处理器 —— 点一次「保存并探活」探活两次，
   // 而且两次是交错的异步探活，状态行显示的是**后到**的那次，用户看到的结果
@@ -833,6 +855,8 @@
     // 总开关：勾选 / 取消都要立刻落盘并生效。
     const enabledInput = getLocalEnabledInput();
     if (enabledInput) enabledInput.addEventListener("change", onLocalEnabledChanged);
+    // 最近请求列表：订阅 api.js 的选路记录（总开关关着也照常显示）。
+    wireRoutingList();
   }
 
   function wireNav() {

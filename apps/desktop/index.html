@@ -87,6 +87,10 @@
             <button class="btn" type="button" id="local-toggle">启动本地实例</button>
           </div>
           <div class="hint" id="local-state">本地实例：未启动</div>
+          <!-- 最近请求：逐请求选路可观测性。每条请求走了本机还是云端看这里
+               （最近 8 条；数据源在 js/api.js 的选路记录，只在本轮内存里，重启清零）。 -->
+          <div class="hint">最近请求</div>
+          <div class="hint" id="local-routing">暂无请求记录</div>
         </div>
       </section>
     </main>

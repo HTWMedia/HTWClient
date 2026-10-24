@@ -509,6 +509,48 @@
     }
   }
 
+  // ---- 设置页「最近请求」列表（逐请求选路可观测性）----
+  // 数据源唯一在 js/api.js（routingHistory / onRouting 的选路记录，形状
+  // { time, method, path, local, ok, chunked? }）；这里只负责把记录变成行文案。
+  // 时间戳只有 ms 数，格式化（HH:MM:SS，本地时区）是渲染层的职责。
+  function formatRoutingTime(t) {
+    var d = new Date(Number(t));
+    if (isNaN(d.getTime())) return "--:--:--";
+    var p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+
+  // 单条记录 → 行文案：`HH:MM:SS METHOD /path ·本地/云端`。
+  // 失败行（ok:false）加「✕」前缀——排查选路问题时失败行最有价值，必须一眼可辨。
+  function routingRowText(entry) {
+    var e = entry || {};
+    return (e.ok === false ? "✕ " : "") +
+      formatRoutingTime(e.time) + " " +
+      String(e.method || "") + " " + String(e.path || "") +
+      (e.local === true ? " ·本地" : " ·云端");
+  }
+
+  // 列表只显示末 8 条（记录缓冲在 api.js 有 50 条，全部平铺会淹没设置页）。
+  var ROUTING_SHOW_LIMIT = 8;
+
+  // 渲染整块列表。entries 是 routingHistory() 的快照（最新在后），
+  // 按时间正序显示（老在上、新在下）。无记录时显示「暂无请求记录」空态。
+  // 🔴 记录诚实性优先：分片上传的 chunk 行与 complete 行如实各占一行，不去重。
+  function renderRoutingList(container, entries) {
+    if (!container) return container;
+    clear(container);
+    var list = Array.isArray(entries) ? entries : [];
+    var shown = list.slice(-ROUTING_SHOW_LIMIT);
+    if (!shown.length) {
+      mount(container, el("div", { text: "暂无请求记录" }));
+      return container;
+    }
+    for (var i = 0; i < shown.length; i++) {
+      mount(container, el("div", { text: routingRowText(shown[i]) }));
+    }
+    return container;
+  }
+
   // markdown 里生成的链接统一走系统浏览器打开（.title-link 已有自身 onclick，这里处理 marked 生成的普通 <a>）
   if (typeof document !== "undefined") {
     document.addEventListener("click", function (e) {
@@ -529,5 +571,7 @@
     renderResult: renderResult, spinner: spinner, fileInput: fileInput, withLoading: withLoading,
     esc: escapeHtml, cleanText: cleanText, platformName: platformName,
     sanitizeHtml: sanitizeHtml, renderMarkdown: renderMarkdown,
+    formatRoutingTime: formatRoutingTime, routingRowText: routingRowText,
+    renderRoutingList: renderRoutingList,
   };
 });
