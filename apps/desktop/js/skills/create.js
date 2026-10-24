@@ -377,13 +377,15 @@ function renderDetail(tab, state, root, data) {
   }
 
   // 素材上传只挂一次，避免每次轮询都追加一个新的 file input。
+  // 走统一的 UI.fileInput（虚线拖放区 + 选中回显），与 batch / edit 的文件控件同款。
   if (tab === 'video' && !det.querySelector('#cmaterial')) {
     const row = document.createElement('div');
     row.className = 'field inline uprow';
-    row.innerHTML = `<span class="muted">上传素材（图片/视频，≤20MB）：</span><input type="file" id="cmaterial" multiple accept="image/*,video/*">`;
+    const pick = UI.fileInput({ label: '上传素材（图片 / 视频，≤20MB，可多选）', multiple: true, accept: 'image/*,video/*' });
+    pick.input.id = 'cmaterial';
+    row.appendChild(pick);
     det.appendChild(row);
-    const up = row.querySelector('#cmaterial');
-    if (up) up.addEventListener('change', () => uploadMaterial(state, up, row));
+    pick.input.addEventListener('change', () => uploadMaterial(state, pick.input, row));
   }
 }
 

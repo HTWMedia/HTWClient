@@ -4,6 +4,39 @@
   //    点导航会"点了没反应"（面板永远不激活），而且不报任何错。
   const SKILLS = ["insight", "topics", "edit", "tools", "publish", "assistant", "create", "marketing", "batch", "shortdrama", "workflow", "tasks"];
 
+  // 每个功能点的一句话说明：切到该面板时显示在标题下（.panel-desc）。
+  // 🔴 新增面板必须在这里补一条——app.panels.test.mjs 有守卫核对（漏了会红）。
+  const SKILL_DESCRIPTIONS = {
+    tools: "独立小工具集：语音转写、语音翻译、音频总结、歌词识别、人声分离、文字转语音，选一个即开即用。",
+    insight: "看清内容和账号的表现：视频 / 账号 / 文案分析、热榜与头条素材，帮你决定下一步做什么。",
+    topics: "配置对标账号、关键词与目标受众，系统据此每天给你出选题建议。",
+    create: "AI 创作工作台：从选题到图文 / 视频成片，可上传素材、分步开关每道工序。",
+    workflow: "把选题、创作、发布串成自动流水线，一次配置按计划跑。",
+    edit: "剪同款模板与草稿导出：套用模板再渲染，或把成片拉回本地继续剪。",
+    publish: "配置各平台账号，把成片一键发布到多个平台。",
+    marketing: "营销成片：输入商品信息，自动提炼卖点、生成文案并合成带货短视频。",
+    batch: "批量任务：按商品条目批量套模板出片，适合一次跑一整份商品清单。",
+    shortdrama: "短剧创作：设定角色与分镜，自动生成短剧成片。",
+    assistant: "对话式创作助手：视频 / 图片 / 文章创作与发布，用聊天的方式完成。",
+    tasks: "任务中心：查看进行中、已完成、失败的任务与实时进度。",
+    settings: "应用配置：服务器地址、AuthKey，以及本地模式（本地实例、检查更新）。",
+  };
+
+  // 把说明条渲染进面板：已有就只更新文案，绝不重复插入。
+  function renderPanelDesc(section, name) {
+    const desc = SKILL_DESCRIPTIONS[name];
+    if (!section || !desc) return;
+    let d = null;
+    for (const c of section.children) if (c.classList && c.classList.contains("panel-desc")) { d = c; break; }
+    if (!d) {
+      d = document.createElement("div");
+      d.className = "panel-desc";
+      const h2 = section.querySelector ? section.querySelector("h2") : null;
+      if (h2 && h2.parentNode === section) h2.after(d); else section.insertBefore(d, section.firstChild);
+    }
+    d.textContent = desc;
+  }
+
   function getBaseInput() { return document.getElementById("api-base"); }
   function getKeyInput() { return document.getElementById("api-key"); }
   function getLocalBaseInput() { return document.getElementById("local-base"); }
@@ -255,6 +288,7 @@
     });
     const settingsPanel = document.getElementById("panel-settings");
     if (settingsPanel) settingsPanel.classList.remove("active");
+    renderPanelDesc(document.getElementById("panel-" + name), name);
     refreshKeyUI();
   }
 
@@ -266,6 +300,7 @@
     document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
     const sp = document.getElementById("panel-settings");
     if (sp) sp.classList.add("active");
+    renderPanelDesc(sp, "settings");
     refreshKeyUI();
   }
 

@@ -487,15 +487,48 @@
     ]);
   }
 
+  // 文件选择控件（统一版本）：虚线拖放区 + 隐藏原生 input。
+  // - 点击区域即打开选择器（label 包住原生 input，点击是浏览器原生行为）；
+  // - 选中后在区域里回显文件名——原生控件选中后只有一句"已选择 N 项"，
+  //   用户看不出选了什么；
+  // - 拖拽落下的文件经 DataTransfer 塞回原生 input 再派发 change：
+  //   消费方（batch / edit / create 各自的上传监听）零改动。
   function fileInput(opts) {
     opts = opts || {};
-    const input = el("input", { type: "file", accept: opts.accept || "" });
+    const input = el("input", { type: "file", accept: opts.accept || "", class: "file-input-native" });
     if (opts.multiple) input.multiple = true;
-    const wrap = el("label", { class: "file-input" }, [
-      el("span", { class: "file-input-label", text: opts.label || "选择文件" }),
+    const filesLine = el("div", { class: "file-drop-files" });
+    const zone = el("label", { class: "file-drop" }, [
+      el("div", { class: "file-drop-title", text: opts.label || "选择文件" }),
+      el("div", { class: "file-drop-hint", text: "点击选择，或把文件拖到这里" }),
+      filesLine,
       input,
     ]);
+    function refresh() {
+      const files = Array.from(input.files || []);
+      clear(filesLine);
+      if (!files.length) { filesLine.textContent = ""; return; }
+      const shown = files.slice(0, 3).map((f) => f.name).join("、");
+      filesLine.textContent = "已选 " + files.length + " 个文件：" + shown + (files.length > 3 ? " 等" : "");
+    }
+    input.addEventListener("change", refresh);
+    zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("dragover"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("dragover"));
+    zone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      zone.classList.remove("dragover");
+      const dt = e.dataTransfer;
+      if (!dt || !dt.files || !dt.files.length) return;
+      try {
+        const t = new DataTransfer();
+        for (const f of dt.files) t.items.add(f);
+        input.files = t.files;
+      } catch (err) { /* 环境不支持 DataTransfer 赋值时退化为点击选择 */ }
+      if (typeof input.dispatchEvent === "function") input.dispatchEvent(new Event("change"));
+    });
+    const wrap = el("div", { class: "file-input" }, [zone]);
     wrap.input = input;
+    wrap.refresh = refresh;
     return wrap;
   }
 

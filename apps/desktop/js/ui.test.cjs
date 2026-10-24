@@ -175,3 +175,51 @@ test("ui.renderRoutingList: 容器为 null 时安全跳过（元素不在页面�
     assert.strictEqual(UI.renderRoutingList(null, [routingEntry()]), null);
   } finally { global.document = prev; }
 });
+
+// ---- fileInput（统一文件选择控件：虚线拖放区 + 选中回显）----
+
+function findByClass(node, cls) {
+  if (node && node.className === cls) return node;
+  for (const c of (node && node.children) || []) {
+    const hit = findByClass(c, cls);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+test("ui.fileInput: 渲染拖放区（标题 + 提示 + 隐藏原生 input），accept/multiple 透传", () => {
+  const prev = global.document;
+  global.document = doc;
+  try {
+    const w = UI.fileInput({ label: "选择视频", accept: ".mp4", multiple: true });
+    assert.strictEqual(w.input.getAttribute("accept"), ".mp4");
+    assert.ok(w.input.multiple);
+    const zone = findByClass(w, "file-drop");
+    assert.ok(zone, "应有 .file-drop 拖放区");
+    const texts = [];
+    (function walk(n) { texts.push(n.textContent || ""); (n.children || []).forEach(walk); })(zone);
+    assert.ok(texts.some((t) => t.includes("选择视频")), "标题应含 label 文案");
+    assert.ok(texts.some((t) => t.includes("点击选择，或把文件拖到这里")), "应有操作提示行");
+    const native = findByClass(w, "file-input-native");
+    assert.ok(native, "原生 input 应存在且带隐藏类");
+  } finally { global.document = prev; }
+});
+
+test("ui.fileInput: refresh 回显已选文件名，超过 3 个折叠为「等」", () => {
+  const prev = global.document;
+  global.document = doc;
+  try {
+    const w = UI.fileInput({ label: "上传素材", multiple: true });
+    w.input.files = [{ name: "a.mp4" }, { name: "b.png" }, { name: "c.mov" }, { name: "d.mp4" }];
+    w.refresh();
+    const line = findByClass(w, "file-drop-files");
+    assert.ok(line, "应有回显行");
+    assert.ok(line.textContent.includes("已选 4 个文件"), "应显示总数：" + line.textContent);
+    assert.ok(line.textContent.includes("a.mp4、b.png、c.mov"), "应列前三个文件名");
+    assert.ok(line.textContent.includes("等"), "超过 3 个应折叠");
+
+    w.input.files = [];
+    w.refresh();
+    assert.strictEqual(findByClass(w, "file-drop-files").textContent, "", "清空选择后回显行应为空");
+  } finally { global.document = prev; }
+});

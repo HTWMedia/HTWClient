@@ -91,3 +91,11 @@ test("script 标签顺序：workflow 在 app.js 之前（app.js 要挨个 mount�
   assert.ok(wf >= 0 && app >= 0);
   assert.ok(wf < app, "workflow.js 必须在 app.js 之前加载，否则挂载时Skills.workflow 还不存在");
 });
+
+test("每个功能点都配了一句说明（SKILL_DESCRIPTIONS，含 settings）", () => {
+  const m = appJs.match(/const SKILL_DESCRIPTIONS = \{([\s\S]*?)\n  \};/);
+  assert.ok(m, "app.js 里找不到 SKILL_DESCRIPTIONS 表 —— 每个面板都该有一句话说明");
+  const missing = skillList().filter((s) => !new RegExp("\\b" + s + "\\s*:", "m").test(m[1]));
+  assert.deepStrictEqual(missing, [], "这些面板缺说明条文案：" + missing.join(", "));
+  assert.ok(/(^|\n)\s*settings\s*:/m.test(m[1]), "settings 面板也应有说明（走 showSettings 分支）");
+});

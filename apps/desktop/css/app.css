@@ -75,6 +75,27 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .file-input-label { color: var(--muted); font-size: 12px; }
 .file-input input { color: var(--muted); }
 
+/* 统一文件选择控件：虚线拖放区，点击或拖拽均可；选中后回显文件名。 */
+.file-drop {
+  display: flex; flex-direction: column; gap: 4px; cursor: pointer;
+  border: 1px dashed var(--border); border-radius: var(--radius);
+  background: var(--panel-2); padding: 14px 16px; margin-bottom: 8px;
+  transition: border-color .15s, background .15s;
+}
+.file-drop:hover { border-color: var(--accent); }
+.file-drop.dragover { border-color: var(--accent); background: rgba(79, 140, 255, .08); }
+.file-drop-title { color: var(--text); font-size: 13px; }
+.file-drop-hint { color: var(--muted); font-size: 12px; }
+.file-drop-files { color: var(--ok); font-size: 12px; word-break: break-all; }
+.file-input-native { display: none; }
+
+/* 面板说明条：一句话讲清这个功能点是干什么的。 */
+.panel-desc {
+  color: var(--muted); font-size: 13px;
+  border-left: 3px solid var(--accent); padding: 2px 0 2px 10px;
+  margin: -6px 0 16px;
+}
+
 .error-box { background: var(--danger-bg); border: 1px solid var(--danger); color: var(--danger); border-radius: 6px; padding: 12px; margin-top: 12px; }
 .error-detail { white-space: pre-wrap; margin-top: 6px; font-family: monospace; }
 
