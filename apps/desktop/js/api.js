@@ -177,7 +177,11 @@
     _routingHistory.push(entry);
     if (_routingHistory.length > ROUTING_HISTORY_LIMIT) _routingHistory.shift();
     for (const fn of _routingListeners) {
-      try { fn(entry); } catch (e) { /* 旁路不变量：监听器抛错被吞，不影响请求 */ }
+      try { fn(entry); } catch (e) {
+        // 旁路不变量：监听器抛错被吞，不影响请求（OM1）——但留一条 debug 级痕迹，
+        // 排查"设置页列表没更新"这类问题时不用靠猜。
+        if (typeof console !== "undefined" && console.debug) console.debug("[routing] listener error:", e);
+      }
     }
   }
 

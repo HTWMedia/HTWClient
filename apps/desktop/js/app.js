@@ -112,7 +112,11 @@
   const UPDATE_UNKNOWN_PREFIX = "服务器有可用包：";
   const UPDATE_INSTANCE_UNKNOWN_TEXT = "未检测到本地实例版本（实例未启动或版本未知），不比对。";
   // manifest 的 protocolVersion 与客户端支持的刻度对不上时的附注（更新后握手会被拦，先说清）。
-  const UPDATE_PROTOCOL_INCOMPAT_TEXT = "协议版本不兼容，更新后需重新配对探活";
+  // 🔴 刻度不匹配有两种情形，文案必须都说清（PF4）：实例旧 → 更新包即可救（更新后
+  //    需重新配对探活）；客户端旧（包的刻度比 SUPPORTED_PROTOCOL_VERSION 新）→
+  //    重新配对救不了，得更新桌面客户端本身。
+  const UPDATE_PROTOCOL_INCOMPAT_TEXT =
+    "协议版本不兼容：若新包刻度更新，更新实例后需重新配对探活；若客户端不支持该刻度，需更新桌面客户端";
   const UPDATE_DOWNLOADING_TEXT = "下载中…";
   const UPDATE_PREPARING_TEXT = "正在准备更新目录…";
   const UPDATE_EXTRACTING_TEXT = "解压中…";
@@ -660,7 +664,9 @@
   async function checkLocalUpdate() {
     const api = window.HTWApi;
     const Local = window.HTWLocal;
-    setUpdateButtons({});
+    // 🔴 已暂存的更新不被「检查更新」藏掉（PF5）：stagedUpdate 在时保留重启按钮，
+    //    否则重试一键更新会撞「目录已存在」。清理该状态的唯一出口是重启启用成功。
+    setUpdateButtons(stagedUpdate ? { restart: true } : {});
     if (!api || typeof api.packageManifest !== "function" ||
         !Local || typeof Local.comparePackage !== "function") {
       setUpdateStatus(LOCAL_MODULE_MISSING_TEXT);
@@ -732,8 +738,10 @@
     const version = String(m.version);
     const destDir = parts.dir + parts.sep + "HTWLocal-" + version;
     const zipPath = parts.dir + parts.sep + "HTWLocal-" + version + ".zip";
-    const serverBase = ((getBaseInput() ? getBaseInput().value.trim() : "") ||
-      (window.HTWApi && window.HTWApi.base) || "").replace(/\/+$/, "");
+    // 🔴 服务器地址只认**已确认**的 base（PF1）：manifest 请求走的就是 HTWApi.base，
+    //    下载 URL 若取输入框现值，用户改了地址没保存时两者会不一致。
+    //    白名单闸门仍是最后一道（未登记地址直接拒），但源头就不该分叉。
+    const serverBase = String((window.HTWApi && window.HTWApi.base) || "").replace(/\/+$/, "");
     // 阶段一：下载。url 走云端固定下载端点；带 AuthKey 头（下载端点走既有鉴权面）。
     setUpdateStatus(UPDATE_DOWNLOADING_TEXT);
     let dl;
