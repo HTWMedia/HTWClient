@@ -57,11 +57,18 @@ body {
 .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
 .field label { color: var(--muted); font-size: 12px; }
 
-input[type="text"], input[type="password"], input[type="number"], textarea, select {
+input[type="text"], input[type="password"], input[type="number"], input:not([type]), .input, textarea, select {
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
   border-radius: 6px; padding: 8px 10px; font: inherit; width: 100%;
 }
 textarea { min-height: 90px; resize: vertical; }
+
+/* checkbox / radio：accent-color 统一着色，尺寸略放大，原生白方块观感去掉。 */
+input[type="checkbox"], input[type="radio"] {
+  accent-color: var(--accent); width: 15px; height: 15px;
+  cursor: pointer; vertical-align: middle; margin: 0 2px 0 0;
+}
+input[type="checkbox"]:disabled, input[type="radio"]:disabled { cursor: default; opacity: .55; }
 
 button.btn {
   background: var(--accent); color: #fff; border: 0; border-radius: 6px;

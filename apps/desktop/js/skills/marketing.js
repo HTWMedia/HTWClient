@@ -25,7 +25,10 @@ Skills.marketing = {
       return UI.el("div", { class: "field" }, [UI.el("label", { text: labelText }), input]);
     }
 
-    var materials = UI.el("input", { type: "file", multiple: true, accept: "image/*,video/*" });
+    // 商品素材走统一的 UI.fileInput（虚线拖放区 + 选中回显），与 create / batch / edit 同款；
+    // 提交逻辑只读 .input.files，换控件零改动。
+    var materialPick = UI.fileInput({ label: "商品素材（图片 / 视频，可多选，必填）", multiple: true, accept: "image/*,video/*" });
+    var materials = materialPick.input;
     var productName = UI.el("input", { type: "text", placeholder: "如：考试填卡笔、办公室养生茶" });
     var sellPointBtn = UI.el("button", { class: "btn", text: "生成卖点" });
     var sellPoints = UI.el("textarea", { rows: "3", placeholder: "每行一个卖点，可自动生成也可手动编写" });
@@ -57,7 +60,7 @@ Skills.marketing = {
     UI.mount(root, UI.el("div", {}, [
       UI.el("h2", { text: "营销成片 MarketVideo" }),
       UI.el("div", { class: "card" }, [
-        field("商品素材（图片 / 视频，可多选，必填）", materials),
+        materialPick,
         field("商品名称（必填）", productName),
         UI.el("div", { class: "row" }, [sellPointBtn]),
         field("核心卖点（每行一个）", sellPoints),
