@@ -154,7 +154,10 @@
       tabs.appendChild(b);
     });
     panel.appendChild(tabs);
-    panel.appendChild(body);
+    // 与批量同构：页签内容合在一张卡里（.wf-section 分节），不再散卡片。
+    var bodyCard = UI.el("div", { class: "wf-body" });
+    bodyCard.appendChild(body);
+    panel.appendChild(bodyCard);
 
     function renderTab(key) {
       UI.clear(body);
@@ -221,7 +224,7 @@
         class: "wf-hint",
         text: "可选。上传后 AI 会在合适的段落切入真人出镜；不传则全程无真人。素材越大上传越久。",
       });
-      var arollCard = UI.el("div", { class: "card" }, [
+      var arollCard = UI.el("div", { class: "wf-section" }, [
         UI.el("h3", { text: "真人出镜素材（可选）" }),
         arollInput,
         arollHint,
@@ -237,8 +240,8 @@
       }
 
       // 内容形态三选一。图文两档在服务端会跳过出片与包装两段（省时长额度），
-      // 这里切换时顺带把提示与占位换成对应口径。
-      var typeRow = UI.el("div", { class: "wf-row" });
+      // 这里切换时顺带把提示与占位换成对应口径。下划线页签样式（与批量的类型切换同款）。
+      var typeRow = UI.el("div", { class: "wf-tabs wf-kind-tabs" });
       var typeTip = UI.el("div", { class: "wf-hint", text: CONTENT_TYPES[0].tip });
       CONTENT_TYPES.forEach(function (t, i) {
         // 不用 wf-tab：那是面板页签的类，面板内的形态切换用它会被计数/选择器误伤
@@ -416,7 +419,7 @@
         });
       });
 
-      wrap.appendChild(UI.el("div", { class: "card" }, [
+      wrap.appendChild(UI.el("div", { class: "wf-section" }, [
         UI.el("h3", { text: "内容形态" }),
         typeRow,
         typeTip,
@@ -424,7 +427,7 @@
 
       wrap.appendChild(arollCard);
 
-      wrap.appendChild(UI.el("div", { class: "card" }, [
+      wrap.appendChild(UI.el("div", { class: "wf-section" }, [
         UI.el("h3", { text: "选题" }),
         UI.el("div", { class: "wf-row" }, [topic, autoBtn]),
         topicBox,
@@ -435,7 +438,7 @@
         msg,
       ]));
 
-      wrap.appendChild(UI.el("div", { class: "card" }, [
+      wrap.appendChild(UI.el("div", { class: "wf-section" }, [
         UI.el("h3", { text: "批量" }),
         UI.el("div", { class: "wf-hint", text: "一次跑多条。每条都各自计费、也都各自走完整条链路。" }),
         batchTopics,
@@ -669,7 +672,7 @@
           wrap.appendChild(emptyBox("还没有工作流记录。"));
           return;
         }
-        var listCard = UI.el("div", { class: "card" }, [UI.el("h3", { text: "全部记录" })]);
+        var listCard = UI.el("div", { class: "wf-section" }, [UI.el("h3", { text: "全部记录" })]);
         items.forEach(function (w) {
           var st = stage(w.stage);
           var ct = normalizeContentType(w.contentType);
