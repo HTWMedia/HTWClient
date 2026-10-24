@@ -9,6 +9,8 @@ const https = require("https");
 const { URL } = require("url");
 // call 请求头的唯一物化口径（省略通道也定义在这里：测试桩用同一份逻辑断言请求头）。
 const { buildCallHeaders } = require("./js/call-headers.js");
+// 本地更新包的下载校验与解压（真实实现在 js/local-package.js，可被测试直测）。
+const { downloadPackage, extractPackage } = require("./js/local-package.js");
 
 const API_BASE = process.env.HTW_API_BASE || "https://htwmedia.dpdns.org";
 // 可选的大文件直连通道：默认关闭（空串），此时所有请求都走 API_BASE。
@@ -332,6 +334,29 @@ contextBridge.exposeInMainWorld("htw", {
       if (total === 0) { report(); req.end(); }
       else writeNext();
     });
+  },
+  // ---- 本地更新包（下载校验 / 解压）----
+  // 与 call 同一白名单闸门：url 必须命中 registerBase 已登记的基址，
+  // 否则请求根本不发 —— 否则页面里任何脚本都能让 preload 带着请求头去连任意地址。
+  // 下载/校验/解压的真实实现在 js/local-package.js（测试直测那个模块）；
+  // 这里的失败兜底不吞错，统一折成 { ok:false, message }（人话）。
+  packageDownload: (params) => {
+    const p = params || {};
+    const url = String(p.url || "");
+    if (!isAllowedBase(url)) {
+      return Promise.resolve({
+        ok: false,
+        message: "已拒绝下载：地址未登记（" + originOf(url) + "）。如需使用其它服务端地址，请到「设置」里填写。",
+      });
+    }
+    return downloadPackage(p).catch((e) => ({
+      ok: false, message: "下载更新包失败，请重试。",
+    }));
+  },
+  packageExtract: (params) => {
+    return extractPackage(params).catch((e) => ({
+      ok: false, message: "解压更新包失败，请重试。",
+    }));
   },
   // 下载二进制（如成片视频）。桌面端用 AuthKey 头鉴权，无法像 web 端那样靠
   // 会话 Cookie 直接给 <video> 设 src，因此这里取 ArrayBuffer 回渲染进程转 Blob。

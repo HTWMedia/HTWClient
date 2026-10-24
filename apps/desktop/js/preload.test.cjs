@@ -1,6 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const http = require("node:http");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
 const Module = require("node:module");
 const path = require("node:path");
 
@@ -97,4 +100,71 @@ test("preload call: 省略通道（apiKey=null）真的不发 authkey 头；显�
   } finally {
     server.close();
   }
+});
+
+// ---- 本地更新包：packageDownload / packageExtract ----
+//
+// packageDownload 与 call 同一白名单闸门：url 未登记时请求根本不发。
+// 什么使其变红：下载前忘了查 isAllowedBase —— 页面里任何脚本就能让 preload
+// 把更新请求（连带请求头）发到任意第三方地址。
+test("preload packageDownload: url 未登记 → 直接拒绝，请求根本没发出去", async () => {
+  const htw = loadPreload();
+  let hits = 0;
+  const server = http.createServer(() => { hits += 1; });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const base = "http://127.0.0.1:" + server.address().port;
+    // 注意：这里刻意不 registerBase —— 未登记正是被测条件。
+    const r = await htw.packageDownload({
+      url: base + "/api/v2/local/package",
+      headers: {},
+      destPath: path.join(os.tmpdir(), "htw-should-never-exist.zip"),
+      expectedSha256: "0".repeat(64),
+    });
+
+    assert.strictEqual(r.ok, false, "未登记地址必须被拒绝，实际：" + JSON.stringify(r));
+    assert.ok(/未登记/.test(r.message), "拒绝文案要说清是地址未登记，实际：" + r.message);
+    assert.strictEqual(hits, 0, "拒绝发生在闸门上，不得向该地址发出任何请求");
+  } finally {
+    server.close();
+  }
+});
+
+// 下载成功路径走真实 HTTP 服务器 + 真实落盘 + 真实 sha256：这条验证的是
+// 上线路径（白名单放行 → fetch 流式写文件 → 校验 → 改名），不是另一份测试逻辑。
+test("preload packageDownload: 已登记地址 → 流式落盘 + sha256 校验成功", async () => {
+  const htw = loadPreload();
+  const body = crypto.randomBytes(4096); // KB 级夹具，够验流式写盘即可
+  const server = http.createServer((req, res) => {
+    res.setHeader("Content-Type", "application/zip");
+    res.end(body);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "htw-pkg-dl-"));
+  try {
+    const base = "http://127.0.0.1:" + server.address().port;
+    assert.strictEqual(htw.registerBase(base), true, "前提：本地服务器地址已登记进白名单");
+    const destPath = path.join(dir, "package.zip");
+    const r = await htw.packageDownload({
+      url: base + "/api/v2/local/package",
+      headers: {},
+      destPath: destPath,
+      expectedSha256: crypto.createHash("sha256").update(body).digest("hex"),
+    });
+
+    assert.strictEqual(r.ok, true, "校验值匹配时必须成功，实际：" + JSON.stringify(r));
+    assert.strictEqual(r.sizeBytes, body.length, "sizeBytes 必须等于收到的字节数");
+    assert.strictEqual(r.sha256, crypto.createHash("sha256").update(body).digest("hex"));
+    assert.deepStrictEqual(fs.readFileSync(destPath), body, "落盘内容必须与服务器下发的完全一致");
+    assert.ok(!fs.existsSync(destPath + ".part"), "成功后不得留下临时文件");
+  } finally {
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("preload 暴露了本地更新包的两个入口", () => {
+  const htw = loadPreload();
+  assert.strictEqual(typeof htw.packageDownload, "function", "缺 packageDownload");
+  assert.strictEqual(typeof htw.packageExtract, "function", "缺 packageExtract");
 });
