@@ -38,9 +38,15 @@ const SERVER_INTERNAL_MARKERS = [
 
 /**
  * @param {{path: string, bytes: Buffer}[]} files
+ * @param {string[]} [markerExemptPaths]
+ *   标记规则豁免名单（可选）。只豁免**标记规则**，扩展名规则对名单内的文件
+ *   仍然全覆盖。目前只有守卫文件自身在名单里：标记词表必须内联在本文件里
+ *   （规则持有者自持 —— 词表没有别的地方可放），真实仓断言若不豁免就会
+ *   命中自己，守卫从引入（b386e98）起就是一条预存红。
  * @returns {{path: string, rule: string, detail: string}[]}
  */
-function scanForServerLeaks(files) {
+function scanForServerLeaks(files, markerExemptPaths) {
+  const exempt = markerExemptPaths || [];
   const violations = [];
   for (const file of files) {
     const lowerPath = file.path.toLowerCase();
@@ -50,6 +56,7 @@ function scanForServerLeaks(files) {
         break;
       }
     }
+    if (exempt.indexOf(file.path) !== -1) continue;
     let flags = null;
     for (const marker of SERVER_INTERNAL_MARKERS) {
       const index = file.bytes.toString("latin1").indexOf(marker);
@@ -123,7 +130,13 @@ test("铁律: 跟踪文件里没有任何服务器源码/产物与实现面标�
     path: rel,
     bytes: fs.readFileSync(path.join(root, rel)),
   }));
-  const violations = scanForServerLeaks(files);
+  const violations = scanForServerLeaks(files, [
+    // 守卫文件自身豁免**标记规则**（扩展名规则仍全覆盖，不在豁免之列）：
+    // 标记词表必须内联在本文件里 —— 它就是规则的持有者，没有别的地方可放；
+    // 不豁免的话真实仓断言永远命中自己（守卫引入起就是一条预存红）。
+    // 豁免面收得极窄：只对这一份文件、只对标记规则。
+    "apps/desktop/js/local-guard.test.cjs",
+  ]);
   assert.deepStrictEqual(
     violations,
     [],
