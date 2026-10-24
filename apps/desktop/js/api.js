@@ -147,6 +147,55 @@
     return shouldUseLocal(method, path) ? _localBase : _base;
   }
 
+  // ---- 请求选路记录（逐请求可观测性）----
+  //
+  // 最近 50 条选路记录的环形缓冲：设置页「最近请求」列表的唯一数据源。
+  // 记录形状 { time, method, path, local, ok }（分片上传另附 chunked:true）：
+  //  - time：Date.now() 毫秒（渲染层负责格式化）；
+  //  - method / path：请求方法与路径；
+  //  - local：这条请求**实际打到**的是本地实例还是云端（isLocalTarget 口径 ——
+  //    显式 baseOverride 指向本地地址同样算"本地"，与 call 内注释口径一致）；
+  //  - ok：请求是否成功（失败也记录 —— 排查选路问题时失败行最有价值）。
+  //
+  // 🔴 纯旁路不变量：记录与广播**不许影响请求结果** —— 监听器抛错被吞（不崩请求），
+  //    不改选路、不改失败形状、不发任何网络请求。
+  const ROUTING_HISTORY_LIMIT = 50;
+  const _routingHistory = [];
+  const _routingListeners = [];
+
+  // 五个出口（call / upload 整包 / chunkedUpload / download / subscribeTask）
+  // 都经由这里入列 + 广播。每次新记录**先入缓冲再广播**。
+  function recordRouting(record) {
+    const entry = {
+      time: Date.now(),
+      method: record.method,
+      path: record.path,
+      local: record.local === true,
+      ok: record.ok === true,
+    };
+    if (record.chunked === true) entry.chunked = true;
+    _routingHistory.push(entry);
+    if (_routingHistory.length > ROUTING_HISTORY_LIMIT) _routingHistory.shift();
+    for (const fn of _routingListeners) {
+      try { fn(entry); } catch (e) { /* 旁路不变量：监听器抛错被吞，不影响请求 */ }
+    }
+  }
+
+  // 注册选路记录监听，返回退订函数。退订后不再收到广播。
+  function onRouting(fn) {
+    if (typeof fn !== "function") return function () {};
+    _routingListeners.push(fn);
+    return function () {
+      const i = _routingListeners.indexOf(fn);
+      if (i !== -1) _routingListeners.splice(i, 1);
+    };
+  }
+
+  // 缓冲快照（最新在后，只读副本 —— 外部改动不影响缓冲本身）。
+  function routingHistory() {
+    return _routingHistory.slice();
+  }
+
   function hasKey() { return !!_key; }
   function authHeader() { return { AuthKey: _key }; }
 
@@ -221,6 +270,8 @@
           message: LOCAL_UNAVAILABLE_MESSAGE, raw: e };
         // 选路命中的本地请求额外带 localFailed：界面据此显示"本地执行失败"。
         if (localSelected) shape.localFailed = true;
+        // 观测：localUnavailable 形状同样发一条（失败也记录）。
+        recordRouting({ method, path, local: isLocalTarget, ok: false });
         return shape;
       }
       // 云端（服务器）连不上：把英文原文（Chromium 的 "fetch failed"）换成一句中性文案。
@@ -229,14 +280,21 @@
       if (!isLocalTarget && isNetworkFailure(e)) {
         const err = new Error(CLOUD_UNREACHABLE_MESSAGE);
         err.cause = e;
+        // 观测：抛出型失败在 throw 前也发一条（失败也记录）。
+        recordRouting({ method, path, local: isLocalTarget, ok: false });
         throw err;
       }
+      // 其它异常（代码错误、鉴权错误等）原样抛出 —— throw 前同样发一条。
+      recordRouting({ method, path, local: isLocalTarget, ok: false });
       throw e;
     }
     // 本地已选定但执行失败（HTTP 500 等）→ 打上本地失败标记，
     // **不回落云端**。云端失败原样透传，不带这个标记。
     const norm = normalize(res);
-    return localSelected ? markLocalFailed(norm) : norm;
+    const out = localSelected ? markLocalFailed(norm) : norm;
+    // 观测：normalize 返回前发一条（成功与 localFailed 形状都发）。
+    recordRouting({ method, path, local: isLocalTarget, ok: out.ok === true });
+    return out;
   }
 
   // 单文件且超过该阈值时走分片上传，规避反向代理 / Cloudflare 的 body 大小限制 (413)。
@@ -321,6 +379,13 @@
     const concurrency = 4;
     for (let w = 0; w < concurrency; w++) workers.push(worker());
     await Promise.all(workers);
+    // 观测：一次业务分片上传记一条（path 记分片端点本身，附 chunked:true；
+    // 分片内部的循环请求不逐片发）。失败也记 —— 排查选路问题时失败行最有价值。
+    recordRouting({
+      method: "POST", path: CHUNK_UPLOAD_PATH,
+      local: !!(_localBase && uploadBase === _localBase),
+      ok: !failed, chunked: true,
+    });
     if (failed) throw failed;
     const doneRes = await call("POST", "/api/v2/files/complete", {
       fileId: uploadId,
@@ -372,7 +437,10 @@
     const res = await window.htw.upload(method, path, filePaths, fields, authHeader(), onProgress, fileField, target);
     // 与 call 同一口径：选路命中本地就在失败形状上标出来，**不回落云端**。
     const norm = normalize(res);
-    return localSelected ? markLocalFailed(norm) : norm;
+    const out = localSelected ? markLocalFailed(norm) : norm;
+    // 观测：整包上传在 normalize 返回前发一条（local 用"实际打到"口径）。
+    recordRouting({ method, path, local: !!(_localBase && target === _localBase), ok: out.ok === true });
+    return out;
   }
 
   // 后端 MVC 走 AddNewtonsoftJson + DefaultContractResolver：POCO / DTO 一律 PascalCase
@@ -470,7 +538,8 @@
     // baseOverride 优先（显式指定）；否则由选路决定。
     const routedLocal = !baseOverride && shouldUseLocal(method, path);
     const target = baseOverride || (routedLocal ? _localBase : _base);
-    const localSelected = routedLocal && !!(_localBase && target === _localBase);
+    const isLocalTarget = !!(_localBase && target === _localBase);
+    const localSelected = routedLocal && isLocalTarget;
     const res = await window.htw.download(method, path, _key, target);
     if (res && !res.ok && res.error) {
       // 失败仍按既有契约**抛出**；本地已选定的失败把标记挂在 Error 对象上
@@ -480,8 +549,12 @@
         e.localFailed = true;
         if (isNetworkFailure(e)) e.localUnavailable = true;
       }
+      // 观测：失败处发一条（throw 契约不变）。
+      recordRouting({ method, path, local: isLocalTarget, ok: false });
       throw e;
     }
+    // 观测：完成处发一条。
+    recordRouting({ method, path, local: isLocalTarget, ok: true });
     return res;
   }
 
@@ -499,6 +572,11 @@
     if (!window.htw || !window.htw.subscribeTask) return null;
     const target = baseOverride || resolveTarget("GET", streamPath(domain, taskId));
     window.htw.subscribeTask(streamId, domain, taskId, _key, target);
+    // 观测：订阅建立时发一条（SSE 长连接的每次 push 不算请求，不逐条记）。
+    recordRouting({
+      method: "GET", path: streamPath(domain, taskId),
+      local: !!(_localBase && target === _localBase), ok: true,
+    });
     return streamId;
   }
   function unsubscribeTask(streamId) {
@@ -549,6 +627,8 @@
     LOCAL_UNAVAILABLE_CODE: LOCAL_UNAVAILABLE_CODE,
     LOCAL_UNAVAILABLE_MESSAGE: LOCAL_UNAVAILABLE_MESSAGE,
     subscribeTask: subscribeTask, unsubscribeTask: unsubscribeTask,
+    // 选路记录（观测性）：订阅广播 + 缓冲快照（app.js 的「最近请求」列表用）。
+    onRouting: onRouting, routingHistory: routingHistory,
     get base() { return _base; }, get directBase() { return _directBase; },
     get localBase() { return _localBase; },
     get localRouting() { return _localRouting; },

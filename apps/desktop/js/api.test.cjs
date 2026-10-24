@@ -912,3 +912,191 @@ test("本地失败: markLocalFailed 不丢原形状的扩展字段（data/raw �
   assert.strictEqual(un.localFailed, true);
   assert.deepStrictEqual(un.data, { c: 3 }, "localUnavailable 分支同样不能丢 data");
 });
+
+// =====================================================================
+// 请求选路记录（逐请求可观测性：环形缓冲 + onRouting 广播）
+// =====================================================================
+//
+// spec §4 第 1 条逐项：call 成功（云/本地）、call 失败（localUnavailable 与
+// 抛出型）、upload 整包、download、subscribeTask、分片一条（chunked:true）、
+// 环缓冲 51→50、onRouting 退订、监听器抛错不影响请求结果（旁路不变量）。
+
+// 取缓冲里最新一条记录。
+function lastRecord(localApi) {
+  const h = localApi.routingHistory();
+  return h[h.length - 1];
+}
+
+test("选路记录: call 成功走云端 → local:false / ok:true，记录形状齐五字段", async () => {
+  await withRouting({ endpoints: [] }, async (localApi) => {
+    const r = await localApi.call("GET", "/api/v2/agent/voices");
+    assert.strictEqual(r.ok, true);
+    const rec = lastRecord(localApi);
+    assert.deepStrictEqual(Object.keys(rec).sort(), ["local", "method", "ok", "path", "time"],
+      "非分片记录就是五字段，不多不少");
+    assert.strictEqual(rec.method, "GET");
+    assert.strictEqual(rec.path, "/api/v2/agent/voices");
+    assert.strictEqual(rec.local, false, "清单未命中走云端 → local:false");
+    assert.strictEqual(rec.ok, true);
+    assert.strictEqual(typeof rec.time, "number", "time 是 Date.now() 毫秒");
+  });
+});
+
+test("选路记录: call 成功走本地 → local:true", async () => {
+  await withRouting({ endpoints: ["GET /api/v2/agent/voices"] }, async (localApi) => {
+    await localApi.call("GET", "/api/v2/agent/voices");
+    const rec = lastRecord(localApi);
+    assert.strictEqual(rec.local, true, "清单命中走本地 → local:true");
+    assert.strictEqual(rec.ok, true);
+  });
+});
+
+test("选路记录: call 本地网络不可达（4007/localUnavailable 形状）→ ok:false 且 local:true", async () => {
+  await withRouting({
+    endpoints: ["POST /api/v2/agent/start"],
+    respond: (base) => {
+      if (base === LOCAL) throw new TypeError("fetch failed");
+      return { ok: true, status: 200, data: { ok: true, data: {} } };
+    },
+  }, async (localApi) => {
+    const r = await localApi.call("POST", "/api/v2/agent/start", {});
+    assert.strictEqual(r.localUnavailable, true, "前提：这次请求走的是 localUnavailable 出口");
+    const rec = lastRecord(localApi);
+    assert.strictEqual(rec.ok, false, "失败也记录");
+    assert.strictEqual(rec.local, true, "实际打到的是本地实例");
+  });
+});
+
+test("选路记录: call 云端连不上（抛出型失败）→ throw 前也发一条 ok:false / local:false", async () => {
+  await withRouting({
+    endpoints: [],
+    respond: () => { throw new TypeError("fetch failed"); },
+  }, async (localApi) => {
+    await assert.rejects(
+      () => localApi.call("GET", "/api/v2/creation/types"),
+      /无法连接服务器，请检查网络或服务器地址。/
+    );
+    const rec = lastRecord(localApi);
+    assert.strictEqual(rec.ok, false, "抛出型失败在 throw 前也发");
+    assert.strictEqual(rec.local, false);
+    assert.strictEqual(rec.path, "/api/v2/creation/types");
+  });
+});
+
+test("选路记录: 显式 baseOverride 指向本地 → local:true（isLocalTarget 口径）", async () => {
+  await withStubWindow(stubWindow(async () => { throw new TypeError("fetch failed"); }), async (localApi) => {
+    localApi.setKey("test-key");
+    const r = await localApi.call("POST", "/api/v2/local/pair", {}, localApi.localBase);
+    assert.strictEqual(r.localUnavailable, true);
+    const rec = lastRecord(localApi);
+    assert.strictEqual(rec.local, true, "显式指定本地地址同样算『本地』");
+    assert.strictEqual(rec.ok, false);
+  });
+});
+
+test("选路记录: upload 整包 → 记一条（本地/云端随实际打到）", async () => {
+  await withRouting({ endpoints: ["POST /api/v2/image/recognize"] }, async (localApi) => {
+    await localApi.upload("POST", "/api/v2/image/recognize", [smallFile()], {});
+    let rec = lastRecord(localApi);
+    assert.strictEqual(rec.method, "POST");
+    assert.strictEqual(rec.path, "/api/v2/image/recognize");
+    assert.strictEqual(rec.local, true, "命中的上传走本地");
+    assert.strictEqual(rec.ok, true);
+    assert.strictEqual(rec.chunked, undefined, "整包上传不带 chunked 标记");
+
+    await localApi.upload("POST", "/api/v2/voice/upload", [smallFile()], {});
+    rec = lastRecord(localApi);
+    assert.strictEqual(rec.local, false, "清单外走云端");
+    assert.strictEqual(rec.ok, true);
+  });
+});
+
+test("选路记录: download 完成/失败各记一条", async () => {
+  await withRouting({
+    endpoints: ["GET /api/v2/edit/output"],
+    respond: (base) => {
+      if (base === LOCAL) return { ok: true, status: 200 };
+      return { ok: false, status: 0, data: null, error: "boom" };
+    },
+  }, async (localApi) => {
+    await localApi.download("GET", "/api/v2/edit/output");
+    let rec = lastRecord(localApi);
+    assert.strictEqual(rec.method, "GET");
+    assert.strictEqual(rec.path, "/api/v2/edit/output");
+    assert.strictEqual(rec.local, true);
+    assert.strictEqual(rec.ok, true);
+
+    // 失败仍抛出（throw 契约不变），但记录照发、ok:false。
+    await assert.rejects(() => localApi.download("GET", "/api/v2/other/output"), /boom/);
+    rec = lastRecord(localApi);
+    assert.strictEqual(rec.local, false);
+    assert.strictEqual(rec.ok, false);
+  });
+});
+
+test("选路记录: subscribeTask 订阅建立 → 记一条 GET stream 路径", async () => {
+  await withRouting({ endpoints: ["GET /api/v2/stream/{domain}/{taskId}"] }, async (localApi) => {
+    localApi.subscribeTask("edit", "T1");
+    const rec = lastRecord(localApi);
+    assert.strictEqual(rec.method, "GET");
+    assert.strictEqual(rec.path, "/api/v2/stream/edit/T1");
+    assert.strictEqual(rec.local, true, "命中的订阅走本地");
+    assert.strictEqual(rec.ok, true);
+  });
+});
+
+test("选路记录: 分片上传记一条 chunked:true 的分片端点（不逐片发）", async () => {
+  await withRouting({ endpoints: ["POST /api/v2/files/chunk"] }, async (localApi) => {
+    await localApi.upload("POST", "/api/v2/image/recognize", [bigFile()], {});
+    const chunkRecords = localApi.routingHistory().filter((x) => x.chunked === true);
+    assert.strictEqual(chunkRecords.length, 1, "一次业务分片上传只记一条（分片循环不逐片发）");
+    const rec = chunkRecords[0];
+    assert.strictEqual(rec.method, "POST");
+    assert.strictEqual(rec.path, "/api/v2/files/chunk", "path 记分片端点本身");
+    assert.strictEqual(rec.local, true, "分片端点命中清单 → 本地");
+    assert.strictEqual(rec.ok, true);
+  });
+});
+
+test("选路记录: 环形缓冲 51 条入只留 50（丢最旧，最新在后）", async () => {
+  await withRouting({ endpoints: [] }, async (localApi) => {
+    for (let i = 1; i <= 51; i++) {
+      await localApi.call("GET", "/api/v2/ring/" + i);
+    }
+    const h = localApi.routingHistory();
+    assert.strictEqual(h.length, 50, "上限 50");
+    assert.strictEqual(h[0].path, "/api/v2/ring/2", "最旧的一条被丢掉");
+    assert.strictEqual(h[h.length - 1].path, "/api/v2/ring/51", "最新在后");
+  });
+});
+
+test("选路记录: onRouting 收到广播、退订后不再收到；routingHistory 是快照副本", async () => {
+  await withStubWindow(stubWindow(async () => ({ ok: true, status: 200, data: { ok: true, data: {} } })), async (localApi) => {
+    localApi.setKey("test-key");
+    const got = [];
+    const off = localApi.onRouting((rec) => got.push(rec));
+    await localApi.call("GET", "/api/v2/a");
+    assert.strictEqual(got.length, 1, "新记录实时广播");
+    assert.strictEqual(got[0].path, "/api/v2/a");
+
+    // 快照副本：外部改动不影响缓冲本身。
+    const snap = localApi.routingHistory();
+    snap.push({ fake: true });
+    assert.strictEqual(localApi.routingHistory().length, 1, "外部改动不进缓冲");
+
+    off();
+    await localApi.call("GET", "/api/v2/b");
+    assert.strictEqual(got.length, 1, "退订后不再收到广播");
+    assert.strictEqual(localApi.routingHistory().length, 2, "缓冲照常入列");
+  });
+});
+
+test("选路记录: 监听器抛错不影响请求结果（旁路不变量）", async () => {
+  await withStubWindow(stubWindow(async () => ({ ok: true, status: 200, data: { ok: true, data: {} } })), async (localApi) => {
+    localApi.setKey("test-key");
+    localApi.onRouting(() => { throw new Error("listener boom"); });
+    const r = await localApi.call("GET", "/api/v2/a");
+    assert.strictEqual(r.ok, true, "监听器抛错被吞，请求结果不受影响");
+    assert.strictEqual(localApi.routingHistory().length, 1, "记录照常入列");
+  });
+});
