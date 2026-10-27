@@ -211,6 +211,15 @@ def record_take(title, out_mp4, seconds):
 
 
 # ---------------------------------------------------------------- 组装
+def seg_speed(raw, narr_dur, cap):
+    """场景加速倍率：speed_cap 语义 = 倍率上限（渲染等待段进度条肉眼可见），
+    且不快过配音节奏（显示时长 ≥ 配音时长）。cap=None 或 raw 不足时 1 倍速。"""
+    floor = max(narr_dur + 0.4, 1.0)
+    if not cap or raw <= max(floor, float(cap)):
+        return 1.0
+    return min(raw / floor, float(cap))
+
+
 def assemble(module, scenes, take_mp4, workdir, out_mp4, fps=30):
     """scenes 元数据由 recorder 回填: [start,end(原始),narr_dur,sub]"""
     os.makedirs(workdir, exist_ok=True)
@@ -232,12 +241,7 @@ def assemble(module, scenes, take_mp4, workdir, out_mp4, fps=30):
         else:
             raw = sc["end"] - sc["start"]
         narr_dur = sc["narr_dur"]
-        cap = sc.get("speed_cap")
-        if cap and raw > cap:
-            speed = raw / max(cap, narr_dur + 0.4)
-            speed = min(speed, 12.0)
-        else:
-            speed = 1.0
+        speed = seg_speed(raw, narr_dur, sc.get("speed_cap"))
         out_len = raw / speed
         seg = os.path.join(workdir, f"seg_{i:02d}.mp4")
         cut_args = (["-ss", f'{sc["start"]:.2f}', "-t", f"{raw:.2f}"]

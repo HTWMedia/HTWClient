@@ -68,7 +68,8 @@ def record_physical(name, scenes, out_name=None, title="HTW 工作台"):
             proc = record_take(title, clip, 0)
             err = None
             try:
-                sc["run"]()
+                if sc.get("run"):
+                    sc["run"]()
             except Exception as ex:
                 err = str(ex)[:200]
             used = time.time() - t0
