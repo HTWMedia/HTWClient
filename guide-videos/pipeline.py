@@ -90,11 +90,13 @@ def _tts_once(text, key):
     task = r.get("TaskId") or (r.get("Data") or {}).get("taskId")
     if not task:
         raise RuntimeError("TTS 提交失败: " + json.dumps(r, ensure_ascii=False)[:200])
-    for _ in range(150):  # 2s × 150 = 300s 轮询超时
+    for _ in range(150):  # 2s × 150 = 300s 轮询超时（不含单次请求超时）
         time.sleep(2)
+        # 服务端高峰/限流时 status 响应会卡到 30s+（2026-10-27 夜实况）：
+        # 单次读超时放宽到 60s，轮询循环内自愈，不轻易抛给上层重试重新提交
         s = json.loads(urllib.request.urlopen(
             urllib.request.Request(TTS_API + "/api/v2/voice/status/" + task,
-                                   headers=headers), timeout=30).read())
+                                   headers=headers), timeout=60).read())
         d = s.get("Data") or {}
         st = d.get("status")
         if st == "completed":
@@ -126,8 +128,9 @@ def tts(text, out_mp3, spd=4):
                 except Exception:
                     if attempt == 2:
                         raise
-                    print(f"    [TTS 段 {i+1}/{len(parts)} 重试 {attempt+1}/2]", flush=True)
-                    time.sleep(5)
+                    backoff = 15 * (attempt + 1)  # 15s/30s：给限流窗口留恢复时间
+                    print(f"    [TTS 段 {i+1}/{len(parts)} 重试 {attempt+1}/2（{backoff}s 后）]", flush=True)
+                    time.sleep(backoff)
             with open(f, "wb") as fh:
                 fh.write(data)
             if audio_len(f) <= 0:

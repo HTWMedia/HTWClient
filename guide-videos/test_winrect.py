@@ -1,57 +1,83 @@
 # -*- coding: utf-8 -*-
-"""window_rect 韧性验证：屏幕截图首拍不可匹配（模拟窗口被遮挡）时，
-应先激活窗口再重测，最终返回矩形而非 None。RED：现实现无重试直接返回 None。"""
+"""窗口几何契约（2026-10-27 重写：Win32 实测客户区，最大化录制）。
+
+背景：标题栏模板匹配在窗口最大化时会低置信度误命中（0.6 阈值），仍返回 1482x953，
+裁剪与「视口坐标 ×1.25 + 外框常量」的点击换算同时失真 → 按钮点了没反应、录成静帧。
+新契约：
+  1. window_rect() = 客户区物理矩形 (x, y, w, h)，即真正被录制的画面区域；
+  2. 录制要求窗口最大化（非最大化会录到窗口外的无关界面），ensure_window() 负责；
+  3. 点击坐标 = 客户区原点 + 视口CSS × devicePixelRatio，to_physical() 统一换算。
+"""
+import ctypes
 import os
 import sys
-import tempfile
+import time
+from ctypes import wintypes
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("HTW_CDP", "http://127.0.0.1:9223")
 
 import pyautogui
-from PIL import Image
 import pdrive as p
 
-_real_shot = pyautogui.screenshot
-state = {"n": 0}
+
+def test_client_rect_matches_win32():
+    """矩形必须等于 Win32 客户区（ClientToScreen + GetClientRect）。"""
+    r = p.window_rect()
+    assert r is not None, "window_rect 返回 None"
+    h = p._hwnd()
+    assert h, "找不到应用窗口"
+    cr = wintypes.RECT()
+    pt = wintypes.POINT(0, 0)
+    ctypes.windll.user32.GetClientRect(h, ctypes.byref(cr))
+    ctypes.windll.user32.ClientToScreen(h, ctypes.byref(pt))
+    assert abs(r[0] - pt.x) <= 2 and abs(r[1] - pt.y) <= 2, f"客户区原点不符: {r} vs ({pt.x},{pt.y})"
+    assert abs(r[2] - (cr.right - cr.left)) <= 2, f"宽不符: {r[2]} vs {cr.right - cr.left}"
+    assert abs(r[3] - (cr.bottom - cr.top)) <= 2, f"高不符: {r[3]} vs {cr.bottom - cr.top}"
+    print(f"PASS client_rect_matches_win32 {r}")
 
 
-def flaky_shot(*a, **k):
-    """首拍返回纯黑（匹配度必 < 0.6），之后真实截屏"""
-    state["n"] += 1
-    if state["n"] == 1:
-        return Image.new("RGB", (1920, 1032), (0, 0, 0))
-    return _real_shot(*a, **k)
+def test_maximized_client_covers_screen():
+    """ensure_window 后窗口最大化，客户区宽度≈物理屏宽（录满屏，不夹带桌面）。"""
+    r = p.ensure_window()
+    assert r is not None, "ensure_window 返回 None"
+    h = p._hwnd()
+    assert ctypes.windll.user32.IsZoomed(h), "窗口未最大化"
+    screen_w = ctypes.windll.user32.GetSystemMetrics(0)
+    assert abs(r[2] - screen_w) <= 8, f"客户区宽度 {r[2]} 与屏宽 {screen_w} 不符（会录到桌面）"
+    print(f"PASS maximized_client_covers_screen {r}")
 
 
-def test_recovers_after_activate():
-    state["n"] = 0
-    pyautogui.screenshot = flaky_shot
-    try:
-        r = p.window_rect()
-    finally:
-        pyautogui.screenshot = _real_shot
-    assert r is not None, f"window_rect 未从遮挡中恢复（拍了 {state['n']} 次）"
-    assert len(r) == 4 and r[2] > 1000, f"矩形不合理: {r}"
-    assert state["n"] >= 2, f"未发生重试（拍了 {state['n']} 次）"
+def test_to_physical_math():
+    """to_physical = 客户区原点 + CSS×DPR。"""
+    r = p.ensure_window()
+    x, y = p.to_physical(100, 200)
+    k = p.dpr()
+    assert abs(x - (r[0] + 100 * k)) <= 2, f"x 换算不符: {x} vs {r[0] + 100 * k}"
+    assert abs(y - (r[1] + 200 * k)) <= 2, f"y 换算不符: {y} vs {r[1] + 200 * k}"
+    print(f"PASS to_physical_math dpr={k} -> ({x},{y})")
 
 
-def test_normal_path_single_shot():
-    # 首拍缓存真实截图并固定返回同一张 —— 匹配结果确定，不应触发重试
-    snap = _real_shot()
+def test_template_fallback():
+    """Win32 取不到窗口时才回退模板匹配（历史标定路径保持可用）。"""
+    snap = pyautogui.screenshot()
+    _hwnd = p._hwnd
+    _shot = pyautogui.screenshot
+    p._hwnd = lambda *a, **k: None
     pyautogui.screenshot = lambda *a, **k: snap
     try:
         r = p.window_rect()
     finally:
-        pyautogui.screenshot = _real_shot
-    if r is None:
-        raise AssertionError("缓存的桌面截图不匹配 titlebar——当前桌面状态异常，先目检")
-    print("(缓截图匹配正常，未触发重试)")
+        p._hwnd = _hwnd
+        pyautogui.screenshot = _shot
+    assert r is not None, "模板回退路径失效（当前桌面无应用窗口？）"
+    print("PASS template_fallback", r)
 
 
 if __name__ == "__main__":
-    test_recovers_after_activate()
-    print("PASS recovers_after_activate")
-    test_normal_path_single_shot()
-    print("PASS normal_path_single_shot")
+    test_client_rect_matches_win32()
+    test_maximized_client_covers_screen()
+    test_to_physical_math()
+    time.sleep(0.2)
+    test_template_fallback()
     print("ALL PASS")

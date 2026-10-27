@@ -15,7 +15,6 @@ from pipeline import record_take, assemble, tts, audio_len
 import pdrive as p
 import pyautogui
 
-
 def _ensure_narration(sc, i, work):
     """旁白缓存：文件名含文本哈希，同文本复用音频不重复合成（重录频繁，
     今天的 TTS 服务端 frequency limit 部分源于每次重录全量重合成）。"""
@@ -57,18 +56,40 @@ def _rec_unlock(path):
 
 def record_physical(name, scenes, out_name=None, title="HTW 工作台"):
     lock = _rec_lock(name)
+    import ctypes
+    # 渲染等待常跨数分钟：系统/显示器休眠会让 gdigrab 报 error 5、物理点击打空
+    #（2026-10-28 00:58 场景 3 实录）。录制期间禁用休眠与息屏，结束时恢复。
+    ES_CONTINUOUS, ES_SYSTEM_REQ, ES_DISPLAY_REQ = 0x80000000, 0x1, 0x2
     try:
+        ctypes.windll.kernel32.SetThreadExecutionState(
+            ES_CONTINUOUS | ES_SYSTEM_REQ | ES_DISPLAY_REQ)
         _record_physical(name, scenes, out_name, title)
     finally:
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
         _rec_unlock(lock)
 
 
 def _record_physical(name, scenes, out_name=None, title="HTW 工作台"):
     out_name = out_name or name
+    # 应用必须先起来：否则窗口矩形取不到 → crop 退回全桌面（含任务栏/桌面图标），
+    # 且首个场景的所有动作都打在空窗上（2026-10-27 录 07 实录）。
+    try:
+        import hcdp
+        hcdp.ensure_app()
+    except Exception as ex:
+        print(f"  [应用未就绪] {ex}", flush=True)
     try:
         p.activate()  # 桌面整屏捕获：应用必须在前台，否则录到的是别的窗口
     except Exception:
         pass
+    # 窗口必须先拉回标准几何：最大化状态下客户区尺寸与外框原点都会变，
+    # 裁剪和「视口坐标×1.25」的点击换算同时失效（2026-10-27 录 04 实录）。
+    try:
+        W0 = p.ensure_window()
+        if W0:
+            print(f"  窗口已标准化: {W0}", flush=True)
+    except Exception as ex:
+        print(f"  [窗口标准化失败] {ex}", flush=True)
     work = os.path.join(HERE, "work", name)
     os.makedirs(work, exist_ok=True)
     os.makedirs(os.path.join(HERE, "out"), exist_ok=True)
@@ -86,20 +107,11 @@ def _record_physical(name, scenes, out_name=None, title="HTW 工作台"):
         pass
     if W:
         crop = (W[0], W[1], W[2] - W[2] % 2, W[3] - W[3] % 2)
-    else:
-        # 模板对不上时（窗口最大化后标题栏像素变了）：用 pygetwindow 判断，
-        # 最大化 → 物理裁剪取整屏去任务栏（125% DPI：1550x830 逻辑 ≈ 1920x1032 物理）
-        try:
-            import pygetwindow as _gw
-            htws = [w for w in _gw.getAllWindows() if "HTW 工作台" in (w.title or "")]
-            if htws and htws[-1].isMaximized:
-                crop = (0, 0, 1920, 1032)
-        except Exception:
-            pass
     if crop:
         print(f"  窗口裁剪: {crop}", flush=True)
     else:
-        print("  [窗口定位失败，退化为全桌面画面]", flush=True)
+        # 别退化成全桌面：那会把任务栏和桌面图标录进去（用户明确要求最大化铺满）
+        raise RuntimeError("应用窗口未就绪（客户区矩形取不到），录制中止")
     for sc in scenes:
         sc.setdefault("crop", crop)
 
@@ -114,6 +126,14 @@ def _record_physical(name, scenes, out_name=None, title="HTW 工作台"):
 
         def record_scene():
             """录一个场景（ffmpeg + 动作 + 补齐时长），返回错误信息或 None。"""
+            # 全桌面捕获：前台不是应用，录到的就是别人的窗口（2026-10-27 06 集作废实录）
+            if not p.activate():
+                return "应用无法提到前台，录制会录到其它窗口"
+            try:
+                if os.path.exists(clip):
+                    os.remove(clip)   # 别让上一次的片段充当本次结果
+            except OSError:
+                pass
             t0 = time.time()
             proc = record_take(title, clip, 0)
             err = None
@@ -121,7 +141,10 @@ def _record_physical(name, scenes, out_name=None, title="HTW 工作台"):
                 if sc.get("run"):
                     sc["run"]()
             except Exception as ex:
-                err = str(ex)[:200]
+                err = str(ex)[:200] or ex.__class__.__name__
+            # 录制期间被别的窗口抢前台 → 这一条必然有别人的画面
+            if not p.is_foreground():
+                err = err or "录制期间应用失去前台（可能录到其它窗口）"
             used = time.time() - t0
             need = max(sc["narr_dur"] + sc.get("pad", 0.6), sc.get("min_len", 0))
             if used < need:
@@ -189,13 +212,10 @@ def type_field(h, panel, input_id, text):
         raise RuntimeError(f"输入框未找到: #{input_id}")
     import json as _json
     pos = _json.loads(r)
-    win = p.window_rect()
-    if win is None:
-        raise RuntimeError("type_field: window_rect 失败")
     h.detach()
     time.sleep(0.4)
-    pyautogui.moveTo(int(win[0] + 9 + pos["x"] * 1.25),
-                     int(win[1] + 40 + pos["y"] * 1.25), duration=0.2)
+    px, py_ = p.to_physical(pos["x"], pos["y"])
+    pyautogui.moveTo(px, py_, duration=0.2)
     pyautogui.click()
     time.sleep(0.3)
     pyautogui.hotkey("ctrl", "a")
@@ -239,6 +259,41 @@ def clear_card_results(h, panel, titles):
     }})()''')
     h.detach()
     return r
+
+
+def wait_card_text(panel, title, texts, timeout=420, poll=25):
+    """按卡片圈定等待结果文本（结果区常无稳定 id）。
+    🔴 与 hcdp.wait_result 的区别：后者按整个面板匹配，面板里其它卡片的历史结果会
+    立刻命中 → 等待秒过、画面里还没有结果。07 的转写/总结皆无 id，必须按卡片等。"""
+    from hcdp import H
+    sel = panel if str(panel).startswith(("#", ".")) else "#" + panel
+    js = '''(() => {
+      const card = [...document.querySelectorAll("%s .card")].find(k => {
+        const h = k.querySelector("h3"); return h && h.textContent.includes(%s);
+      });
+      if (!card) return "nocard";
+      return %s.some(t => card.textContent.includes(t)) ? "yes" : "no";
+    })()''' % (sel, json.dumps(title), json.dumps(list(texts), ensure_ascii=False))
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        time.sleep(poll)
+        d = None
+        try:
+            d = H()
+            d.attach()
+            r = d.c.ev(js)
+            d.detach()
+            print(f"    [等待 {time.time()-t0:.0f}s] {title}: {r}", flush=True)
+            if r == "yes":
+                return True
+        except Exception as ex:
+            print(f"    [等待重连失败] {ex}", flush=True)
+            try:
+                if d:
+                    d.detach()
+            except Exception:
+                pass
+    return False
 
 
 def wait_render(detect_fn, timeout=900, poll=20):

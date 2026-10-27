@@ -79,11 +79,25 @@ def h04():
     def s3():
         d = H()
         d.click_btn_text("panel-edit", "开始包装")
-        ok = d.wait_result("#edit-pack-result", "下载成片", timeout=900)
-        print("    包装渲染:", ok, flush=True)
+        # 快失败：结果区出现「出错」立刻判定，不再按成功文本硬等 900s
+        st, detail = d.wait_result_state("#edit-pack-result", "下载成片", timeout=900)
+        print("    包装渲染:", st, detail, flush=True)
+        # 渲染失败必须记 err（自愈重试一次再提交），否则带病出片：
+        # 旁白说「包装完成」而画面里没有结果 —— gen-1 的 04 就是这个成功假象。
+        if st != "ok":
+            raise RuntimeError(f"包装渲染{st}：{detail or '等待超时'}")
     def s4():
         d = H()
-        d.attach(); d.scroll_card("panel-edit", "智能包装 Smart-package")
+        d.attach()
+        # 结果展示与 03 同理：以「下载成片」为锚点滚动，播放器与下载按钮同框
+        d.c.ev('''(() => {
+          const r = document.getElementById("edit-pack-result");
+          if (!r) return "no";
+          const link = [...r.querySelectorAll("a, button")].find(x => x.textContent.includes("下载成片")) || r;
+          link.scrollIntoView({block: "center"});
+          return "ok";
+        })()''')
+        time.sleep(0.6)
     scenes = [
         dict(narr="智能包装：为视频自动加上字幕、音效、贴纸并突出重点内容，一条素视频一键成品化。选择视频后点击开始包装。", sub="智能包装：一键字幕 音效 贴纸", run=s1),
         dict(narr="选择一条示例视频。仅支持 mp4、mov、m4v 格式。", sub="选择视频（mp4 / mov / m4v）", run=s2),
