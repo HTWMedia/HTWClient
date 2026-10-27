@@ -16,8 +16,44 @@ import pdrive as p
 import pyautogui
 
 
+def _rec_lock(name):
+    """录制互斥锁：两个录制进程并发会同时写同一 take 文件（已烧过一次真机教训）。
+    已持锁抛 RuntimeError；调用方在 finally 中 _rec_unlock。"""
+    path = os.path.join(HERE, f"rec_{name}.lock")
+    if os.path.exists(path):
+        pid = ""
+        try:
+            pid = open(path, encoding="ascii", errors="replace").read().strip()
+        except Exception:
+            pass
+        raise RuntimeError(f"录制锁已存在: {path}（持有者 PID {pid or '?'}）——"
+                           f"确认没有其他录制进程后手动删除该文件再试")
+    with open(path, "w", encoding="ascii") as f:
+        f.write(str(os.getpid()))
+    return path
+
+
+def _rec_unlock(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def record_physical(name, scenes, out_name=None, title="HTW 工作台"):
+    lock = _rec_lock(name)
+    try:
+        _record_physical(name, scenes, out_name, title)
+    finally:
+        _rec_unlock(lock)
+
+
+def _record_physical(name, scenes, out_name=None, title="HTW 工作台"):
     out_name = out_name or name
+    try:
+        p.activate()  # 桌面整屏捕获：应用必须在前台，否则录到的是别的窗口
+    except Exception:
+        pass
     work = os.path.join(HERE, "work", name)
     os.makedirs(work, exist_ok=True)
     os.makedirs(os.path.join(HERE, "out"), exist_ok=True)
