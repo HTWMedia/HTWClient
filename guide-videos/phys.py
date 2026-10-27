@@ -123,6 +123,73 @@ def record_physical(name, scenes, out_name=None, title="HTW 工作台"):
     print(f"== {out_name} 完成: out/{out_name}.mp4, {total:.0f}s", flush=True)
 
 
+def type_field(h, panel, input_id, text):
+    """真实键盘输入：CDP 定位输入框 → 脱离 CDP → 物理点击聚焦 → 清空原值 → 逐字符键入。
+    全 ASCII 用 typewrite；含中文走剪贴板粘贴。结束后重连读回校验，不符即抛错。"""
+    h.attach()
+    r = h.c.ev(f'''(() => {{
+      const i = document.getElementById("{input_id}");
+      if (!i) return "";
+      i.scrollIntoView({{block: "center"}});
+      const r = i.getBoundingClientRect();
+      return JSON.stringify({{x: r.left + r.width / 2, y: r.top + r.height / 2}});
+    }})()''')
+    if not r:
+        raise RuntimeError(f"输入框未找到: #{input_id}")
+    import json as _json
+    pos = _json.loads(r)
+    win = p.window_rect()
+    if win is None:
+        raise RuntimeError("type_field: window_rect 失败")
+    h.detach()
+    time.sleep(0.4)
+    pyautogui.moveTo(int(win[0] + 9 + pos["x"] * 1.25),
+                     int(win[1] + 40 + pos["y"] * 1.25), duration=0.2)
+    pyautogui.click()
+    time.sleep(0.3)
+    pyautogui.hotkey("ctrl", "a")
+    time.sleep(0.15)
+    if all(ord(ch) < 128 for ch in text):
+        pyautogui.typewrite(text, interval=0.04)
+    else:
+        import pyperclip
+        pyperclip.copy(text)
+        pyautogui.hotkey("ctrl", "v")
+    time.sleep(0.3)
+    h.attach()
+    got = h.c.ev(f'document.getElementById("{input_id}").value')
+    if str(got) != str(text):
+        raise RuntimeError(f"type_field 输入未生效: #{input_id} 期望 {text!r} 实得 {got!r}")
+    return True
+
+
+def clear_card_results(h, panel, titles):
+    """清空指定卡片的结果区（尾部无按钮/无输入的纯展示 div），防止录到残留结果。
+    做法源自 2026-10-26 录 05 的教训：结果区无 id，按卡片圈定避免误清其他卡片。"""
+    h.attach()
+    ts = ", ".join('"%s"' % t for t in titles)
+    sel = panel if panel.startswith("#") else "#" + panel
+    r = h.c.ev(f'''(() => {{
+      let cleared = 0;
+      for (const title of [{ts}]) {{
+        const card = [...document.querySelectorAll("{sel} .card")].find(k => {{
+          const h3 = k.querySelector("h3"); return h3 && h3.textContent.includes(title);
+        }});
+        if (!card) continue;
+        for (const child of [...card.children]) {{
+          if (child.tagName === "DIV" && !child.querySelector("button")
+              && !child.querySelector("input") && !child.querySelector("h3")
+              && child.textContent.trim().length > 0) {{
+            child.innerHTML = ""; cleared++;
+          }}
+        }}
+      }}
+      return "cleared:" + cleared;
+    }})()''')
+    h.detach()
+    return r
+
+
 def wait_render(detect_fn, timeout=900, poll=20):
     """渲染等待：每 poll 秒截图调 detect_fn(screenshot_path) -> bool"""
     t0 = time.time()
