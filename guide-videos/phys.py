@@ -16,6 +16,21 @@ import pdrive as p
 import pyautogui
 
 
+def _ensure_narration(sc, i, work):
+    """旁白缓存：文件名含文本哈希，同文本复用音频不重复合成（重录频繁，
+    今天的 TTS 服务端 frequency limit 部分源于每次重录全量重合成）。"""
+    import hashlib
+    key = hashlib.md5(sc["narr"].encode("utf-8")).hexdigest()[:8]
+    nf = os.path.join(work, f"narr_{i:02d}_{key}.mp3")
+    if os.path.exists(nf) and audio_len(nf) > 0:
+        sc["narr_file"] = nf
+        sc["narr_dur"] = audio_len(nf)
+        return nf
+    sc["narr_file"] = nf
+    sc["narr_dur"] = tts(sc["narr"], nf, spd=4)
+    return nf
+
+
 def _rec_lock(name):
     """录制互斥锁：两个录制进程并发会同时写同一 take 文件（已烧过一次真机教训）。
     已持锁抛 RuntimeError；调用方在 finally 中 _rec_unlock。"""
@@ -88,10 +103,9 @@ def _record_physical(name, scenes, out_name=None, title="HTW 工作台"):
     for sc in scenes:
         sc.setdefault("crop", crop)
 
-    # TTS
+    # TTS（带缓存：同文本复用已有音频）
     for i, sc in enumerate(scenes):
-        sc["narr_file"] = os.path.join(work, f"narr_{i:02d}.mp3")
-        sc["narr_dur"] = tts(sc["narr"], sc["narr_file"], spd=4)
+        _ensure_narration(sc, i, work)
         print(f"  TTS {i+1}/{len(scenes)}: {sc['narr_dur']:.1f}s", flush=True)
 
     meta = []
