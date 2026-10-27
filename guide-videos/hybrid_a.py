@@ -45,9 +45,14 @@ def h03():
     def s6():
         d = H()
         d.attach()
-        # 结果区在卡片底部，scroll_card 只会居中卡片本体——直接滚到结果区
-        d.c.ev('(() => { const r = document.getElementById("edit-cutsame-result"); '
-               'if (r) r.scrollIntoView({block: "center"}); return "ok"; })()')
+        # 结果区在卡片底部：以「下载成片」链接为锚点居中，成片播放器与下载按钮同框
+        d.c.ev('''(() => {
+          const r = document.getElementById("edit-cutsame-result");
+          if (!r) return "no";
+          const link = [...r.querySelectorAll("a, button")].find(x => x.textContent.includes("下载成片")) || r;
+          link.scrollIntoView({block: "center"});
+          return "ok";
+        })()''')
         time.sleep(0.6)
     scenes = [
         dict(narr="剪同款：选一个热门模板，把自己的素材套进去，云端自动生成同款视频。输入关键词，点击搜索模板。", sub="剪同款：关键词搜索模板", run=s1),
