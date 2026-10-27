@@ -25,3 +25,4 @@ Logs/
 .workbuddy/
 docs/review-*.md
 local-web.log
+__pycache__/
