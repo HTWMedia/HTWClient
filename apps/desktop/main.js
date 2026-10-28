@@ -9,6 +9,27 @@ const { createSupervisor } = require("./js/local-supervisor.js");
 
 Menu.setApplicationMenu(null);
 
+// 🔴 单实例锁 —— 2026-10-28 任务记录凭空消失事故的根因修复。
+// 落盘是全量覆写（htw:saveJson 把内存里的整张列表写掉旧文件，不合并），
+// 且 dev（electron .）与打包版解析到同一个 userData（asar 里的 package.json
+// 顶层只有 name，没有 productName），两份应用（或误开两次的同一份）同时在跑时，
+// 各自 2 秒节流的全量写会互相把对方"不知道"的记录整个顶掉 —— 那条记录在
+// 被顶掉的一方退出后就从内存与磁盘双缺，代码里却不存在任何单条删除路径。
+// 锁住"同一时刻至多一个窗口进程"，这类丢失就没有发生的机会了；
+// 对第二个实例，把焦点还给已有窗口，用户感受不到"打不开"。
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win) {
+      if (win.isMinimized()) win.restore();
+      win.focus();
+    }
+  });
+}
+
 // SSE 允许访问的来源。preload 是信任边界（它持有 AuthKey 与来源白名单），
 // 但主进程自己也要有一份：preload 只把已放行的 origin 通过 htw:allowBase 同步过来，
 // 主进程再独立校验一次。两处都查才不会出现"渲染层换个地址就让 preload 带密钥去连"。
@@ -70,20 +91,56 @@ ipcMain.handle("htw:loadConfig", () => {
 });
 ipcMain.handle("htw:saveConfig", (_e, cfg) => {
   try {
-    fs.writeFileSync(configPath(), JSON.stringify({
+    // 与 tasks 同样的原子写：直写目标的话，进程被强杀时配置文件可能停在
+    // 一半 —— 读端 parse 失败会把 apiBase/apiKey/localBinary 全当成没配置。
+    writeJsonFile(configPath(), {
       apiBase: (cfg && cfg.apiBase) || "",
       apiKey: (cfg && cfg.apiKey) || "",
       localBase: (cfg && cfg.localBase) || "",
       localBinary: typeof (cfg && cfg.localBinary) === "string" ? cfg.localBinary : "",
       localEnabled: !!(cfg && cfg.localEnabled === true),
-    }), "utf-8");
+    });
     return true;
   } catch (e) { return false; }
 });
-ipcMain.handle("htw:loadJson", (_e, name) => readJsonFile(jsonPath(String(name || "")), null));
+// 📦 落盘三件套（2026-10-28 任务记录消失事故的加固）。
+//
+// 1) writeJsonFile：先写同目录 .tmp 再改名。直写目标的话，进程被强杀
+//    （录制自动化的 taskkill /F 是家常便饭）或两次写入交错时，文件会停在
+//    一半 —— 读端 JSON.parse 失败回退 null，整份记录就被当成空集挥霍掉。
+//    同目录内 rename 是原子的：读端任何时刻只会看到旧整份或新整份。
+// 2) tasksEnvelope：tasks 落盘包一层 { pid, version, savedAt, records }。
+//    目的只有取证 —— 再出现"某条记录凭空不见"时，文件自己就能回答
+//    最后写者是哪个进程（pid）、哪个版本、几点写的，不再需要人肉排时序。
+// 3) tasksUnwrap：读端把信封剥回裸数组，renderer（js/tasks.js）永远只见
+//    数组，不需要知情感包。只有 records 是数组才认定是信封（按结构认，
+//    不按版本认）；旧文件是裸数组，读出原样 —— 前后都兼容。旧版客户端
+//    读到新信封会当空集收下，它自己的下一次落盘把文件写回裸数组，无损自愈。
+function writeJsonFile(p, data) {
+  const tmp = p + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(data), "utf-8");
+  fs.renameSync(tmp, p);
+}
+function tasksEnvelope(name, data) {
+  if (name !== "tasks" || !Array.isArray(data)) return data;
+  return {
+    pid: process.pid,
+    version: (app && app.getVersion && app.getVersion()) || "",
+    savedAt: Date.now(),
+    records: data,
+  };
+}
+function tasksUnwrap(name, data) {
+  if (name === "tasks" && data && Array.isArray(data.records)) return data.records;
+  return data;
+}
+
+ipcMain.handle("htw:loadJson", (_e, name) => {
+  return tasksUnwrap(String(name || ""), readJsonFile(jsonPath(String(name || "")), null));
+});
 ipcMain.handle("htw:saveJson", (_e, name, data) => {
   try {
-    fs.writeFileSync(jsonPath(String(name || "")), JSON.stringify(data), "utf-8");
+    writeJsonFile(jsonPath(String(name || "")), tasksEnvelope(String(name || ""), data));
     return true;
   } catch (e) { return false; }
 });
@@ -360,6 +417,19 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // 双保险：拿不到单实例锁时上面那支已经 app.quit()，但 app.quit() 是发起退出
+  // 而非当场终结 —— 引导逻辑在这里再拦一道，第二实例绝不会多建窗口。
+  if (!gotSingleInstanceLock) return;
+  // 🔴 2026-10-25 教程录制实测的已知问题：带着 --remote-debugging-port 启动时，
+  // 渲染层执行大文件上传/长任务轮询可能触发 Chromium "bad IPC message" 把渲染进程
+  // 直接杀掉（或 CDP 目标失联）—— 无调试端口时完全复现不了。这不是产品缺陷
+  // （正常分发不带该开关），但自动化/联调会踩，留下明确警示避免误判成业务 bug。
+  if (process.argv.some((a) => a.startsWith("--remote-debugging-port"))) {
+    console.warn(
+      "[warn] 已开启远程调试端口：与上传/长任务并发时渲染进程可能被 Chromium 终止（已知问题），" +
+      "仅限开发调试，请勿用于生产或自动化录制。"
+    );
+  }
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

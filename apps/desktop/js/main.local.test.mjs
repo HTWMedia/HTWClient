@@ -541,3 +541,128 @@ test("preload 的失败兜底不伪造状态：只有 ok:false，不含 state/ba
     }
   }
 });
+
+// ---- 任务落盘的加固（2026-10-28 任务记录凭空消失事故）----
+//
+// 与上面同一 ignores：main.js 起不来 electron 主进程，于是守卫形状 +
+// 把处理函数/函数声明抠出来注入桩依赖真的调。
+//
+// 事故链：落盘是全量覆写（不合并），dev 与打包版解析到同一个 userData，
+// 两份应用同时在跑时各自 2 秒节流的全量写互相把对方"不知道"的记录顶掉
+// —— 单实例锁封住"两份同时在跑"，原子写封住"写到一半"，
+// 信封让文件自己能回答"最后写者是谁"。
+
+// 取出函数声明的完整源码（参数表 + 函数体）。只抠函数体的话会把
+// 装配信息（形参名）丢掉，注入桩依赖就无从谈起。
+function declOf(src, marker) {
+  const idx = src.indexOf(marker);
+  assert.ok(idx >= 0, `源码里找不到标记：${marker}`);
+  const brace = src.indexOf("{", idx);
+  assert.ok(brace >= 0, `${marker} 之后找不到 {`);
+  return src.slice(idx, brace) + blockAt(src, brace);
+}
+
+// 把函数声明"装"起来：注入的键名就是它引用的自由变量名，装完返回真函数。
+function evalDecl(marker, deps) {
+  const decl = declOf(mainJs, marker);
+  const names = Object.keys(deps || {});
+  const values = names.map((n) => deps[n]);
+  return new Function(...names, "return (" + decl + ");")(...values);
+}
+
+test("单实例锁：锁不到就退出、second-instance 聚焦已有窗口，且都先于 whenReady 引导", () => {
+  // 支配守卫必须真的**调用**：写成 app.requestSingleInstanceLock 或
+  // 把返回值丢掉（不接住）都等于没锁。
+  assert.ok(
+    /app\.requestSingleInstanceLock\(\)/.test(mainJs),
+    "main.js 必须调用 app.requestSingleInstanceLock()"
+  );
+  // "锁不到就退出"必须写在 `if (!gotSingleInstanceLock)` 的分支里 ——
+  // 全文 includes("app.quit()") 会把别处（window-all-closed 等）的退出也算数。
+  const lost = stripComments(blockAfter(mainJs, "if (!gotSingleInstanceLock)").text);
+  assert.ok(/app\.quit\(\)/.test(lost), "锁不到单实例的那个分支里必须 app.quit() 退出第二实例");
+  // 第二实例的体感是"焦点回到已有窗口"，不是静默没反应。
+  const second = sliceCall(mainJs, 'app.on("second-instance"');
+  assert.ok(/\bfocus\s*\(/.test(second.text), "second-instance 回调必须把已有窗口 focus 带到前台");
+  // 锁/回调都在模块加载期注册：注册晚于 whenReady 会在启动竞态里错过事件，
+  // 所以 second-instance 必须先于 whenReady 引导。
+  assert.ok(
+    second.start < mainJs.indexOf("app.whenReady()"),
+    "second-instance 必须注册在 app.whenReady() 之前"
+  );
+  // 双保险：app.quit() 是发起退出而非当场终结，whenReady 引导体里再拦一道，
+  // 第二实例绝不建窗。剥注释断言（注释里提到守卫不算守卫）。
+  const ready = stripComments(blockAfter(mainJs, "app.whenReady().then(").text);
+  assert.ok(
+    /if\s*\(\s*!gotSingleInstanceLock\s*\)/.test(ready),
+    "whenReady 引导体里必须有 gotSingleInstanceLock 双保险"
+  );
+});
+
+test("htw:saveJson: tasks 数据包进 {pid,version,savedAt,records} 信封再落盘，其它名字原样", () => {
+  const written = [];
+  const fn = makeHandler("htw:saveJson", {
+    writeJsonFile: (p, data) => { written.push({ p, data }); return true; },
+    jsonPath: (name) => "/ud/" + name + ".json",
+    tasksEnvelope: (name, data) =>
+      (name === "tasks" && Array.isArray(data)) ? { pid: 7, version: "t", savedAt: 1, records: data } : data,
+  });
+
+  const records = [{ id: "r1" }];
+  assert.strictEqual(fn(null, "tasks", records), true, "写成功要回 true");
+  assert.deepStrictEqual(written, [{
+    p: "/ud/tasks.json",
+    data: { pid: 7, version: "t", savedAt: 1, records: [{ id: "r1" }] },
+  }], "tasks 的数据必须包进信封再落盘（文件自己能回答最后写者是谁）");
+
+  // 非 tasks 的名字（配置类）不包信封，原样落盘。
+  fn(null, "misc", { a: 1 });
+  assert.deepStrictEqual(written[1].data, { a: 1 }, "非 tasks 的名字原样落盘，不包信封");
+});
+
+test("htw:loadJson: 信封文件剥回裸数组、无文件回退 fallback、旧裸数组原样读出", () => {
+  const fn = makeHandler("htw:loadJson", {
+    readJsonFile: (p, fallback) =>
+      (p === "/ud/tasks.json") ? { pid: 7, version: "t", savedAt: 1, records: [{ id: "r1" }] } : fallback,
+    tasksUnwrap: (name, data) => (name === "tasks" && data && Array.isArray(data.records) ? data.records : data),
+    jsonPath: (name) => "/ud/" + name + ".json",
+  });
+
+  assert.deepStrictEqual(
+    fn(null, "tasks"),
+    [{ id: "r1" }],
+    "tasks 信封必须剥回裸数组：渲染层（js/tasks.js）只认数组，不知情感包"
+  );
+  assert.strictEqual(fn(null, "misc"), null, "没有文件时回退 fallback 原样返回");
+  // 旧裸数组文件的兼容在下面的真盘往返用例里验：tasksUnwrap 对裸数组原样返回。
+});
+
+test("真盘往返：原子写在真文件系统上留住完整 JSON，信封可剥回；旧裸数组文件原样兼容", () => {
+  const dir = realFs.mkdtempSync(join(tmpdir(), "htw-main-test-"));
+  const tasksPath = join(dir, "htw-tasks.json");
+
+  const writeJsonFile = evalDecl("function writeJsonFile", { fs: realFs });
+  const tasksEnvelope = evalDecl("function tasksEnvelope", {
+    process: { pid: 777 },
+    app: { getVersion: () => "0.5.0" },
+  });
+  const tasksUnwrap = evalDecl("function tasksUnwrap", {});
+
+  const records = [{ workflowId: "wf1", stage: "running" }];
+  writeJsonFile(tasksPath, tasksEnvelope("tasks", records));
+
+  // 落盘的就是完整 JSON（读端任何时刻只会看到旧整份或新整份）；
+  // 信封记下 pid / version / savedAt —— 再有记录消失，文件自己就能取证。
+  const onDisk = JSON.parse(realFs.readFileSync(tasksPath, "utf-8"));
+  assert.strictEqual(onDisk.pid, 777, "信封必须记下最后写者 pid");
+  assert.strictEqual(onDisk.version, "0.5.0", "信封必须记下最后写者版本");
+  assert.ok(typeof onDisk.savedAt === "number" && onDisk.savedAt > 0, "信封必须记下写入时刻");
+  assert.deepStrictEqual(tasksUnwrap("tasks", onDisk), records, "读端把信封剥回裸数组");
+
+  // 旧裸数组文件：不是信封，原样读出（向后兼容）。
+  const bare = [{ workflowId: "wf0", stage: "running" }];
+  const oldPath = join(dir, "htw-tasks-old.json");
+  realFs.writeFileSync(oldPath, JSON.stringify(bare), "utf-8");
+  const oldData = JSON.parse(realFs.readFileSync(oldPath, "utf-8"));
+  assert.strictEqual(tasksUnwrap("tasks", oldData), oldData, "旧裸数组文件原样读出");
+});
