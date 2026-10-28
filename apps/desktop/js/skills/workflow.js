@@ -144,11 +144,11 @@
       { key: "running", text: "进行中" },
       { key: "history", text: "历史" },
     ];
+    var tabBtns = {};
     tabDefs.forEach(function (t, i) {
       var b = UI.el("button", { class: "btn wf-tab" + (i === 0 ? " active" : ""), text: t.text });
+      tabBtns[t.key] = b;
       b.addEventListener("click", function () {
-        tabs.querySelectorAll(".wf-tab").forEach(function (x) { x.classList.remove("active"); });
-        b.classList.add("active");
         renderTab(t.key);
       });
       tabs.appendChild(b);
@@ -160,6 +160,13 @@
     panel.appendChild(bodyCard);
 
     function renderTab(key) {
+      // 🔴 内容与高亮必须在同一个 renderTab 里切：提交成功是**程序化**跳到进行中的，
+      // 旧实现把高亮只写在页签点击监听里，代码直接调 renderTab("running") 时
+      // 页签还停在"发起工作流"高亮上 —— 用户只觉得发起表单凭空消失。
+      tabDefs.forEach(function (t) {
+        if (t.key === key) tabBtns[t.key].classList.add("active");
+        else tabBtns[t.key].classList.remove("active");
+      });
       UI.clear(body);
       if (key === "new") renderNew(body);
       if (key === "running") renderRunning(body);
@@ -356,7 +363,10 @@
           });
         }).then(function (r) {
           go.disabled = false;
-          if (!r || !r.ok) { msg.textContent = ""; UI.showError(msg.parentNode, explain(r)); return; }
+          // 🔴 错误只能写进 msg 自己：go 按钮与 msg 同属一个 wf-section，把
+          // UI.showError 打到 msg.parentNode 上会连表单按钮一起清掉（与批量
+          // 面板同款症状"点完提交，按钮凭空消失"）。
+          if (!r || !r.ok) { msg.textContent = ""; UI.showError(msg, explain(r)); return; }
           var workflowId = r.taskId || (r.data && r.data.workflowId);
           // 判空再调：容器缺席时静默跳过，否则这一行抛出的 TypeError 会被下面的
           // catch 接成一句提交失败，把一次其实已经起成的工作流报成没起来。
@@ -387,7 +397,14 @@
           Publish: { Platforms: pickedPlatforms(), AutoPublish: false },
         }).then(function (r) {
           batchBtn.disabled = false;
-          if (!r || !r.ok) { msg.textContent = ""; UI.showError(msg.parentNode, explain(r)); return; }
+          // 🔴 结果/错误只能写进 msg 自己：batchBtn 虽在另一节，但 msg.parentNode
+          // 是**发起工作流的整节**（主题输入、发布到平台、「开始工作流」按钮都在
+          // 里面）—— clear 掉它等于把整个发起表单抹了。
+          if (!r || !r.ok) { msg.textContent = ""; UI.showError(msg, explain(r)); return; }
+          if (!r.data) {
+            msg.textContent = "服务未返回启动结果，请稍后到「进行中」页确认，或重试。";
+            return;
+          }
           var sum = batchSummary(r.data);
           // 批量启动一次起了 N 条工作流，每条都要走完整条链路（出片→包装→文案→发布），
           // 正是任务中心存在的意义，不登记的话用户只能守在这个面板上等。
@@ -401,18 +418,18 @@
             var topic = it && it.topic ? String(it.topic).slice(0, 20) : "";
             if (window.HTWTasks) window.HTWTasks.track({ domain: "workflow", taskId: it && it.workflowId, panel: "workflow", title: topic ? "工作流 · " + topic : "批量工作流" });
           });
-          UI.clear(msg.parentNode);
+          UI.clear(msg);
           // 部分成功时**留在本页**把明细摊开：批量最常见的就是"大部分起来了、几条没进去"
           // （速率票据按条计，免费档一分钟只放得下几条）。直接切走等于把这事藏起来，
           // 用户会以为 10 条全在跑，次日才发现少了几条。
           if (sum.accepted > 0) {
-            msg.parentNode.appendChild(UI.el("div", { class: "wf-notice", text: sum.lines.join("\n") }));
+            msg.appendChild(UI.el("div", { class: "wf-notice", text: sum.lines.join("\n") }));
             var goSee = UI.el("button", { class: "btn", text: "查看进行中的工作流 →" });
             goSee.addEventListener("click", function () { renderTab("running"); });
-            msg.parentNode.appendChild(UI.el("div", { class: "wf-row" }, [goSee]));
+            msg.appendChild(UI.el("div", { class: "wf-row" }, [goSee]));
             return;
           }
-          msg.parentNode.appendChild(UI.el("div", { class: "wf-ok-box", text: sum.lines.join("\n") }));
+          msg.appendChild(UI.el("div", { class: "wf-ok-box", text: sum.lines.join("\n") }));
         }).catch(function (e) {
           batchBtn.disabled = false;
           msg.textContent = errText(e);
@@ -447,21 +464,51 @@
     }
 
     // ---------- 进行中 ----------
+    // 结束提示：盯守中的条目到终态会被 isWatching 过滤出「进行中」列表 ——
+    // 不留一句话的话，用户看到的就是「出片中的卡片凭空消失了」。track 的终态
+    // 分支把「哪条结束了、为什么」记在 root 上（root 同一次挂载内持续存活，
+    // 切页签回来也还在），renderRunning 每次重画把它们渲染在列表最上面。
+    var MAX_EXITS = 6;
+    function noteExit(root, w) {
+      if (!root || !w || !w.workflowId) return;
+      var rest = (root._wfExits || []).filter(function (x) { return x.workflowId !== w.workflowId; });
+      root._wfExits = [w].concat(rest).slice(0, MAX_EXITS);
+    }
+    function exitLine(w) {
+      var head = "「" + (w.topic || "(无主题)") + "」已结束——" + stage(w.stage).text;
+      return head + (w.error ? "：" + w.error : "") + "。成片与详情可到「历史」查看。";
+    }
+
     function renderRunning(root) {
+      // 重画先清根：终态转进/取消都会再次调 renderRunning，不清的话旧 wrap
+      // 会整份残留 —— 卡片随重画次数越堆越多（同一条出现好几份）。
+      UI.clear(root);
       var wrap = UI.el("div");
       root.appendChild(wrap);
-      // 活动段 + 等人确认的，两类都要看得到
+      // 结束提示在最上面：先说清「刚发生了什么」，再列还在跑的。
+      // load 的回调会先 clear 再画列表，所以结束后提示要跟着重画一遍。
+      function renderExits() {
+        (root._wfExits || []).forEach(function (x) {
+          wrap.appendChild(UI.el("div", { class: "wf-notice", text: exitLine(x) }));
+        });
+      }
+      renderExits();
       load(wrap, "GET", "/api/v2/workflow/history?limit=30", null, function (d) {
         UI.clear(wrap);
+        renderExits();
         var items = (d.items || []).filter(isWatching);
         if (!items.length) {
           wrap.appendChild(emptyBox("现在没有进行中的工作流。去「发起工作流」起一条。"));
           return;
         }
         items.forEach(function (w) {
-          wrap.appendChild(wfCard(w, function () { renderRunning(root); }));
+          wrap.appendChild(wfCard(w, function () { renderRunning(root); }, root));
         });
-        // 每条各自计时；切走面板时定时器会自己停
+        // 计时跟着页签内容走：showPanel 只切面板可见性（app.js），body 容器
+        // 始终连着文档 —— 所以这套「每条一个计时器」其实一直挂到面板重挂为止，
+        // 上面的去重（root._wfTimers）保证同一条至多一份，不会滚增。离开
+        // 「进行中」页签时轮询照常在跑反而是对的：那段时间到终态的条目同样
+        // 会进 _wfExits（root 同一次挂载内持续存活），切回来能看到原因。
         items.forEach(function (w) { track(root, w.workflowId); });
       });
     }
@@ -469,11 +516,18 @@
     // 轮询一条工作流。终态、超时、或面板已切走时都停手。
     function track(root, id) {
       if (!id) return;
+      // 🔴 同一条工作流同时只能有一个轮询计时器：一条到终态会触发 renderRunning
+      // 重画、给仍在跑的条目重新 track —— 旧计时器不撤的话，每 6 秒会对同一条
+      // 发出多份 status 查询，且计时器条数会随每次反复越滚越多。root 是页签
+      // 内容的固定容器，按 id 登记在这里：先撤旧的再挂新的。
+      root._wfTimers = root._wfTimers || {};
+      if (root._wfTimers[id]) clearInterval(root._wfTimers[id]);
       var started = Date.now();
       var timer = setInterval(function () {
-        if (!root.isConnected) { clearInterval(timer); return; }
+        if (!root.isConnected) { clearInterval(timer); delete root._wfTimers[id]; return; }
         if (Date.now() - started > POLL_LIMIT_MS) {
           clearInterval(timer);
+          delete root._wfTimers[id];
           var box = root.querySelector('[data-wf-poll="' + id + '"]');
           if (box) box.textContent = "轮询已超时，可到「历史」里看最终结果。";
           return;
@@ -482,13 +536,18 @@
           if (!r || !r.ok) return;
           if (!isWatching(r.data || {})) {
             clearInterval(timer);
+            delete root._wfTimers[id];
+            // 先记下「哪条结束了、为什么」再重画：卡片马上要被 isWatching 滤出列表，
+            // 不记的话用户看到的就是它凭空消失。
+            noteExit(root, r.data || {});
             renderRunning(root);
           }
         }).catch(function () { /* 单次失败不终止轮询 */ });
       }, POLL_MS);
+      root._wfTimers[id] = timer;
     }
 
-    function wfCard(w, refresh) {
+    function wfCard(w, refresh, root) {
       var st = stage(w.stage);
       var kids = [
         UI.el("div", { class: "wf-card-head" }, [
@@ -534,6 +593,11 @@
           cancel.disabled = true;
           call("POST", "/api/v2/workflow/cancel", { WorkflowId: w.workflowId }).then(function (r) {
             if (!r || !r.ok) { cancel.disabled = false; UI.showError(poll, explain(r)); return; }
+            // 取消成功也得当场留一句：不是只有"跑到终态"会让人一头雾水，
+            // 点了取消、卡片随即消失同样像"丢号了"。这里先用合成状态补一条
+            // 提示，稍后计时器拿回真实 cancelled 记录时按 workflowId 去重，
+            // 最多迟几秒换一次文案，不会双提示。
+            noteExit(root, Object.assign({}, w, { stage: "cancelled" }));
             refresh();
           }).catch(function (e) { cancel.disabled = false; UI.showError(poll, errText(e)); });
         });
