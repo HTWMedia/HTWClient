@@ -329,8 +329,11 @@
       }
 
       async function readInputs(input) {
+        // UI.fileInput 返回的是包装 div（真 input 在 .input 属性上）——
+        // 直接读包装的 .files 恒为 undefined，提交永远「请先选择视频文件」。
+        const el = input && input.input ? input.input : input;
         var out = [];
-        var files = (input.files && input.files.length) ? input.files : [];
+        var files = (el.files && el.files.length) ? el.files : [];
         for (var i = 0; i < files.length; i++) {
           out.push({ name: files[i].name, buffer: await files[i].arrayBuffer() });
         }
