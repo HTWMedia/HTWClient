@@ -461,9 +461,12 @@
       }
     }
     // 整包上传的 base 由选路决定（命中本地 → 本地，否则 → 云端）。
+    // 多文件没法分片，整包过 Cloudflare 会在源站回源慢时长时间卡在个位数百分比
+    //（2026-10-28 录 03 实录：13.2MB 卡在 2%），所以多文件整包优先走直连源站。
     // 除 base 外，方法 / 路径 / 文件 / 字段 / 头一律不变。
     const routedLocal = shouldUseLocal(method, path);
-    const target = routedLocal ? _localBase : _base;
+    const multiDirect = !routedLocal && !!_directBase && list.length > 1;
+    const target = routedLocal ? _localBase : (multiDirect ? _directBase : _base);
     const localSelected = routedLocal && !!(_localBase && target === _localBase);
     const res = await window.htw.upload(method, path, filePaths, fields, authHeader(), onProgress, fileField, target);
     // 与 call 同一口径：选路命中本地就在失败形状上标出来，**不回落云端**。

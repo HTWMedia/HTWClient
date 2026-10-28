@@ -9,15 +9,11 @@ import pyautogui
 import pdrive as p
 import phys
 from hcdp import H
-from phys import record_physical
+from phys import record_physical, wait_preview
 
 A = HERE + r"\assets"
 
-# 窗口矩形（物理像素，偶数化供 yuv420p）
-W = p.window_rect()
-assert W, "窗口定位失败"
-CROP = (W[0], W[1], W[2] - (W[2] % 2), W[3] - (W[3] % 2))
-print("窗口矩形:", W, "裁剪:", CROP, flush=True)
+# 窗口矩形由 record_physical 在确保应用启动后统一注入（导入期应用可能还没起来）。
 
 
 def s1():
@@ -34,9 +30,9 @@ def s2():
 
 def s3():
     d = H()
-    # 清掉上一轮残留结果（clear 结束时会主动断连，之后必须先重连）
-    phys.clear_card_results(d, "panel-edit", ["视频粗剪"])
-    d.attach()
+    # 清掉上一轮残留结果：面板级文本匹配会被其它卡片的「下载成片」误命中
+    # （2026-10-28 实录：粗剪还在 0%，等待却已判成功）。结果区有稳定 id，按 id 清。
+    d.c.ev('(() => { const r = document.getElementById("edit-coarse-result"); if (r) r.innerHTML = ""; return "ok"; })()')
     d.scroll_card("panel-edit", "视频粗剪 Coarse-cut")
     # 音色/时长：清冷女声（演示原片口播自带）+ 5~60 秒；数字参数走真实键盘输入
     d.c.ev('''(() => {
@@ -49,14 +45,28 @@ def s3():
     time.sleep(0.8)
     d.click_btn_text("panel-edit", "开始粗剪")
     time.sleep(8)
-    ok = d.wait_result("panel-edit", "下载成片", timeout=1500, poll=25)
-    print("    粗剪渲染:", ok, flush=True)
+    st, detail = d.wait_result_state("#edit-coarse-result", "下载成片", timeout=1500)
+    print("    粗剪渲染:", st, detail, flush=True)
+    if st != "ok":
+        raise RuntimeError(f"粗剪渲染{st}：{detail or '等待超时'}")
+    # 结果出现只代表任务完成，预览首帧还要缓冲；等真正起播再结束本场（画面加速会压缩这段）
+    wait_preview(d, "edit-coarse-result")
 
 
 def s4():
     d = H()
-    d.scroll_card("panel-edit", "视频粗剪 Coarse-cut")
-    time.sleep(1.0)
+    d.attach()
+    d.c.ev('''(() => {
+      const r = document.getElementById("edit-coarse-result");
+      if (!r) return "no";
+      const v = r.querySelector("video");
+      if (v) { v.muted = true; const p = v.play(); if (p && p.catch) p.catch(function () {}); }
+      const link = [...r.querySelectorAll("a, button")].find(x => x.textContent.includes("下载成片")) || r;
+      link.scrollIntoView({block: "center"});
+      return "ok";
+    })()''')
+    d.detach()
+    time.sleep(0.8)
 
 
 scenes = [
@@ -72,6 +82,6 @@ scenes = [
          sub="提示：素材需含人声；异常时有明确原因；下一集：剪同款", run=None, min_len=3),
 ]
 for sc in scenes:
-    sc["crop"] = CROP
+    sc.setdefault("pad", 0.6)
 
 record_physical("h02", scenes, out_name="02_剪辑-视频粗剪")

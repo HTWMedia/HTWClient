@@ -23,7 +23,15 @@ def h03():
         phys.type_field(d, "panel-edit", "edit-cutsame-keyword", "旅行")
         time.sleep(0.3)
         d.click_btn_text("panel-edit", "搜索模板")
-        time.sleep(6)
+        # 搜索接口 6-15s 不定，固定等待会录到空列表（2026-10-29 03 实录）
+        for _ in range(30):
+            time.sleep(1)
+            d.attach()
+            n = d.c.ev('(() => { const g = document.getElementById("edit-cutsame-grid"); return g ? g.children.length : 0; })()')
+            d.detach()
+            if n:
+                break
+        time.sleep(1.5)
         d.attach()
         d.scroll_card("panel-edit", "剪同款 Cut-same")
     def s3():
@@ -42,18 +50,30 @@ def h03():
         d.click_btn_text("panel-edit", "开始套模板")
         ok = d.wait_result("#edit-cutsame-result", "下载成片", timeout=900)
         print("    剪同款渲染:", ok, flush=True)
+        if not ok:
+            raise RuntimeError("剪同款渲染等待超时")
+        # 等预览真正起播：只等链接出现会录到缓冲转圈（2026-10-28 03 集实录）
+        phys.wait_preview(d, "edit-cutsame-result")
     def s6():
         d = H()
         d.attach()
-        # 结果区在卡片底部：以「下载成片」链接为锚点居中，成片播放器与下载按钮同框
+        # 成片是竖屏（1080×1920），播放器比窗口还高：按下载链接居中会把画面主体顶出
+        # 窗口只剩黑边（2026-10-29 实录）。滚动容器是 main 而非 window，scrollTo 无效，
+        # 先 scrollIntoView 再把容器上移 150，画面主体、控件与下载链接同框。
         d.c.ev('''(() => {
           const r = document.getElementById("edit-cutsame-result");
           if (!r) return "no";
-          const link = [...r.querySelectorAll("a, button")].find(x => x.textContent.includes("下载成片")) || r;
-          link.scrollIntoView({block: "center"});
+          const v = r.querySelector("video");
+          if (v) { v.muted = true; const p = v.play(); if (p && p.catch) p.catch(function () {}); }
+          const el = v || r;
+          el.scrollIntoView({block: "start"});
+          let sc = el.parentElement;
+          while (sc && sc.scrollHeight <= sc.clientHeight + 4) sc = sc.parentElement;
+          (sc || document.scrollingElement).scrollTop += 150;
           return "ok";
         })()''')
-        time.sleep(0.6)
+        d.detach()
+        time.sleep(0.8)
     scenes = [
         dict(narr="剪同款：选一个热门模板，把自己的素材套进去，云端自动生成同款视频。输入关键词，点击搜索模板。", sub="剪同款：关键词搜索模板", run=s1),
         dict(narr="搜索结果以卡片展示，含封面、时长和可用状态。付费或未解锁的模板会标记不可用，无法套用。", sub="选择模板：注意可用状态", run=s2, pad=1.0),

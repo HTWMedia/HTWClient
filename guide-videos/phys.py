@@ -309,3 +309,32 @@ def wait_render(detect_fn, timeout=900, poll=20):
             pass
         print(f"  等待渲染 {time.time()-t0:.0f}s", flush=True)
     return False
+
+
+def wait_preview(h, result_id, timeout=120):
+    """结果链接出现 ≠ 首帧出画：静音起播并等 currentTime 真正前进。
+    云端限速链路首帧要缓冲十余秒，不等的话录到的只是转圈（2026-10-28 04/03 实录）。"""
+    h.attach()
+    h.c.ev(f'''(() => {{
+      const v = document.querySelector("#{result_id} video");
+      if (v) {{ v.muted = true; const p = v.play(); if (p && p.catch) p.catch(function () {{}}); }}
+      return "ok";
+    }})()''')
+    h.detach()
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        time.sleep(2)
+        try:
+            h.attach()
+            t = h.c.ev(f'''(() => {{
+              const v = document.querySelector("#{result_id} video");
+              return v ? v.currentTime : -1;
+            }})()''')
+            h.detach()
+        except Exception:
+            t = -1
+        if isinstance(t, (int, float)) and t > 1.0:
+            print(f"    预览起播: {t:.1f}s（等待 {time.time()-t0:.0f}s）", flush=True)
+            return True
+    print(f"    [警告] {result_id} 预览 {timeout}s 内未起播", flush=True)
+    return False

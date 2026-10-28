@@ -624,6 +624,16 @@ test("选路: upload 命中走本地、未命中走云端", async () => {
   });
 });
 
+// 多文件没法分片，整包过 Cloudflare 在源站回源慢时会卡在个位数百分比
+// （2026-10-28 录 03 实录：13.2MB 卡在 2%）。有直连站时整包必须走直连站。
+test("选路: 多文件整包上传走直连站", async () => {
+  await withRouting({ endpoints: [] }, async (api, seen) => {
+    await api.upload("POST", "/api/v2/edit/cutsame", [smallFile("a.mp4"), smallFile("b.mp4")], {});
+    assert.strictEqual(seen.upload[0].base, DIRECT, "多文件整包上传走直连站");
+    assert.strictEqual(seen.upload[0].path, "/api/v2/edit/cutsame", "路径逐字不变");
+  });
+});
+
 // 🔴 分片上传的选路输入是**分片端点本身**（/api/v2/files/chunk），不是原始端点。
 // 清单只收"能在本机独立执行"的端点，文件/分片类端点不在清单里 ——
 // 也就是说：**清单没有 chunk 端点 ⇒ 分片上传永不路由本地**，
