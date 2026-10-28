@@ -25,6 +25,35 @@
     return r.message || "请求失败";
   }
 
+  // 云端渲染引擎的已知失败码 → 用户能看懂的原因与自助处理建议。
+  // 服务端只回 "Render failed (code=...)"，不翻译的话用户无从下手。
+  var RENDER_HINTS = [
+    [/19070005/, "草稿里可能存在多条视频轨且上层轨道层级（render_index）未高于主轨。"
+      + "剪映桌面端能容忍这种草稿，但云端渲染不允许：请把上层视频轨的相对层级调高后重新导出草稿包"],
+  ];
+
+  function failureHint(err) {
+    const s = String(err || "");
+    for (let i = 0; i < RENDER_HINTS.length; i++) {
+      if (RENDER_HINTS[i][0].test(s)) return RENDER_HINTS[i][1];
+    }
+    return "";
+  }
+
+  // 服务端对草稿包做素材核对后返回 warnings（缺了哪些素材）。原样 JSON 用户看不懂，
+  // 翻译成「缺什么、有什么后果、怎么办」。缺素材不会导致任务失败，只会让画面缺内容。
+  function describeWarnings(warnings) {
+    if (!warnings || !warnings.length) return "素材核对通过：草稿引用的素材都已随包上传。";
+    const lines = warnings.map(function (w) {
+      const files = (w.Files || w.files || []).slice(0, 5).join("、");
+      const more = (w.Files || w.files || []).length > 5 ? " 等" : "";
+      const type = { video: "视频", audio: "音频", image: "图片", font: "字体", effect: "特效", sticker: "贴纸" }[w.Type || w.type] || (w.Type || w.type) || "素材";
+      return type + " ×" + (w.Count != null ? w.Count : "?") + "：" + files + more;
+    });
+    return "云端缺少以下素材（成片里对应内容会缺失或黑屏）：\n" + lines.join("\n")
+      + "\n如需完整画面，请把素材文件与 draft_content.json 一起打包后重新上传。";
+  }
+
   Skills.edit = {
     mount: function (panel) {
       var UI = window.UI;
@@ -90,6 +119,16 @@
         });
       }
 
+      // pollTask 失败时任务错误码在 res.code（pollEdit 把 status.error 塞进 errCode，
+      // pollTask 再转成 code），不在 res.errCode —— 旧实现读后者恒为 undefined，
+      // failureHint 一次都没生效过。这里按真实返回形状取码并拼接提示。
+      function taskErrorText(res) {
+        const rawCode = res && res.raw && (res.raw.errCode || res.raw.error);
+        const code = [res && res.code, res && res.message, rawCode].filter(Boolean).join(" ");
+        const hint = failureHint(code);
+        return formatErr(res) + (hint ? "\n\n可能的原因：" + hint : "");
+      }
+
       // 成片下载链接由服务端签过凭证，直接用；与营销/短剧面板同一套呈现方式
       function showVideo(region, url, title) {
         const full = url.charAt(0) === "/" ? API.base + url : url;
@@ -117,7 +156,7 @@
         // 接成「请求异常」，一次其实已经提交成功的剪辑被报成失败。
         if (window.HTWTasks) window.HTWTasks.track({ domain: "edit", taskId: taskId, panel: "edit", title: String(title || "剪辑处理").replace(/完成$/, "") });
         const res = await pollEdit(taskId, region);
-        if (!res.ok) { UI.showError(region, formatErr(res)); return; }
+        if (!res.ok) { UI.showError(region, taskErrorText(res)); return; }
         const d = (res.data && res.data.result) || res.data;
         const url = d && (d.downloadUrl || d.download_url);
         if (url) showVideo(region, url, title);
@@ -335,7 +374,10 @@
             if (!taskId) { UI.showError(csRegion, "未返回 taskId: " + JSON.stringify(up.data)); return; }
             if (window.HTWTasks) window.HTWTasks.track({ domain: "edit", taskId: taskId, panel: "edit", title: "剪同款" });
             const res = await pollEdit(taskId, csRegion);
-            if (!res.ok) { UI.showError(csRegion, formatErr(res)); return; }
+            if (!res.ok) {
+              UI.showError(csRegion, taskErrorText(res));
+              return;
+            }
             const d = (res.data && res.data.result) || res.data;
             const url = d && (d.downloadUrl || d.download_url);
             if (url) showVideo(csRegion, url, "套模板完成");
@@ -356,9 +398,14 @@
             const taskId = up.taskId || (up.data && up.data.taskId);
             if (!taskId) { UI.showError(draftRegion, "未返回 taskId: " + JSON.stringify(up.data)); return; }
             if (window.HTWTasks) window.HTWTasks.track({ domain: "edit", taskId: taskId, panel: "edit", title: "草稿导出" });
-            UI.showResult(draftRegion, { message: "已提交，taskId=" + taskId + "，处理中…", warnings: up.data.warnings });
+            UI.showResult(draftRegion, {
+              message: "已提交，taskId=" + taskId + "，处理中…\n" + describeWarnings(up.data && up.data.warnings),
+            });
             const res = await pollEdit(taskId, draftRegion);
-            if (!res.ok) { UI.showError(draftRegion, formatErr(res)); return; }
+            if (!res.ok) {
+              UI.showError(draftRegion, taskErrorText(res));
+              return;
+            }
             UI.showResult(draftRegion, res.data);
           } catch (e) {
             UI.showError(draftRegion, "请求异常: " + (e && e.message ? e.message : String(e)));

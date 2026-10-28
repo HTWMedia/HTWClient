@@ -302,8 +302,26 @@
   }
 
   // 单文件且超过该阈值时走分片上传，规避反向代理 / Cloudflare 的 body 大小限制 (413)。
-  // 单片 10MB；需确保反向代理 client_max_body_size >= 单片大小（建议 16m），Cloudflare 免费版单请求 100MB 上限内。
-  const CHUNK_SIZE = 10 * 1024 * 1024;
+  // 单片 1MB：2026-10-28 复测发现源站吞吐 ~25KB/s，2MB 一片要 70–90s，紧贴 Cloudflare
+  // 524（源站 100s 无响应）阈值，整包直传几十 MB 几乎必撞；1MB 一片把单请求压到 40s 上下。
+  // 🔴 该值必须与注释一致 —— 整包直传 /api/v2/batch/upload 在 4.5MB+ 就稳定撞 502/524，
+  // 而分片全程 200。单片 10MB 意味着每片必死，批量面板的视频上传全军覆没。
+  const CHUNK_SIZE = 1 * 1024 * 1024;
+  // 分片失败重试：源站繁忙时网关会回 524/502/503/504 或直接断连。服务端按 index
+  // 覆盖写分片，重发同一片是幂等的；不重试的话，十几片里任意一片抖动就整单失败。
+  const CHUNK_ATTEMPTS = 3;
+  const CHUNK_RETRY_DELAYS = [2000, 6000];
+
+  function sleepMs(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  function isTransientChunkCode(code) {
+    if (code === undefined || code === null || code === "") return false;
+    const c = Number(code);
+    if (!Number.isFinite(c)) return false;
+    return c === 0 || c === 429 || c === 502 || c === 503 || c === 504 || (c >= 520 && c <= 527);
+  }
   // 分片上传的实际请求端点：选路输入是**它本身**，不是被拆分的原始业务端点。
   // 清单只收"能在本机独立执行"的端点 —— 清单没有分片端点 ⇒ 分片上传永不路由本地
   // （原始端点命中也不能把大文件文件端点带进本机）。
@@ -341,23 +359,25 @@
         const start = i * CHUNK_SIZE;
         const end = Math.min(full.length, start + CHUNK_SIZE);
         const chunkBuf = full.slice(start, end);
-        try {
-          const res = await window.htw.upload(
-            "POST",
-            "/api/v2/files/chunk",
-            [{ name: file.name, buffer: chunkBuf }],
-            { fileId: uploadId, index: String(i), total: String(total), fileName: file.name },
-            authHeader(),
-            null,
-            null,
-            uploadBase
-          );
-          const norm = normalize(res);
-          if (!norm.ok) {
+        const chunkLocal = !!(_localBase && uploadBase === _localBase);
+        for (let attempt = 1; ; attempt++) {
+          try {
+            const res = await window.htw.upload(
+              "POST",
+              "/api/v2/files/chunk",
+              [{ name: file.name, buffer: chunkBuf }],
+              { fileId: uploadId, index: String(i), total: String(total), fileName: file.name },
+              authHeader(),
+              null,
+              null,
+              uploadBase
+            );
+            const norm = normalize(res);
+            if (norm.ok) break;
             // 🔴 本地已选定但分片执行失败：收敛到 markLocalFailed 口径
             //    （localFailed 标记 + "本地执行失败："前缀），不抛裸的分片异常；
             //    throw 契约不变（调用方仍收到 Error），只是错误体带上了明确的标记。
-            const chunkLocal = !!(_localBase && uploadBase === _localBase);
+            //    本地失败不重试：本机实例的错误不会靠等待自愈。
             if (chunkLocal) {
               const marked = markLocalFailed(norm);
               const e = new Error(marked.message + "（分片 " + i + "）");
@@ -367,16 +387,23 @@
               if (marked.localUnavailable === true) e.localUnavailable = true;
               e.raw = norm.raw;
               failed = e;
-            } else {
-              const e = new Error("分片 " + i + " 上传失败: " + (norm.message || norm.code));
-              e.httpError = true;
-              failed = e;
+              return;
             }
-            return;
+            const e = new Error("分片 " + i + " 上传失败: " + (norm.message || norm.code));
+            e.httpError = true;
+            if (attempt >= CHUNK_ATTEMPTS || !isTransientChunkCode(norm.code)) {
+              failed = e;
+              return;
+            }
+            await sleepMs(CHUNK_RETRY_DELAYS[attempt - 1] || CHUNK_RETRY_DELAYS[CHUNK_RETRY_DELAYS.length - 1]);
+          } catch (e) {
+            // 只重试网络类异常；代码错误重试多少次都一样，还会把真正的异常盖住。
+            if (attempt >= CHUNK_ATTEMPTS || !isNetworkFailure(e)) { failed = e; return; }
+            await sleepMs(CHUNK_RETRY_DELAYS[attempt - 1] || CHUNK_RETRY_DELAYS[CHUNK_RETRY_DELAYS.length - 1]);
           }
-          done++;
-          report();
-        } catch (e) { failed = e; return; }
+        }
+        done++;
+        report();
       }
     }
     const workers = [];
@@ -492,6 +519,26 @@
     return { ok: false, code: code, message: message, raw: raw };
   }
 
+  // 没有 V2 信封的 HTTP 失败（Cloudflare/网关直接回的纯文本错误页）→ 用户能看懂、
+  // 知道下一步做什么的文案。
+  // 🔴 2026-10-25 教程录制实录：服务端繁忙时剪同款提交撞 524，界面只显示
+  // 「[524] HTTP 524」—— 用户既不知道 524 是什么，也不知道该等还是该查什么。
+  // 码原样保留在 code 里（排查用），message 只负责说人话。
+  function describeHttpStatus(status) {
+    if (status === 429) return "请求过于频繁，请稍后重试";
+    if (status === 401) return "AuthKey 无效或已过期，请到「设置」重新填写";
+    if (status === 402) return "额度不足，请到充值页充值后再试";
+    if (status === 404) return "接口不存在（HTTP 404），客户端可能需要更新";
+    if (status === 502 || status === 503) return "服务器维护或繁忙（HTTP " + status + "），请稍后重试";
+    if (status === 504) return "网关超时（HTTP 504），请稍后重试";
+    // Cloudflare 52x = 源站异常系列（524 源站处理超时最常见：大文件上传在服务端
+    // 繁忙时段高频出现，实测 2MB 分片可显著降低触发率）
+    if (status >= 520 && status <= 527) return "服务器繁忙（HTTP " + status + "），请稍后重试；大文件可稍后再传";
+    if (status >= 500) return "服务器错误（HTTP " + status + "），请稍后重试";
+    if (status >= 400) return "请求被拒绝（HTTP " + status + "）";
+    return "HTTP " + status;
+  }
+
   // 失败壳的判据：顶层 errCode/ErrCode 存在，且不是 0。
   // errCode:0 表示"没有错误"，不能判成失败 —— 判错了就是一次成功的响应被报成失败。
   // errCode 缺失的壳也不算失败壳（那是另一个形状：有 ok/Ok 时由 ok/Ok 判定）。
@@ -504,7 +551,7 @@
     const d = res.data !== undefined ? res.data : res.body;
     if (res.status === 402) fireQuotaExceeded(d);
     if (!d || typeof d !== "object") {
-      return { ok: !!res.ok, data: d, taskId: null, code: res.status, message: res.ok ? "" : ("HTTP " + res.status) };
+      return { ok: !!res.ok, data: d, taskId: null, code: res.status, message: res.ok ? "" : describeHttpStatus(res.status) };
     }
     // 服务端信封字段大小写不固定：Ok/Ok、Data/data、ErrCode/errCode、ErrMsg/errMsg、TaskId/taskId 都兼容。
     const ok = d.ok !== undefined ? d.ok : d.Ok;
@@ -514,7 +561,7 @@
     const taskId = d.taskId !== undefined ? d.taskId : d.TaskId;
     if (res.ok && ok === true) return { ok: true, data: camelize(data), taskId: taskId || null };
     if (res.ok && ok === false) return failShape(code, msg, d);
-    if (!res.ok) return failShape(code || res.status, msg || ("HTTP " + res.status), d);
+    if (!res.ok) return failShape(code || res.status, msg || describeHttpStatus(res.status), d);
     // 失败壳：没有 ok/Ok 字段，却带着非 0 的 errCode/ErrCode。
     // 本地实例的 pair 失败壳正是这个形状（{errCode, errMsg}），而且可能是
     // HTTP 200 —— 不在这里判失败，就会落到下面的 return { ok:true }，
@@ -533,7 +580,7 @@
     // 或者「本地实例用 200 回了失败壳」时，一次失败不会被当成成功。
     // 反过来说：哪天有端点改成用 **HTTP 200 + 顶层 errCode（且无 ok/Ok）** 回答失败，
     // 这一行就是那条路上的**唯一**拦截点，删掉它失败就会变成成功。
-    if (ok === undefined && isFailureShellCode(code)) return failShape(code, msg || ("HTTP " + res.status), d);
+    if (ok === undefined && isFailureShellCode(code)) return failShape(code, msg || describeHttpStatus(res.status), d);
     return { ok: true, data: camelize(data !== undefined ? data : d), taskId: taskId || null };
   }
 

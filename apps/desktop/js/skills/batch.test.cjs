@@ -155,3 +155,16 @@ test("轮询节奏与上限", () => {
 test("模块导出 mount 供 app.js 挂载", () => {
   assert.strictEqual(typeof batch.mount, "function");
 });
+
+test("oversizeMaterial: 超过 60MB 在本地就拦下，不白传", () => {
+  const MB = 1024 * 1024;
+  assert.strictEqual(I.MAX_MATERIAL_BYTES, 60 * MB);
+  assert.strictEqual(I.oversizeMaterial([{ name: "a.mp4", size: 60 * MB }], I.MAX_MATERIAL_BYTES), null);
+  assert.strictEqual(I.oversizeMaterial([{ name: "a.mp4", size: 60 * MB + 1 }], I.MAX_MATERIAL_BYTES), "a.mp4");
+  // 多文件时返回第一个超限的名字
+  const files = [{ name: "ok.mp4", size: 10 * MB }, { name: "big.mp4", size: 70 * MB }, { name: "big2.mp4", size: 80 * MB }];
+  assert.strictEqual(I.oversizeMaterial(files, I.MAX_MATERIAL_BYTES), "big.mp4");
+  // 空列表 / 空值不误判
+  assert.strictEqual(I.oversizeMaterial(null, I.MAX_MATERIAL_BYTES), null);
+  assert.strictEqual(I.oversizeMaterial([], I.MAX_MATERIAL_BYTES), null);
+});

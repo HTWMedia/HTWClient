@@ -27,7 +27,23 @@ test("normalize: HTTP non-2xx without envelope", () => {
   const r = api.normalize({ ok: false, status: 500, data: "oops" });
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.code, 500);
-  assert.strictEqual(r.message, "HTTP 500");
+  assert.strictEqual(r.message, "服务器错误（HTTP 500），请稍后重试");
+});
+
+// 🔴 2026-10-25 教程录制实录：服务端繁忙时段剪同款提交撞 Cloudflare 524，
+// 界面只显示「[524] HTTP 524」，用户无从下手 —— 守卫这条：无信封的网关类
+// 状态码必须翻译成可行动的文案，码本身保留在 code 里供排查。
+test("normalize: 网关类状态码翻译成人话（524/503/429）", () => {
+  const r524 = api.normalize({ ok: false, status: 524, data: "error code: 524 (Cloudflare)" });
+  assert.strictEqual(r524.code, 524);
+  assert.match(r524.message, /服务器繁忙/);
+  assert.match(r524.message, /524/);
+
+  const r503 = api.normalize({ ok: false, status: 503, data: null });
+  assert.match(r503.message, /维护或繁忙/);
+
+  const r429 = api.normalize({ ok: false, status: 429, data: null });
+  assert.match(r429.message, /频繁/);
 });
 
 test("normalize: plain ok (no envelope)", () => {
@@ -404,12 +420,13 @@ test("normalize: errCode 落在内层 Data 里不算失败壳", () => {
   assert.deepStrictEqual(r.data, { errCode: 500, errMsg: "某个子项字段" });
 });
 
-// 回归面：HTTP 非 2xx 的判定面原样保留（壳里只有 errCode 时仍回 HTTP 状态文案）。
-test("normalize: HTTP 403 且壳里只有 errCode → 仍回 HTTP 403 文案", () => {
+// 回归面：HTTP 非 2xx 的判定面原样保留（壳里只有 errCode 时仍回 HTTP 状态文案；
+// 2026-10-25 起该文案经 describeHttpStatus 翻译，码仍在 message 里可排查）。
+test("normalize: HTTP 403 且壳里只有 errCode → 仍回带 403 的状态文案", () => {
   const r = api.normalize({ ok: false, status: 403, data: { errCode: 403 } });
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.code, 403);
-  assert.strictEqual(r.message, "HTTP 403");
+  assert.strictEqual(r.message, "请求被拒绝（HTTP 403）");
 });
 
 // 失败壳的判定面收紧：errCode:0 表示"没有错误"，不能判成失败。
@@ -644,6 +661,63 @@ test("选路: chunkedUpload 未命中仍是直连站", async () => {
     await api.upload("POST", "/api/v2/voice/upload", [bigFile()], {});
     assert.strictEqual(seen.upload[beforeUpload].base, DIRECT, "未命中时仍是直连站");
     assert.strictEqual(seen.call[beforeCall].base, DIRECT, "未命中时合并请求也仍是直连站");
+  });
+});
+
+// 几 MB 的普通视频必须走分片：源站吞吐 ~25KB/s（1.5MB 要 58s、4.5MB+ 直接 502/524），
+// 整包直传批量素材 = 批量面板永远提交失败（2026-10-28 实测）。
+// 什么使其变红：把 CHUNK_SIZE 抬回 10MB → 2.5MB 的文件不再分片，这条就红。
+test("上传: 2.5MB 的单文件也要走分片（整包直传在源站必撞 524）", async () => {
+  await withRouting({}, async (api, seen) => {
+    const mid = { name: "clip.mp4", buffer: new ArrayBuffer(2.5 * 1024 * 1024) };
+    await api.upload("POST", "/api/v2/batch/upload", [mid], {});
+    const up = seen.upload[0];
+    assert.strictEqual(up.path, "/api/v2/files/chunk", "2.5MB 单文件必须分片，不能整包直传");
+    const done = seen.call[0];
+    assert.strictEqual(done.path, "/api/v2/files/complete", "分片后要有合并请求");
+    assert.strictEqual(done.body.target, "/api/v2/batch/upload", "合并后转发到原业务端点");
+  });
+});
+
+// ⑦ 分片重试：源站繁忙时网关会回 524；按 index 重发同一片是幂等的。
+// 什么使其变红：去掉 worker 里的重试循环 → 第一次 524 就整单失败。
+test("分片: 单片 524 后自动重发同一片，成功后继续合并", async () => {
+  let chunkCalls = 0;
+  await withRouting({
+    respond: (base, method, path) => {
+      if (path === "/api/v2/files/chunk") {
+        chunkCalls++;
+        if (chunkCalls === 1) return { ok: false, status: 524, data: "origin timeout" };
+      }
+      return { ok: true, status: 200, data: { ok: true, data: {} } };
+    },
+  }, async (api, seen) => {
+    const file = { name: "big.mp4", buffer: new ArrayBuffer(2.5 * 1024 * 1024 + 1) };
+    const r = await api.upload("POST", "/api/v2/batch/upload", [file], {});
+    assert.strictEqual(r.ok, true, "重试成功后整体上传要成功");
+    assert.strictEqual(seen.upload.length, 4, "3 片 + 524 那片重发 1 次");
+    assert.strictEqual(seen.call.filter((c) => c.path === "/api/v2/files/complete").length, 1,
+      "重试成功后仍只合并一次");
+  });
+});
+
+// 重试有上限：持续 524 不能无限挂住。
+test("分片: 持续 524 重试有上限，最终带明确文案失败且不合并", async () => {
+  await withRouting({
+    respond: (base, method, path) => {
+      if (path === "/api/v2/files/chunk") return { ok: false, status: 524, data: "origin timeout" };
+      return { ok: true, status: 200, data: { ok: true, data: {} } };
+    },
+  }, async (api, seen) => {
+    const file = { name: "big.mp4", buffer: new ArrayBuffer(1024 * 1024 + 1) };
+    let err = null;
+    try { await api.upload("POST", "/api/v2/batch/upload", [file], {}); } catch (e) { err = e; }
+    assert.ok(err, "持续 524 必须抛出错误");
+    assert.ok(/分片 \d+ 上传失败/.test(err.message), "文案要指出分片失败，实际：" + err.message);
+    assert.ok(/524|繁忙/.test(err.message), "文案要保留可读原因，实际：" + err.message);
+    assert.strictEqual(seen.upload.length, 6, "2 片 × 最多 3 次尝试");
+    assert.strictEqual(seen.call.filter((c) => c.path === "/api/v2/files/complete").length, 0,
+      "分片失败不得发合并请求");
   });
 });
 

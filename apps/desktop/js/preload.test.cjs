@@ -57,7 +57,7 @@ test("preload upload: 网络连不上 → errCode=0 + 中性中文文案，不�
   assert.strictEqual(res.ok, false);
   assert.strictEqual(res.data.errCode, 0, "网络类失败按 errCode=0 报，实际：" + JSON.stringify(res.data));
   // 与 call 出口同一口径：只给中性中文陈述，用户看不到英文报错原文。
-  assert.strictEqual(res.data.errMsg, "网络连接失败，请检查网络或服务器状态。",
+  assert.strictEqual(res.data.errMsg, "连接中断或服务器繁忙，请稍后重试；若持续失败请检查本机网络。",
     "文案应为中性中文，实际：" + res.data.errMsg);
   for (const bad of ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "socket hang up", "connect", "error", "Error"]) {
     assert.ok(!String(res.data.errMsg).includes(bad),

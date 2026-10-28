@@ -75,7 +75,9 @@ def h04():
         time.sleep(0.4)
     def s2():
         d = H()
-        d.set_file_card("panel-edit", "智能包装 Smart-package", [A + r"\demo_video1.mp4"])
+        # demo_video1（8s 合成样片）会被上游 sami_video_decoration RPC 稳定拒绝
+        # （2026-10-28 两次实录），换用真实录屏裁出的 40s 素材；接口直测已通过。
+        d.set_file_card("panel-edit", "智能包装 Smart-package", [A + r"\包装示例.mp4"])
     def s3():
         d = H()
         d.click_btn_text("panel-edit", "开始包装")
@@ -86,17 +88,46 @@ def h04():
         # 旁白说「包装完成」而画面里没有结果 —— gen-1 的 04 就是这个成功假象。
         if st != "ok":
             raise RuntimeError(f"包装渲染{st}：{detail or '等待超时'}")
+        # 结果 URL 走云端限速链路：起播后首帧要缓冲十几秒，光等「下载成片」出现
+        # 录到的仍是转圈（2026-10-28 四录实录）。等 currentTime 真正前进再结束本场。
+        d = H()
+        d.attach()
+        d.c.ev('''(() => {
+          const v = document.querySelector("#edit-pack-result video");
+          if (v) { v.muted = true; const p = v.play(); if (p && p.catch) p.catch(function () {}); }
+          return "ok";
+        })()''')
+        d.detach()
+        t0 = time.time()
+        while time.time() - t0 < 120:
+            time.sleep(2)
+            try:
+                d.attach()
+                t = d.c.ev('(() => { const v = document.querySelector("#edit-pack-result video"); return v ? v.currentTime : -1; })()')
+                d.detach()
+            except Exception:
+                t = -1
+            if isinstance(t, (int, float)) and t > 1.0:
+                print(f"    预览起播: {t:.1f}s（等待 {time.time()-t0:.0f}s）", flush=True)
+                break
+        else:
+            print("    [警告] 预览 120s 内未起播", flush=True)
     def s4():
         d = H()
         d.attach()
-        # 结果展示与 03 同理：以「下载成片」为锚点滚动，播放器与下载按钮同框
+        # 结果展示与 03 同理：以「下载成片」为锚点滚动，播放器与下载按钮同框。
+        # 播放器不点播放会一直停在转圈（readyState=4 但未起播，2026-10-28 三录实录）——
+        # 静音起播，避免成片音轨盖住旁白。
         d.c.ev('''(() => {
           const r = document.getElementById("edit-pack-result");
           if (!r) return "no";
+          const v = r.querySelector("video");
+          if (v) { v.muted = true; const p = v.play(); if (p && p.catch) p.catch(function () {}); }
           const link = [...r.querySelectorAll("a, button")].find(x => x.textContent.includes("下载成片")) || r;
           link.scrollIntoView({block: "center"});
           return "ok";
         })()''')
+        d.detach()
         time.sleep(0.6)
     scenes = [
         dict(narr="智能包装：为视频自动加上字幕、音效、贴纸并突出重点内容，一条素视频一键成品化。选择视频后点击开始包装。", sub="智能包装：一键字幕 音效 贴纸", run=s1),

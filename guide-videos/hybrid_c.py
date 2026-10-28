@@ -159,16 +159,54 @@ def m08():
         d.set_file_card("panel-batch", "素材文件", [A + r"\demo_video1.mp4", A + r"\demo_video2.mp4"])
         time.sleep(0.5)
         d.click_btn_text("panel-batch", "提交批次")
-        # 提交结果必含「已启动 N 条」（被拒也显示，附未启动原因）；素材大时
-        # 上传可能超 6s，硬睡会录到「上传与提交中…」就翻页
-        st, detail = d.wait_result_state("panel-batch", "已启动", timeout=120, first=5, poll=5)
+        # 提交成功的形态因版本而异：旧版留在本页显示「已启动 N 条」，新版直接切到
+        # 「批次状态」并渲染「批次 <32位ID>」（2026-10-28 干跑实录：等旧文案必超时）。
+        # 被拒时留在本页显示原因（含失败/被拒字样）→ 立刻判失败。
+        t0 = time.time()
+        st, detail = "timeout", ""
+        time.sleep(8)
+        while time.time() - t0 < 150:
+            try:
+                d.attach()
+                r = d.c.ev('''(() => {
+                  const t = (document.getElementById("panel-batch") || {}).textContent || "";
+                  if (t.includes("已启动")) return "OK";
+                  if (/批次\\s*[0-9a-f]{32}/i.test(t)) return "OK";
+                  const m = t.match(/(失败|出错|错误|被拒|拒绝)[^\\n]{0,40}/);
+                  return m ? "ERR:" + m[0] : "";
+                })()''')
+                d.detach()
+                print(f"    [提交等待 {time.time()-t0:.0f}s] {r or '进行中'}", flush=True)
+                if r == "OK":
+                    st = "ok"
+                    break
+                if isinstance(r, str) and r.startswith("ERR:"):
+                    st, detail = "error", r[4:]
+                    break
+            except Exception as ex:
+                print(f"    [等待重连失败] {ex}", flush=True)
+                try:
+                    d.detach()
+                except Exception:
+                    pass
+            time.sleep(6)
         print("批次提交:", st, detail, flush=True)
         if st != "ok":
             raise RuntimeError(f"批次提交未返回：{st} {detail}")
     def s4():
         d = H()
         d.click_btn_text("panel-batch", "批次状态")
-        time.sleep(3)
+        time.sleep(2)
+        # 提交成功后状态页会自动渲染批次卡（名称/批次ID/成功数）与逐条进度，
+        # 滚到卡片顶部让「进度 + 条目状态」同框。
+        d.attach()
+        d.c.ev('''(() => {
+          const card = document.querySelector("#panel-batch .wf-card");
+          if (card) card.scrollIntoView({block: "start"});
+          return "ok";
+        })()''')
+        d.detach()
+        time.sleep(2)
     scenes = [
         dict(narr="批量面板解决一个模板跑多条视频的问题：支持批量剪同款、批量智能包装和批量营销成片，按批次类型、选模板、素材文件的顺序配置。",
              sub="批量 Batch：一个模板 × N 条素材", run=s1),

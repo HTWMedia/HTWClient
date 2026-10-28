@@ -41,7 +41,8 @@ function originOf(u) {
   } catch (e) { return ""; }
 }
 allowedOrigins.add(originOf(process.env.HTW_API_BASE || "https://htwmedia.dpdns.org"));
-if (process.env.HTW_API_DIRECT) allowedOrigins.add(originOf(process.env.HTW_API_DIRECT));
+// 默认直连源站 IP，必须与 preload.js 的 API_DIRECT 默认值一致。
+allowedOrigins.add(originOf(process.env.HTW_API_DIRECT || "http://123.57.217.155"));
 
 // streamId -> { req, ownerId }。同一 streamId 重复订阅复用既有连接，不重复发起。
 // ownerId 是订阅发起方 webContents 的 id：窗口被关掉后要能只清理属于它的那几条，

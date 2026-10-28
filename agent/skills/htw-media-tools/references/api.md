@@ -34,7 +34,7 @@ Base URL: `https://htwmedia.dpdns.org` — headers: `AuthKey: <key>`.
 ## Subtitle extraction
 | Method | Path | Fields |
 |---|---|---|
-| POST | `/api/v2/subtitle/extract` | multipart `file` (video), form `format`(txt/srt), `engine`(ocr/kimi) → `{ taskId }` |
+| POST | `/api/v2/subtitle/extract` | multipart `file` (video), form `format`(txt/srt), `engine`(ocr/kimi) → `{ taskId }`。`engine` 只用这两个值：ocr=抽帧网格拼图（服务端 DeepSeek 通道，推荐）；kimi=整段视频直传（免费档拥堵时会失败）。不要传 `deepseek`——整段视频直传被上游类型白名单硬拒（`biz_code=9 unsupported file type`），该值仅服务端保留用于错误透传 |
 | GET | `/api/v2/subtitle/status/{taskId}` | path `taskId` → `{ status, format, result, lineCount, error }` |
 
 ## Template search

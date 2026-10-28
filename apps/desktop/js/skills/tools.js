@@ -170,12 +170,13 @@
 
       const subFile = UI.fileInput({ label: "选择视频", accept: "video/*" });
       const subFormat = UI.el("select", {}, [opt("txt"), opt("srt")]);
-      // 引擎必须可选：Kimi 那条路依赖后台 Kimi 凭据（access token 只有 15 分钟，
-      // 靠 refresh token 自动续），凭据失效时整条链路会失败；OCR 走同一套模型但
-      // 是逐帧识别，可作为回退。之前写死 kimi，凭据一挂桌面端就没有任何退路。
+      // 引擎必须可选：Kimi 免费档经常被上游拥堵降级（REASON_SERVER_OVERLOADED_FOR_FREE_USER），
+      // 凭据失效时整条链路也会失败；OCR 走服务端 failover 链（DeepSeek 为主力），
+      // 服务端已改网格拼图（30 帧/一次请求），请求次数比旧版逐帧少一半，作为回退更稳。
+      // 之前写死 kimi，凭据一挂桌面端就没有任何退路。
       const subEngine = UI.el("select", {}, [
-        opt("kimi", "Kimi 整段理解（默认，更快）"),
-        opt("ocr", "OCR 逐帧识别（Kimi 不可用时的回退）"),
+        opt("kimi", "Kimi 整段理解（默认，更快；免费档拥堵时可能失败）"),
+        opt("ocr", "OCR 抽帧识别（DeepSeek 通道，更稳的回退）"),
       ]);
       const subBtn = UI.el("button", { class: "btn", text: "提取字幕" });
       const subRegion = UI.el("div");

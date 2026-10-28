@@ -13,10 +13,10 @@ const { buildCallHeaders } = require("./js/call-headers.js");
 const { downloadPackage, extractPackage, ensureNewDir } = require("./js/local-package.js");
 
 const API_BASE = process.env.HTW_API_BASE || "https://htwmedia.dpdns.org";
-// 可选的大文件直连通道：默认关闭（空串），此时所有请求都走 API_BASE。
-// 自建部署若需要让大文件分片上传绕过反向代理，用环境变量 HTW_API_DIRECT 指定
-// 直连地址即可；仓库里不内置任何源站 IP / 主机名。
-const API_DIRECT = process.env.HTW_API_DIRECT || "";
+// 大文件直连通道：默认指向源站 IP，绕过 Cloudflare 的 100MB body 上限与 100s 524 超时。
+// 自部署 / 联调可用环境变量 HTW_API_DIRECT 覆盖（填成 API_BASE 即可强制回到 Cloudflare 链路）。
+// 注意直连是明文 http：AuthKey 会走明文链路，仅用于这台自建源站；将来换 HTTPS 需给 IP 配证书。
+const API_DIRECT = process.env.HTW_API_DIRECT || "http://123.57.217.155";
 // 本地实例地址：默认关闭（空串），此时本地模式不可用。
 // 用户在「设置」里填写的地址通过 renderer 的 registerBase 登记后生效，
 // 这里的环境变量只是给自部署场景一个默认入口（与 API_DIRECT 同形）。
@@ -305,7 +305,10 @@ contextBridge.exposeInMainWorld("htw", {
         // 与 call 出口同一口径（api.js 的网络失败出口）：网络类失败只给**中性中文陈述**，
         // 不把英文原文（"socket hang up" / "ECONNRESET" 之类）透给用户。
         // 4007（本地执行不可用）的语义不动 —— 这里不冒用它的码，也不谎称本地/云端哪一侧。
-        resolve({ status: 0, ok: false, data: { errCode: 0, errMsg: "网络连接失败，请检查网络或服务器状态。" } });
+        // 🔴 2026-10-25 教程录制实录：服务端繁忙时段连接被重置，旧文案
+        // 「网络连接失败，请检查网络或服务器状态」把用户引向排查自己的网络 ——
+        // 实际多半是服务器侧拒接。新文案两种可能都说，并给出先等后查的动作顺序。
+        resolve({ status: 0, ok: false, data: { errCode: 0, errMsg: "连接中断或服务器繁忙，请稍后重试；若持续失败请检查本机网络。" } });
       });
 
       // 分块写入以便回传进度：整块 write 时内核缓冲会一次性吞掉，

@@ -79,6 +79,23 @@
     return { items: items, errors: errors };
   }
 
+  // 与服务器 Batch:MaxMaterialMb 默认值一致（2026-10-28 由 30 调到 60）。服务端仍会
+  // 兜底拒绝，这里只是避免用户白等（30MB 素材传完才收到 400，实测 845s；60MB 更久）。
+  var MAX_MATERIAL_BYTES = 60 * 1024 * 1024;
+
+  function oversizeMaterial(list, maxBytes) {
+    var files = list || [];
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      if (f && typeof f.size === "number" && f.size > maxBytes) return f.name || "文件";
+    }
+    return null;
+  }
+
+  function oversizeMessage(name) {
+    return "素材 " + name + " 超过 " + Math.round(MAX_MATERIAL_BYTES / 1024 / 1024) + "MB 上限，请压缩后再传";
+  }
+
   // 营销成片请求体。素材是共用的一份 materialId/直链（整批同一个商品的常见用法）。
   function marketVideoRequest(name, parsed, ratio, duration, materials) {
     return {
@@ -169,11 +186,11 @@
       { key: "new", text: "发起批次" },
       { key: "status", text: "批次状态" },
     ];
+    var tabBtns = {};
     tabDefs.forEach(function (t, i) {
       var b = UI.el("button", { class: "btn wf-tab" + (i === 0 ? " active" : ""), text: t.text });
+      tabBtns[t.key] = b;
       b.addEventListener("click", function () {
-        tabs.querySelectorAll(".wf-tab").forEach(function (x) { x.classList.remove("active"); });
-        b.classList.add("active");
         renderTab(t.key);
       });
       tabs.appendChild(b);
@@ -185,6 +202,14 @@
     panel.appendChild(bodyCard);
 
     function renderTab(key) {
+      // 🔴 内容与高亮必须在同一个 renderTab 里切：提交成功是**程序化**跳到状态页的，
+      // 旧实现把高亮只写在页签的点击监听里，代码直接调 renderTab("status") 时
+      // 页签仍停在"发起批次"高亮上 —— 用户只觉得提交按钮凭空消失，却不知道
+      // 下方内容已经是批次状态页。
+      tabDefs.forEach(function (t) {
+        if (t.key === key) tabBtns[t.key].classList.add("active");
+        else tabBtns[t.key].classList.remove("active");
+      });
       UI.clear(body);
       if (key === "new") renderNew(body);
       if (key === "status") renderStatus(body);
@@ -323,9 +348,16 @@
         msg.textContent = b ? "上传与提交中，素材越大等待越久…" : "";
       }
 
-      function uploadOne(fileObj) {
+      // 分片上传单片 40s 上下，几 MB 的素材全程要好几分钟 —— 不给进度反馈，
+      // 用户只会觉得「卡死了」。p.loaded/p.total 由 api 层按已完成的分片数推进。
+      function uploadOne(fileObj, label) {
         return window.HTWApi.upload("POST", "/api/v2/batch/upload",
-          [{ name: fileObj.name, buffer: fileObj.buffer }], {}, null, "file");
+          [{ name: fileObj.name, buffer: fileObj.buffer }], {},
+          function (p) {
+            if (label && p && p.total) {
+              msg.textContent = label + " " + Math.round((p.loaded / p.total) * 100) + "%";
+            }
+          }, "file");
       }
 
       async function readInputs(input) {
@@ -351,13 +383,16 @@
         }
         if (!parsed.items.length) { msg.textContent = "请先填写商品条目（一行一个：商品名|卖点）"; return; }
         if (parsed.items.length > 50) { msg.textContent = "单批最多 50 条"; return; }
+        var mktEl = mktMat && mktMat.input ? mktMat.input : mktMat;
+        var tooBig = oversizeMaterial(mktEl && mktEl.files, MAX_MATERIAL_BYTES);
+        if (tooBig) { msg.textContent = oversizeMessage(tooBig); return; }
         setBusy(true);
         try {
           var materialIds = [];
           var matFiles = await readInputs(mktMat);
           for (var i = 0; i < matFiles.length; i++) {
             msg.textContent = "上传素材 " + (i + 1) + "/" + matFiles.length + "：" + matFiles[i].name;
-            var up = await uploadOne(matFiles[i]);
+            var up = await uploadOne(matFiles[i], "上传素材 " + (i + 1) + "/" + matFiles.length + "：" + matFiles[i].name);
             if (!up || !up.ok) throw new Error("素材上传失败：" + explain(up) + "（" + matFiles[i].name + "）");
             var mid = up.data && up.data.materialId;
             if (!mid) throw new Error("素材上传未返回 materialId：" + matFiles[i].name);
@@ -371,6 +406,9 @@
       }
 
       async function submitVideos() {
+        var vidEl = vidMat && vidMat.input ? vidMat.input : vidMat;
+        var tooBig = oversizeMaterial(vidEl && vidEl.files, MAX_MATERIAL_BYTES);
+        if (tooBig) { msg.textContent = oversizeMessage(tooBig); return; }
         var files = await readInputs(vidMat);
         if (!files.length) { msg.textContent = "请先选择视频文件"; return; }
         if (files.length > 50) { msg.textContent = "单批最多 50 条"; return; }
@@ -382,7 +420,7 @@
           var entries = [];
           for (var i = 0; i < files.length; i++) {
             msg.textContent = "上传素材 " + (i + 1) + "/" + files.length + "：" + files[i].name;
-            var up = await uploadOne(files[i]);
+            var up = await uploadOne(files[i], "上传素材 " + (i + 1) + "/" + files.length + "：" + files[i].name);
             if (!up || !up.ok) throw new Error("素材上传失败：" + explain(up) + "（" + files[i].name + "）");
             var mid = up.data && up.data.materialId;
             if (!mid) throw new Error("素材上传未返回 materialId：" + files[i].name);
@@ -399,17 +437,29 @@
       //（档位不符时是整批被拒，用户需要看到升级提示而不是"什么都没发生"）。
       function onSubmitResult(r) {
         setBusy(false);
-        if (!r || !r.ok) { msg.textContent = ""; UI.showError(msg.parentNode, explain(r)); return; }
+        // 🔴 错误/通知只能写进 msg 自己；msg 与「提交批次」按钮同属一个 wf-section，
+        // 按钮更在 msg.parentNode 里。把 UI.showError / UI.clear 打到
+        // msg.parentNode 上等于把整节连按钮一起清掉 —— 症状就是"点完提交，
+        // 按钮凭空消失"，还无法在同一页再试一次。
+        if (!r || !r.ok) { msg.textContent = ""; UI.showError(msg, explain(r)); return; }
+        if (!r.data) {
+          msg.textContent = "服务未返回批次信息，无法确认启动结果，请稍后重试，或到「批次状态」页用批次 ID 查询。";
+          return;
+        }
         var sum = submitSummary(r.data);
         if (sum.accepted > 0) {
           lastBatchId = r.data.batchId || "";
           // 判空再调：容器缺席时静默跳过，登记本身不该有能力打断面板自己的流程。
           if (window.HTWTasks) window.HTWTasks.track({ domain: "batch", taskId: lastBatchId, panel: "batch", title: "批量任务" });
-          renderTab("status");
+          if (lastBatchId) { renderTab("status"); return; }
+          // 批次已经起了但响应里没带批次 ID：切过去只会看到空的批次状态页（却
+          // 还挂在"发起批次"高亮上）。留在本页说明情况，拿到 ID 再手动去查。
+          UI.clear(msg);
+          msg.appendChild(UI.el("div", { class: "wf-notice", text: sum.lines.join("\n") + "\n响应里没有批次 ID，无法自动盯进度；请稍后到「批次状态」页用批次 ID 查询。" }));
           return;
         }
-        UI.clear(msg.parentNode);
-        msg.parentNode.appendChild(UI.el("div", { class: "wf-notice", text: sum.lines.join("\n") }));
+        UI.clear(msg);
+        msg.appendChild(UI.el("div", { class: "wf-notice", text: sum.lines.join("\n") }));
       }
 
       wrap.appendChild(UI.el("div", { class: "wf-section" }, [
@@ -451,15 +501,46 @@
       else region.appendChild(UI.el("div", { class: "wf-empty", text: "提交批次后会自动在这里显示进度；也可以凭批次 ID 手动查询。" }));
     }
 
-    function loadStatus(region, batchId) {
+    // 状态单次查询失败后的重试节奏：2s → 4s → 8s，共 3 轮；全失败才停在错误框。
+    // 批次刚创建的那几秒，服务端可能还没能把它查出来；首轮一失败就把页面钉死
+    // 成错误框，用户会以为提交没生效。轮次有上限，别让坏批次把重试搭成永久循环。
+    var STATUS_RETRY_MS = [2000, 4000, 8000];
+
+    // 失败兜底：还有重试轮次就在原状态区给出提示并推迟重查；没有就老实停在错误框。
+    // stale() 由调用方闭包给出（epoch 或状态区已离开页面上时返回 true），避免手动
+    // 「查询」/取消后的重查与挂起的重试并发互殴。
+    function statusFail(region, batchId, attempt, stale, message) {
+      if (attempt < STATUS_RETRY_MS.length) {
+        UI.clear(region);
+        region.appendChild(UI.el("div", {
+          class: "wf-hint",
+          text: "批次状态获取失败：" + message + "，即将自动重试（第 " + (attempt + 1) + "/" + STATUS_RETRY_MS.length + " 次）…",
+        }));
+        setTimeout(function () {
+          if (stale()) return;
+          loadStatus(region, batchId, attempt + 1);
+        }, STATUS_RETRY_MS[attempt]);
+        return;
+      }
+      UI.showError(region, message);
+    }
+
+    function loadStatus(region, batchId, attempt) {
+      attempt = attempt || 0;
       if (!batchId) { UI.showError(region, "请先填写批次 ID"); return; }
+      // 新一轮查询开始：旧的挂起重试、未返回的在途响应都作废（epoch 递增）。
+      region._epoch = ((region._epoch || 0) + 1) >>> 0;
+      var epoch = region._epoch;
+      var stale = function () { return epoch !== region._epoch || !region.isConnected; };
       UI.clear(region);
       region.appendChild(UI.el("div", { class: "wf-hint", text: "加载中…" }));
       call("GET", "/api/v2/batch/status?batchId=" + encodeURIComponent(batchId)).then(function (r) {
-        if (!r || !r.ok) { UI.showError(region, explain(r)); return; }
+        if (stale()) return;
+        if (!r || !r.ok) { statusFail(region, batchId, attempt, stale, explain(r)); return; }
         renderBatch(region, r.data);
       }).catch(function (e) {
-        UI.showError(region, errText(e));
+        if (stale()) return;
+        statusFail(region, batchId, attempt, stale, errText(e));
       });
     }
 
@@ -536,6 +617,10 @@
     }
 
     function track(root, id) {
+      // 🔴 同一个状态区同一时间只能有一个轮询计时器：取消/重提之后 loadStatus →
+      // renderBatch 会再度进到这里；旧 interval 挂着不撤的话，每 6 秒会发出
+      // 多份查询，返回还互相覆盖界面。
+      if (root._trackTimer) clearInterval(root._trackTimer);
       var started = Date.now();
       var timer = setInterval(function () {
         if (!root.isConnected) { clearInterval(timer); return; }
@@ -551,6 +636,7 @@
           updateSummary(root, r.data);
         }).catch(function () { /* 单次失败不终止轮询 */ });
       }, POLL_MS);
+      root._trackTimer = timer;
     }
 
     // 只刷新汇总行与条目进度，不动按钮 —— 整页重绘每 6 秒一次太晃眼
@@ -581,6 +667,7 @@
       parseItemLines: parseItemLines, marketVideoRequest: marketVideoRequest,
       videoRequest: videoRequest, isFinished: isFinished, summaryText: summaryText,
       submitSummary: submitSummary, explain: explain, fmtTime: fmtTime,
+      oversizeMaterial: oversizeMaterial, MAX_MATERIAL_BYTES: MAX_MATERIAL_BYTES,
       POLL_MS: POLL_MS, POLL_LIMIT_MS: POLL_LIMIT_MS, RATIOS: RATIOS, DURATIONS: DURATIONS,
     },
   };
