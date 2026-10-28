@@ -105,12 +105,66 @@ def m08():
     def s2():
         d = H()
         d.scroll_top()
+        # 页签 DOM 状态跨录制残留（上一轮 s4 点过「批次状态」）：先回到「发起批次」，
+        # 否则状态页里没有 kind 按钮和素材文件分区（nokind/nocard 两连败实录）。
+        r = d.c.ev('''(() => {
+          const t = [...document.querySelectorAll("#panel-batch .wf-tab")]
+            .find(x => x.textContent.includes("发起批次"));
+          if (!t) return "notab";
+          if (!t.className.includes("active")) { t.click(); return "switched"; }
+          return "ok";
+        })()''')
+        print("    页签:", r, flush=True)
+        time.sleep(0.8)
+        # 默认 kind 是营销成片：只有剪同款/智能包装 kind 才渲染「选模板」「素材文件」
+        # 分区（2026-10-28 录 08 实录：没选类型就设文件 → nocard，两连败）。
+        r = d.c.ev('''(() => {
+          const k = [...document.querySelectorAll("#panel-batch .wf-kind")]
+            .find(x => x.textContent.includes("剪同款"));
+          if (!k) return "nokind";
+          k.click(); return "ok";
+        })()''')
+        if r != "ok":
+            raise RuntimeError("批次类型未找到剪同款: " + str(r))
+        time.sleep(0.6)
+        # 真实输入模板关键词 → 搜模板（只读接口）→ 选第一个可用模板（整批共用）
+        r = d.read('''(() => {
+          const p = document.getElementById("panel-batch");
+          const i = p.querySelector("input[placeholder=\\'模板关键词\\']");
+          if (!i) return "noinput";
+          i.id = "__hbtpl"; return "ok";
+        })()''')
+        if r != "ok":
+            raise RuntimeError("模板关键词输入框未找到: " + str(r))
+        phys.type_field(d, "panel-batch", "__hbtpl", "旅行")
+        time.sleep(0.3)
+        d.click_btn_text("panel-batch", "搜模板")
+        time.sleep(4)
+        d.attach()
+        r = d.c.ev('''(() => {
+          const cards = [...document.querySelectorAll("#panel-batch .wf-topic")]
+            .filter(c => !c.textContent.includes("不可用"));
+          if (!cards.length) return "notpl";
+          cards[0].click();
+          cards[0].scrollIntoView({block: "center"});
+          return "ok";
+        })()''')
+        time.sleep(0.6)
+        sel = d.c.ev('document.querySelector("#panel-batch .wf-topic.active") ? "selected" : "none"')
+        print("    模板:", r, sel, flush=True)
+        if r != "ok" or sel != "selected":
+            raise RuntimeError(f"模板未选中: {r} / {sel}")
     def s3():
         d = H()
         d.set_file_card("panel-batch", "素材文件", [A + r"\demo_video1.mp4", A + r"\demo_video2.mp4"])
         time.sleep(0.5)
         d.click_btn_text("panel-batch", "提交批次")
-        time.sleep(6)
+        # 提交结果必含「已启动 N 条」（被拒也显示，附未启动原因）；素材大时
+        # 上传可能超 6s，硬睡会录到「上传与提交中…」就翻页
+        st, detail = d.wait_result_state("panel-batch", "已启动", timeout=120, first=5, poll=5)
+        print("批次提交:", st, detail, flush=True)
+        if st != "ok":
+            raise RuntimeError(f"批次提交未返回：{st} {detail}")
     def s4():
         d = H()
         d.click_btn_text("panel-batch", "批次状态")
@@ -134,7 +188,8 @@ def m09():
         d = H()
         r = d.read('''(() => {
           const p = document.getElementById("panel-workflow");
-          const i = p.querySelector("input[type=text]");
+          // 主题框无显式 type 属性，input[type=text] 按属性匹配永远落空（09 首录实录）
+          const i = p.querySelector("input[placeholder='主题 / 话题']");
           if (!i) return "noinput";
           i.id = "__hwf"; return "ok";
         })()''')

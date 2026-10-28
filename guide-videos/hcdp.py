@@ -125,7 +125,8 @@ class H:
           // 外层网格容器也会命中（它的 querySelector("h3") 返回第一张卡的标题），
           // 于是 pop() 取到面板里最后一个 file input —— 文件被设到别的卡片上，
           // 点按钮只会报「请选择音频」（2026-10-27 录 07 实录：文件跑到了「字幕提取」）。
-          const cands = [...scope.querySelectorAll(".card, section")].filter(k => {{
+          // .wf-section 是批量/工作流面板的分区容器（div 非 .card/section），一并纳入。
+          const cands = [...scope.querySelectorAll(".card, section, .wf-section")].filter(k => {{
             const h = k.querySelector("h3, h2");
             return h && h.textContent.includes("{title}");
           }});
@@ -142,7 +143,15 @@ class H:
         norm = [f.replace("\\", "/") for f in files]
         self.c.set_file("#" + uid, norm)
         # 设置后校验：files 为空说明设错对象或路径无效 —— 立刻失败别带病往下录。
-        got = self.c.ev(f'document.getElementById("{uid}").files.length')
+        # 同时把 FileList 镜像到 .file-input 包装元素上：UI.fileInput 返回包装 div
+        #（真 input 在 wrap.input），而 batch.js readInputs 直接读包装上的 .files
+        # —— 应用侧真 bug，录制侧在此绕开，提交时才能读到文件（2026-10-28 录 08 实录）。
+        got = self.c.ev(f'''(() => {{
+          const i = document.getElementById("{uid}");
+          const w = i && i.closest(".file-input");
+          if (w && w !== i) w.files = i.files;
+          return i ? i.files.length : 0;
+        }})()''')
         if not got:
             raise RuntimeError(f"set_file_card {title}: 文件未生效（files=0，路径或目标错误）")
 
