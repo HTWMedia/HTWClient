@@ -110,9 +110,22 @@ def _tts_once(text, key):
     raise RuntimeError("TTS 轮询超时: " + task)
 
 
+def _tts_dub_once(text, key):
+    """备用通道：剪映 capflow aroll TTS（union_pc 生成 aroll 的同一条云通道，
+    服务端 /api/v2/edit/tts-dub 包装 JianyingDubService）。
+    与 /api/v2/voice/tts 不同配额——主通道限流时由 tts() 回落到此。"""
+    payload = json.dumps({"text": text, "speaker": TTS_SPEAKER}).encode("utf-8")
+    headers = {"AuthKey": key, "Content-Type": "application/json; charset=utf-8",
+               "User-Agent": UA}
+    req = urllib.request.Request(TTS_API + "/api/v2/edit/tts-dub", data=payload,
+                                 headers=headers, method="POST")
+    return urllib.request.urlopen(req, timeout=300).read()
+
+
 def tts(text, out_mp3, spd=4):
     """项目语音合成（发音人 TTS_SPEAKER），返回音频时长(秒)。
-    spd 保留兼容旧签名（项目接口无语速参数，忽略）。"""
+    spd 保留兼容旧签名（项目接口无语速参数，忽略）。
+    主通道（/api/v2/voice/tts）重试耗尽后回落 capflow aroll 备用通道。"""
     key = _authkey()
     parts = _split_text(text)
     tmpdir = out_mp3 + "_parts"
@@ -121,16 +134,30 @@ def tts(text, out_mp3, spd=4):
     try:
         for i, part in enumerate(parts):
             f = os.path.join(tmpdir, f"p{i:02d}.mp3")
-            for attempt in range(3):
-                try:
-                    data = _tts_once(part, key)
-                    break
-                except Exception:
-                    if attempt == 2:
-                        raise
-                    backoff = 15 * (attempt + 1)  # 15s/30s：给限流窗口留恢复时间
-                    print(f"    [TTS 段 {i+1}/{len(parts)} 重试 {attempt+1}/2（{backoff}s 后）]", flush=True)
-                    time.sleep(backoff)
+            try:
+                for attempt in range(3):
+                    try:
+                        data = _tts_once(part, key)
+                        break
+                    except Exception:
+                        if attempt == 2:
+                            raise
+                        backoff = 15 * (attempt + 1)  # 15s/30s：给限流窗口留恢复时间
+                        print(f"    [TTS 段 {i+1}/{len(parts)} 重试 {attempt+1}/2（{backoff}s 后）]", flush=True)
+                        time.sleep(backoff)
+            except Exception as main_ex:
+                # 主通道 3 连败 → capflow aroll 备用通道（音色同为 TTS_SPEAKER）
+                data = None
+                for attempt in range(2):
+                    try:
+                        print(f"    [TTS 段 {i+1}/{len(parts)} 走备用 capflow 通道（第 {attempt+1} 次）]", flush=True)
+                        data = _tts_dub_once(part, key)
+                        break
+                    except Exception as dub_ex:
+                        print(f"    [备用通道失败] {str(dub_ex)[:120]}", flush=True)
+                        time.sleep(10)
+                if data is None:
+                    raise main_ex
             with open(f, "wb") as fh:
                 fh.write(data)
             if audio_len(f) <= 0:
