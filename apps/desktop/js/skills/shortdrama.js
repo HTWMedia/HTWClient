@@ -368,12 +368,16 @@ Skills.shortdrama = {
               var url = d.cloudUrl || d.downloadUrl;
               if (!url) { setErr("未获取到下载链接，请稍后重试"); recomposeBtn.disabled = false; return; }
               if (url.charAt(0) === "/") url = api.base + url;
+              // 下载链接改走源站直连（Cloudflare 忽略 Range，大文件会被截断）；
+              // 播放保留原地址，第三方 CDN 不受影响。
+              var dlUrl = (window.HTWApi && typeof window.HTWApi.preferDirectUrl === "function")
+                ? window.HTWApi.preferDirectUrl(url) : url;
               var v = UI.el("video", { controls: true, style: "width:100%;max-width:480px;border-radius:8px;background:#000" });
               v.src = url;
               resultCard.innerHTML = "";
               resultCard.appendChild(UI.el("div", { class: "result-area-text", text: "成片合成完成" }));
               resultCard.appendChild(v);
-              resultCard.appendChild(UI.el("a", { class: "btn primary", href: url, download: "short_drama.mp4", text: "下载视频" }));
+              resultCard.appendChild(UI.el("a", { class: "btn primary", href: dlUrl, download: "short_drama.mp4", text: "下载视频" }));
               resultCard.style.display = "block";
               progressCard.style.display = "none";
               setErr("");

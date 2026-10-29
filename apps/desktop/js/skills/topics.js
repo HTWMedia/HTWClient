@@ -5,14 +5,19 @@
    * 选题雷达
    * 数据来自服务端 /api/v2/topics/*（契约见后端 docs/prd-topic-selection.md §5）。
    * 响应字段统一经 HTWApi.normalize 转成 camelCase 后再读取（后端 POCO 是 PascalCase）。
-   * 对应接口：
-   *   GET    /api/v2/topics/daily
-   *   GET    /api/v2/topics/radar/accounts
-   *   POST   /api/v2/topics/radar/accounts
-   *   DELETE /api/v2/topics/radar/accounts/{id}
-   *   POST   /api/v2/topics/radar/sample
-   *   GET    /api/v2/topics/trends
-   *   POST   /api/v2/topics/feedback
+   * 对应接口（生产网关只放行 GET/POST，写操作一律 POST 到动词路径）：
+   *   GET  /api/v2/topics/daily
+   *   GET  /api/v2/topics/radar/accounts
+   *   POST /api/v2/topics/radar/accounts
+   *   POST /api/v2/topics/radar/accounts/{id}/delete
+   *   POST /api/v2/topics/radar/sample
+   *   POST /api/v2/topics/radar/alerts/{id}/dismiss
+   *   GET  /api/v2/topics/trends
+   *   GET  /api/v2/topics/profile
+   *   POST /api/v2/topics/profile/save
+   *   POST /api/v2/topics/feedback
+   *   POST /api/v2/topics/outcome/adopt|publish|metrics
+   *   GET  /api/v2/topics/outcome/stats
    */
 
   var STAGE = {
@@ -70,22 +75,72 @@
     return str.slice(0, 16);
   }
 
-  function copyBtn(label, text, onCopied) {
-    var b = UI.el("button", { class: "btn", text: label });
-    b.addEventListener("click", function () {
-      var done = function (ok) {
-        var old = b.textContent;
-        b.textContent = ok ? "✓ 已复制" : "复制失败";
-        setTimeout(function () { b.textContent = old; }, 1500);
-        if (onCopied) { try { onCopied(ok); } catch (e) { } }
-      };
-      try {
-        var p = navigator.clipboard.writeText(String(text || ""));
-        if (p && p.then) p.then(function () { done(true); }, function () { done(false); });
-        else done(true);
-      } catch (e) { done(false); }
+  function fmtDelta(v) {
+    var n = Number(v);
+    if (!isFinite(n)) return "";
+    return (n >= 0 ? "+" : "") + (n * 100).toFixed(0) + "%";
+  }
+
+  function copyText(text) {
+    try {
+      var p = navigator.clipboard.writeText(String(text || ""));
+      if (p && p.catch) p.catch(function () { });
+    } catch (e) { }
+  }
+
+  function openExternal(url) {
+    var href = String(url || "");
+    if (!/^https?:\/\//i.test(href)) return;
+    if (window.htw && typeof window.htw.openExternal === "function") window.htw.openExternal(href);
+    else window.open(href, "_blank");
+  }
+
+  // 来源链接必须走系统浏览器：Electron 窗口里直接导航会把整个工作台顶掉。
+  function sourceLink(label, url) {
+    var href = String(url || "");
+    if (!/^https?:\/\//i.test(href)) return null;
+    return UI.el("a", {
+      class: "tp-src",
+      href: href,
+      text: label,
+      onclick: function (e) { e.preventDefault(); openExternal(href); },
     });
+  }
+
+  function actionBtn(label, onClick) {
+    var b = UI.el("button", { class: "btn", text: label });
+    b.addEventListener("click", onClick);
     return b;
+  }
+
+  // 采纳 + 进入创作。告警与趋势也带稳定 topicId（后端专为闭环下发），
+  // 所以「以此创作」同样先采纳，发布/回填才能落回同一条选题。
+  function createFromTopic(opts) {
+    opts = opts || {};
+    var title = String(opts.title || "");
+    if (opts.topicId) {
+      call("POST", "/api/v2/topics/outcome/adopt", {
+        TopicId: opts.topicId,
+        Title: title,
+        EvidenceType: opts.evidenceType || "",
+        Source: opts.source || "",
+        Score: Number(opts.score) || 0,
+        NicheFit: opts.nicheFit == null ? null : Number(opts.nicheFit),
+        Signals: opts.signals || null,
+      }).then(function (r) {
+        if (r && r.ok === false && window.console) console.warn("adopt 失败", r.message || r);
+      }).catch(function (e) {
+        if (window.console) console.warn("adopt 失败", e);
+      });
+    }
+    var create = window.Skills && window.Skills.create;
+    var prefilled = false;
+    if (create && typeof create.setTopic === "function") {
+      try { create.setTopic(title); prefilled = true; } catch (e) { prefilled = false; }
+    }
+    // 创建面板缺席时退回复制标题，至少不让用户空手而归。
+    if (!prefilled) copyText(title);
+    if (window.App && typeof window.App.showPanel === "function") window.App.showPanel("create");
   }
 
   Skills.topics = {
@@ -157,12 +212,25 @@
 
       function topicCard(c) {
         var ev = c.evidence || {};
-        var evText = "";
         var type = ev.type || "";
-        if (type === "peer") evText = "对标 @" + (ev.refTitle || "") + " · " + (ev.metricLabel || "") + " " + (ev.metricValue || "");
-        else if (type === "hot") evText = (ev.refTitle || "热榜话题") + " · " + (ev.metricValue || "");
-        else if (type === "gap") evText = (ev.refTitle || "垂类内暂无同题材");
-        else evText = ev.refTitle || "暂无证据说明";
+        // 服务端各段文本自己可能带前导「· 」（MetricValue 在无趋势时就是 "· 数据积累中"），
+        // 直接拼会出现「· · 数据积累中」；统一清掉首尾分隔符再用「 · 」连接。
+        var joinParts = function (parts) {
+          return parts
+            .map(function (s) { return String(s == null ? "" : s).replace(/^[\s·]+|[\s·]+$/g, ""); })
+            .filter(Boolean)
+            .join(" · ");
+        };
+        var evText = "";
+        if (type === "peer") {
+          evText = joinParts([ev.refTitle ? "对标 @" + ev.refTitle : "", ev.metricLabel, ev.metricValue]);
+        } else if (type === "hot") {
+          evText = joinParts([ev.refTitle || "热榜话题", ev.metricValue]);
+        } else if (type === "gap") {
+          evText = joinParts([ev.refTitle]) || "垂类内暂无同题材";
+        } else {
+          evText = joinParts([ev.refTitle]) || "暂无证据说明";
+        }
 
         var children = [
           UI.el("div", { class: "tp-card-head" }, [
@@ -172,7 +240,11 @@
           UI.el("div", { class: "tp-title", text: c.title || "" }),
         ];
         if (c.hook) children.push(UI.el("div", { class: "tp-hook", text: "钩子：" + c.hook }));
-        children.push(UI.el("div", { class: "tp-evidence", text: "📌 " + evText }));
+        var frame = UI.el("div", { class: "tp-evidence" }, ["📌 " + evText]);
+        var src = sourceLink("查看来源", ev.refUrl);
+        if (src) frame.appendChild(UI.el("span", { text: " · " }));
+        if (src) frame.appendChild(src);
+        children.push(frame);
         if (c.niche_fit != null && c.niche_fit > 0) {
           children.push(UI.el("div", {
             class: "tp-niche",
@@ -184,34 +256,41 @@
         }
 
         var actions = UI.el("div", { class: "tp-actions" });
-        // 「去创作」= 采纳（闭环第一环）+ 复制标题。以前只复制标题，
-        // 服务端无从区分"推荐了没人做"和"做了没效果"，权重也就没法按真实效果调。
-        actions.appendChild(copyBtn("🚀 去创作", c.title || "", function () {
-          if (!c.id) return;
-          call("POST", "/api/v2/topics/outcome/adopt", {
-            TopicId: c.id,
-            Title: c.title || "",
-            EvidenceType: (c.evidence && c.evidence.type) || "",
-            Source: "",
-            Score: Number(c.score) || 0,
-            NicheFit: c.niche_fit == null ? null : Number(c.niche_fit),
-            Signals: c.signals || null,
-          }).then(function () {
-            // 采纳即入库，稍后可在「选题效果」里标记发布与回填。
-          }).catch(function (e) {
-            // 采纳失败不该挡住用户去创作，只记日志
-            if (window.console) console.warn("adopt 失败", e);
+        var fbErr = UI.el("div", { class: "tp-hint tp-error" });
+        // 「去创作」= 采纳（闭环第一环）+ 标题写入创作面板主题框。
+        // 只复制标题的话，服务端无从区分"推荐了没人做"和"做了没效果"。
+        actions.appendChild(actionBtn("🚀 去创作", function () {
+          createFromTopic({
+            topicId: c.id,
+            title: c.title || "",
+            evidenceType: type,
+            source: ev.source || "",
+            score: c.score,
+            nicheFit: c.niche_fit,
+            signals: c.signals,
           });
         }));
         var skip = UI.el("button", { class: "btn btn-ghost", text: "不感兴趣" });
         skip.addEventListener("click", function () {
           skip.disabled = true;
+          fbErr.textContent = "";
           call("POST", "/api/v2/topics/feedback", { TopicTitle: c.title || "", Reason: "不感兴趣" })
-            .then(function () { skip.textContent = "已记录"; })
-            .catch(function () { skip.disabled = false; skip.textContent = "不感兴趣"; });
+            .then(function (r) {
+              if (!r || !r.ok) {
+                skip.disabled = false;
+                fbErr.textContent = (r && r.message) || "记录失败";
+                return;
+              }
+              skip.textContent = "已记录";
+            })
+            .catch(function (e) {
+              skip.disabled = false;
+              fbErr.textContent = errText(e);
+            });
         });
         actions.appendChild(skip);
         children.push(actions);
+        children.push(fbErr);
 
         return UI.el("div", { class: "tp-card" }, children);
       }
@@ -232,8 +311,9 @@
 
         var sel = UI.el("select", { class: "input" }, [
           UI.el("option", { value: "bilibili", text: "B站" }),
-          UI.el("option", { value: "xiaohongshu", text: "小红书" }),
           UI.el("option", { value: "douyin", text: "抖音" }),
+          UI.el("option", { value: "xiaohongshu", text: "小红书" }),
+          UI.el("option", { value: "toutiao", text: "今日头条" }),
         ]);
         var input = UI.el("input", { class: "input", placeholder: "对标账号主页 URL" });
         input.style.flex = "1";
@@ -253,25 +333,78 @@
           (accounts || []).forEach(function (a) {
             var h = HEALTH[a.health] || null;
             var meta = "基线 " + fmtN(a.baseline_plays) + " 播放 · 已采样 " + (a.samples || 0) + " 次 · 最近 " + fmtTime(a.last);
-            var right = UI.el("div", { class: "tp-acct-right" }, [
-              UI.el("button", { class: "btn btn-ghost", text: "移除" }),
-            ]);
-            right.querySelector(".btn-ghost").addEventListener("click", function () {
-              removeAccount(a.id, right.querySelector(".btn-ghost"));
+            if (a.recent_works) meta += " · 近期作品 " + a.recent_works + " 条";
+            var metaLine = UI.el("div", { class: "tp-acct-meta" }, [meta]);
+            var acctLink = sourceLink("打开主页", a.url);
+            if (acctLink) metaLine.appendChild(UI.el("span", { text: " · " }));
+            if (acctLink) metaLine.appendChild(acctLink);
+
+            // 移除是不可逆的，第一下只进入确认态；3 秒内不确认就复位。
+            var removeBtn = UI.el("button", { class: "btn btn-ghost", text: "移除" });
+            var armed = false;
+            var timer = null;
+            removeBtn.addEventListener("click", function () {
+              if (!armed) {
+                armed = true;
+                removeBtn.textContent = "确认移除";
+                timer = setTimeout(function () {
+                  armed = false;
+                  if (removeBtn.textContent === "确认移除") removeBtn.textContent = "移除";
+                }, 3000);
+                return;
+              }
+              if (timer) clearTimeout(timer);
+              removeAccount(a.id, removeBtn);
             });
+
+            var plat = a.platform ? "（" + UI.platformName(a.platform) + "）" : "";
             var row = UI.el("div", { class: "tp-acct" }, [
               UI.el("div", {}, [
-                UI.el("div", { class: "tp-acct-name", text: "🪪 " + (a.name || "未命名") + "（" + (a.platform || "") + "）" }),
-                UI.el("div", { class: "tp-acct-meta", text: meta }),
+                UI.el("div", { class: "tp-acct-name", text: "🪪 " + (a.name || "未命名") + plat }),
+                metaLine,
                 h ? UI.el("div", { class: "tp-health " + h.cls, text: h.text, title: h.tip || "" }) : null,
               ]),
-              right,
+              UI.el("div", { class: "tp-acct-right" }, [removeBtn]),
             ]);
             list.appendChild(row);
           });
 
           UI.clear(alertBox);
           (alerts || []).forEach(function (al) {
+            var err = UI.el("div", { class: "tp-hint tp-error" });
+            var actions = UI.el("div", { class: "tp-actions" });
+            if (al.title) {
+              actions.appendChild(actionBtn("以此创作", function () {
+                createFromTopic({
+                  topicId: al.topicId,
+                  title: al.title,
+                  evidenceType: "peer",
+                });
+              }));
+            }
+            var src = sourceLink("查看原帖", al.url);
+            if (src) actions.appendChild(src);
+            var ig = UI.el("button", { class: "btn btn-ghost", text: "忽略" });
+            ig.addEventListener("click", function () {
+              ig.disabled = true;
+              err.textContent = "";
+              call("POST", "/api/v2/topics/radar/alerts/" + al.id + "/dismiss", {})
+                .then(function (r) {
+                  if (!r || !r.ok) {
+                    ig.disabled = false;
+                    err.textContent = (r && r.message) || "忽略失败";
+                    return;
+                  }
+                  ig.textContent = "已忽略";
+                  refresh();
+                })
+                .catch(function (e) {
+                  ig.disabled = false;
+                  err.textContent = errText(e);
+                });
+            });
+            actions.appendChild(ig);
+
             alertBox.appendChild(
               UI.el("div", { class: "tp-alert" }, [
                 UI.el("div", { class: "tp-alert-head" }, [
@@ -280,19 +413,8 @@
                 ]),
                 UI.el("div", { class: "tp-alert-title", text: al.title || "" }),
                 UI.el("div", { class: "tp-alert-meta", text: al.revisit_note || al.detail || "" }),
-                (function () {
-                  var row = UI.el("div", { class: "tp-actions" });
-                  if (al.title) row.appendChild(copyBtn("以此创作", al.title));
-                  var ig = UI.el("button", { class: "btn btn-ghost", text: "忽略" });
-                  ig.addEventListener("click", function () {
-                    ig.disabled = true;
-                    call("POST", "/api/v2/topics/radar/alerts/" + al.id + "/dismiss", {})
-                      .then(function () { ig.textContent = "已忽略"; refresh(); })
-                      .catch(function (e) { ig.disabled = false; ig.textContent = "忽略"; UI.showError(alertBox, errText(e)); });
-                  });
-                  row.appendChild(ig);
-                  return row;
-                })(),
+                actions,
+                err,
               ])
             );
           });
@@ -307,13 +429,27 @@
         function removeAccount(id, btn) {
           if (id == null) return;
           btn.disabled = true;
-          call("DELETE", "/api/v2/topics/radar/accounts/" + id).then(function () {
+          btn.textContent = "移除中…";
+          addMsg.textContent = "";
+          // 生产环境只放行 GET/POST；DELETE 会在路由之前被方法白名单挡成 405。
+          call("POST", "/api/v2/topics/radar/accounts/" + id + "/delete").then(function (r) {
+            if (!r || !r.ok) {
+              btn.disabled = false;
+              btn.textContent = "移除";
+              addMsg.textContent = (r && r.message) || "移除失败";
+              return;
+            }
             refresh();
           }).catch(function (e) {
             btn.disabled = false;
-            UI.showError(listCard.querySelector("#radar-list"), errText(e));
+            btn.textContent = "移除";
+            addMsg.textContent = errText(e);
           });
         }
+
+        input.addEventListener("keydown", function (e) {
+          if (e.key === "Enter") { e.preventDefault(); addBtn.click(); }
+        });
 
         addBtn.addEventListener("click", function () {
           var url = input.value.trim();
@@ -382,14 +518,30 @@
           topics.forEach(function (t) {
             var st = STAGE[t.stage] || STAGE.unknown;
             var heat = t.heat != null && t.heat !== "" ? String(t.heat) : fmtN(t.heatValue);
+            var meta = (t.source ? UI.platformName(t.source) : "热榜") + " · 热度 " + heat;
+            if (t.delta1h != null) meta += " · 1h " + fmtDelta(t.delta1h);
+            else if (t.delta24h != null) meta += " · 24h " + fmtDelta(t.delta24h);
+
+            var title = UI.el("div", { class: "tp-trend-title" });
+            var titleLink = sourceLink(t.title || "", t.url);
+            if (titleLink) title.appendChild(titleLink);
+            else title.textContent = t.title || "";
+
             var row = UI.el("div", { class: "tp-trend" }, [
               UI.el("span", { class: "tp-rank", text: "#" + (t.rank != null ? t.rank : "—") }),
               UI.el("div", { class: "tp-trend-main" }, [
-                UI.el("div", { class: "tp-trend-title", text: t.title || "" }),
-                UI.el("div", { class: "tp-trend-meta", text: (t.source || "") + " · 热度 " + heat }),
+                title,
+                UI.el("div", { class: "tp-trend-meta", text: meta }),
               ]),
               UI.el("span", { class: "tp-stage " + st.cls, text: st.text, title: st.tip }),
-              copyBtn("以此创作", t.title || ""),
+              actionBtn("以此创作", function () {
+                createFromTopic({
+                  topicId: t.topicId,
+                  title: t.title || "",
+                  evidenceType: "hot",
+                  source: t.source || "",
+                });
+              }),
             ]);
             wrap.appendChild(row);
           });
@@ -468,7 +620,8 @@
             var picked = Object.keys(boxes).filter(function (p) { return boxes[p].checked; });
             save.disabled = true;
             msg.textContent = "保存中…";
-            call("PUT", "/api/v2/topics/profile", {
+            // 生产环境只放行 GET/POST；PUT /profile 会在路由之前被挡成 405。
+            call("POST", "/api/v2/topics/profile/save", {
               Platforms: picked,
               IncludeKeywords: splitKeywords(inc.value),
               ExcludeKeywords: splitKeywords(exc.value),
@@ -490,6 +643,7 @@
             inc,
             UI.el("h3", { text: "不想看到的关键词" }),
             exc,
+            UI.el("div", { class: "tp-hint", text: "关键词用逗号 / 顿号分隔；服务端最多保留 30 个，每个 30 字以内。" }),
             UI.el("h3", { text: "目标受众" }),
             aud,
             UI.el("div", { class: "row" }, [save]),
@@ -499,7 +653,9 @@
       }
 
       function splitKeywords(s) {
-        return String(s || "").split(/[,，、\s]+/).map(function (x) { return x.trim(); }).filter(Boolean);
+        // 只按分隔符切：按空白切会把「AI 工具」拆成两个关键词，
+        // 与输入框示例（"AI 工具, 效率"）的语义相反。
+        return String(s || "").split(/[,，、;；\r\n]+/).map(function (x) { return x.trim(); }).filter(Boolean);
       }
 
       // ---------- 选题效果（采纳 → 发布 → 回测）----------
@@ -518,15 +674,24 @@
           }));
 
           var pct = function (v) { return (Number(v) || 0) * 100; };
-          var lines = [
-            "采纳 " + (d.adopted || 0) + " 条 · 已发布 " + (d.published || 0) + " 条 · 已回填效果 " + (d.measured || 0) + " 条",
-            "采纳率 " + pct(d.adoption_rate).toFixed(1) + "% · 命中率 " + pct(d.hit_rate).toFixed(1) + "%",
-          ];
           var w = d.current_weights || {};
-          lines.push("当前权重：证据 " + w.evidence + " · 热度趋势 " + w.momentum + " · 热度 " + w.heat + " · 垂类 " + w.niche);
+          var wt = function (v) { var n = Number(v); return isFinite(n) ? n.toFixed(2) : "—"; };
           wrap.appendChild(UI.el("div", { class: "card" }, [
             UI.el("h3", { text: "效果统计" }),
-            UI.el("div", { class: "tp-hint", text: lines.join("\n") }),
+            UI.el("div", {
+              class: "tp-hint",
+              text: "采纳 " + (d.adopted || 0) + " 条 · 已发布 " + (d.published || 0) + " 条 · 已回填效果 " +
+                (d.measured || 0) + " 条 · 命中 " + (d.hits || 0) + " 条",
+            }),
+            UI.el("div", {
+              class: "tp-hint",
+              text: "采纳率 " + pct(d.adoption_rate).toFixed(1) + "% · 命中率 " + pct(d.hit_rate).toFixed(1) + "%",
+            }),
+            UI.el("div", {
+              class: "tp-hint",
+              text: "当前权重：证据 " + wt(w.evidence) + " · 热度趋势 " + wt(w.momentum) +
+                " · 热度 " + wt(w.heat) + " · 垂类 " + wt(w.niche),
+            }),
             d.baseline_ready
               ? UI.el("div", { class: "tp-hint", text: "你的平均播放基线：" + fmtN(d.baseline_views) + "，超过这个数算命中。" })
               : UI.el("div", { class: "tp-notice", text: "样本还不够（需要更多回填数据），暂时用默认基线判定命中。" }),
@@ -545,14 +710,23 @@
         });
       }
 
+      var SIGNAL_TEXT = { evidence: "证据", momentum: "热度趋势", heat: "热度", niche: "垂类" };
+
       function tuningNote(t) {
-        if (!t) return UI.el("div");
+        if (!t) return null;
         var head = t.applied
           ? "✓ 已按你的真实数据调整推荐权重"
           : "权重暂未调整（" + (t.reason || "样本不足") + "）";
         var kids = [UI.el("div", { class: "tp-hint", text: head })];
         (t.notes || []).forEach(function (n) {
-          kids.push(UI.el("div", { class: "tp-evidence", text: n.signal + "：" + (n.note || n.detail || n.message || "") }));
+          if (!n) return;
+          var label = SIGNAL_TEXT[n.signal] || n.signal || "信号";
+          // 服务端备注字段是 reason（from/to/lift 用来展示权重变化）。
+          var text = n.reason || (label + "：分组样本不足，保持不变");
+          if (n.from != null && n.to != null && Math.abs(Number(n.to) - Number(n.from)) > 1e-6) {
+            text += "（" + Number(n.from).toFixed(2) + " → " + Number(n.to).toFixed(2) + "）";
+          }
+          kids.push(UI.el("div", { class: "tp-evidence", text: text }));
         });
         return UI.el("div", {}, kids);
       }
@@ -564,13 +738,15 @@
           (r.publish_platform ? "（" + UI.platformName(r.publish_platform) + "）" : "");
         if (r.stage === "measured") {
           meta += " · 播放 " + fmtN(r.views) + " / 赞 " + fmtN(r.likes) + " / 评 " + fmtN(r.comments);
-          if (r.multiplier) meta += " · " + r.multiplier + "× 基线";
+          if (r.multiplier != null) meta += " · " + r.multiplier + "× 基线";
         }
+        var workLink = r.publish_url ? sourceLink("查看作品", r.publish_url) : null;
         var canMeasure = r.stage !== "measured";
         var row = UI.el("div", { class: "tp-acct" }, [
           UI.el("div", {}, [
             UI.el("div", { class: "tp-acct-name", text: r.title || "(无标题)" }),
             UI.el("div", { class: "tp-acct-meta", text: meta }),
+            workLink ? UI.el("div", { class: "tp-acct-meta" }, [workLink]) : null,
             r.verdict_text ? UI.el("div", {
               class: "tp-health " + (r.verdict === "hit" ? "tp-health-ok" : (r.verdict === "weak" ? "tp-health-bad" : "tp-health-wait")),
               text: r.verdict_text,
@@ -591,6 +767,7 @@
 
         function buildForm() {
           UI.clear(form);
+          var err = UI.el("div", { class: "tp-hint tp-error" });
           if (r.stage === "adopted") {
             var sel = UI.el("select", { class: "input" }, [
               UI.el("option", { value: "douyin", text: "抖音" }),
@@ -602,13 +779,19 @@
             var url = UI.el("input", { class: "input", placeholder: "作品链接（可选）" });
             var ok = UI.el("button", { class: "btn", text: "提交" });
             ok.addEventListener("click", function () {
+              var link = url.value.trim();
+              if (link && !/^https?:\/\//i.test(link)) {
+                err.textContent = "作品链接需以 http(s):// 开头";
+                return;
+              }
               ok.disabled = true;
-              call("POST", "/api/v2/topics/outcome/publish", { TopicId: r.topic_id, Platform: sel.value, Url: url.value.trim() })
+              err.textContent = "";
+              call("POST", "/api/v2/topics/outcome/publish", { TopicId: r.topic_id, Platform: sel.value, Url: link })
                 .then(function (res) {
                   ok.disabled = false;
-                  if (!res || !res.ok) { UI.showError(form, (res && res.message) || "标记失败"); return; }
+                  if (!res || !res.ok) { err.textContent = (res && res.message) || "标记失败"; return; }
                   onChange();
-                }).catch(function (e) { ok.disabled = false; UI.showError(form, errText(e)); });
+                }).catch(function (e) { ok.disabled = false; err.textContent = errText(e); });
             });
             form.appendChild(sel); form.appendChild(url); form.appendChild(ok);
           } else {
@@ -620,20 +803,31 @@
             c.value = r.comments || "";
             var ok2 = UI.el("button", { class: "btn", text: "提交" });
             ok2.addEventListener("click", function () {
+              var viewsText = v.value.trim();
+              var likesText = l.value.trim();
+              var commentsText = c.value.trim();
+              // 空值以前会被 Number("")||0 静默写成 0 播放，直接污染命中率。
+              if (!/^\d+$/.test(viewsText)) { err.textContent = "请填写播放量（非负整数）"; return; }
+              if ((likesText && !/^\d+$/.test(likesText)) || (commentsText && !/^\d+$/.test(commentsText))) {
+                err.textContent = "点赞 / 评论请填写非负整数";
+                return;
+              }
               ok2.disabled = true;
+              err.textContent = "";
               call("POST", "/api/v2/topics/outcome/metrics", {
                 TopicId: r.topic_id,
-                Views: Number(v.value) || 0,
-                Likes: Number(l.value) || 0,
-                Comments: Number(c.value) || 0,
+                Views: Number(viewsText),
+                Likes: Number(likesText) || 0,
+                Comments: Number(commentsText) || 0,
               }).then(function (res) {
                 ok2.disabled = false;
-                if (!res || !res.ok) { UI.showError(form, (res && res.message) || "回填失败"); return; }
+                if (!res || !res.ok) { err.textContent = (res && res.message) || "回填失败"; return; }
                 onChange();
-              }).catch(function (e) { ok2.disabled = false; UI.showError(form, errText(e)); });
+              }).catch(function (e) { ok2.disabled = false; err.textContent = errText(e); });
             });
             form.appendChild(v); form.appendChild(l); form.appendChild(c); form.appendChild(ok2);
           }
+          form.appendChild(err);
         }
 
         return UI.el("div", {}, [row, form]);

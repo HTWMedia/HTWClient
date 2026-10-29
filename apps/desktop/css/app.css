@@ -274,8 +274,11 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .chat-input-bar { display: flex; gap: 8px; align-items: flex-end; margin-top: 12px; }
 .chat-input { flex: 1 1 auto; resize: none; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 10px; padding: 9px 12px; font: 13px/1.5 inherit; }
 .chat-input:focus { outline: none; border-color: var(--accent); }
-.btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
-.btn-ghost:hover { color: var(--text); border-color: var(--accent); }
+/* button.btn 的特异性比 .btn-ghost 高（0,1,1 > 0,1,0），这里必须同样带 button.btn，
+   否则幽灵按钮会被渲染成实心主按钮 —— 界面上「次要操作」和「去创作」长得一模一样。 */
+button.btn.btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+button.btn.btn-ghost:hover { background: transparent; color: var(--text); border-color: var(--accent); }
+button.btn.btn-ghost:disabled { opacity: 0.6; }
 
 
 /* ---------- 选题面板 ---------- */
@@ -292,6 +295,14 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .tp-title { font-weight: 600; font-size: 15px; line-height: 1.4; }
 .tp-hook { font-size: 12px; color: var(--muted); line-height: 1.5; }
 .tp-evidence { font-size: 12px; color: var(--accent); background: rgba(79, 140, 255, 0.08); border-radius: 6px; padding: 6px 8px; }
+/* 来源链接（选题卡 / 热榜标题）：走系统浏览器打开，样式上要能看出可点 */
+.tp-src { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.tp-src:hover { color: #7fb0ff; }
+.tp-trend-title .tp-src { font-weight: 600; }
+/* 行内错误提示：占用整行，避免把输入框挤到下一行 */
+.tp-error { color: var(--danger); font-size: 12px; flex-basis: 100%; margin: 0; }
+/* 占位的提示/错误容器在没内容时不占高度 */
+.tp-hint:empty, .tp-error:empty { display: none; }
 .tp-tags { font-size: 12px; color: var(--muted); }
 .tp-card .btn { align-self: flex-start; }
 .tp-alert { background: var(--danger-bg); border: 1px solid rgba(255, 92, 92, 0.4); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
@@ -427,6 +438,23 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .wf-topic { justify-content: space-between; text-align: left; background: var(--panel); color: var(--text); border: 1px solid var(--border); min-height: 40px; }
 .wf-topic.active { border-color: var(--accent); background: rgba(79, 140, 255, 0.12); }
 .wf-topic-score { font-size: 11px; color: var(--muted); margin-left: 8px; }
+
+/* 数字人形象选择（仅口播解读）：缩略图卡片；目录可能有上万个形象，面板只画前若干个 */
+.wf-dh-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; margin-top: 8px; }
+.btn.wf-dh-card {
+  display: flex; flex-direction: column; align-items: stretch; gap: 6px;
+  padding: 8px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px; text-align: left;
+}
+.btn.wf-dh-card:hover { border-color: var(--accent); background: var(--panel); }
+.btn.wf-dh-card.active { border-color: var(--accent); background: rgba(79, 140, 255, 0.12); }
+.wf-dh-cover { width: 100%; height: 104px; object-fit: cover; border-radius: 6px; background: var(--panel-2); }
+.wf-dh-name { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wf-dh-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.wf-dh-badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: rgba(224, 163, 58, 0.14); color: var(--warn, #e0a33a); }
+.wf-dh-selected { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); }
+.wf-dh-selected-meta { flex: 1; min-width: 0; }
+.wf-dh-cover-sm { width: 54px; height: 54px; flex: none; object-fit: cover; border-radius: 8px; background: var(--panel); }
 
 .wf-acct { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .wf-acct:last-child { border-bottom: none; }

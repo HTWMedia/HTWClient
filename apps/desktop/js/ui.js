@@ -113,9 +113,13 @@
     } catch (e) { return url; }
   }
 
+  // 提示语经常以文件名结尾（“已上传 1 个：/MediaFiles/x.png”），整句话不能当成媒体地址。
+  // 真正可加载的地址不会带空白或中文。
+  function looksLikeMediaPath(s) { return !/[\s\u4e00-\u9fff]/.test(s); }
+
   function isImageUrl(key, val) {
     var s = String(val || "");
-    if (/\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|$)/i.test(s)) return true;
+    if (looksLikeMediaPath(s) && /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|$)/i.test(s)) return true;
     if (!/^https?:\/\//i.test(s)) return false;
     if (/image|cover|thumbnail|poster|pic/i.test(String(key || ""))) return true;
     try {
@@ -132,7 +136,7 @@
   }
   function isVideoUrl(key, val) {
     var s = String(val || "");
-    if (/\.(mp4|webm|m4v|mov|ogv|avi)(\?|$)/i.test(s)) return true;
+    if (looksLikeMediaPath(s) && /\.(mp4|webm|m4v|mov|ogv|avi)(\?|$)/i.test(s)) return true;
     if (!/^https?:\/\//.test(s)) return false;
     return /video|成片|影片|mp4/i.test(String(key || ""));
   }

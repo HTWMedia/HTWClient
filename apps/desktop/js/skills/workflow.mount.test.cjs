@@ -39,6 +39,11 @@ function makeNode(tag) {
       this.children.push(child);
       return child;
     },
+    // DOM 的 Element.append(...nodes)：复核卡就是用 box.append.apply(box, kids)
+    // 一次挂多个子节点的，替身必须支持多参，否则测不到真实渲染。
+    append() {
+      for (let i = 0; i < arguments.length; i++) this.appendChild(arguments[i]);
+    },
     removeChild(child) {
       const i = this.children.indexOf(child);
       if (i >= 0) this.children.splice(i, 1);
@@ -50,7 +55,15 @@ function makeNode(tag) {
     },
     setAttribute(k, v) { this._attrs[k] = v; },
     getAttribute(k) { return this._attrs[k]; },
-    closest() { return null; },
+    closest(sel) {
+      const cls = String(sel).replace(/^\./, "");
+      let n = this;
+      while (n) {
+        if (n.className && String(n.className).split(/\s+/).indexOf(cls) >= 0) return n;
+        n = n.parentNode;
+      }
+      return null;
+    },
     querySelectorAll(sel) {
       // 只支持 .class 一种选择器 —— 面板里实际用到的就这一种
       const cls = sel.replace(/^\./, "");
@@ -427,6 +440,75 @@ test("单条提交成功：切到「进行中」且页签高亮同步", async ()
   });
 });
 
+/* ------------------------------------------------------------------
+ * 出片模式：视频线必须带 Mode=Full（先联网调研再写脚本）。
+ * Quick 只靠模型记忆直接写，而发布文案那步是带联网搜索的 —— 2026-10-29
+ * 实测两条线讲成了两个故事（成片说「校园专属账户」，文案说「数字人民币钱包」）。
+ * 图文线不出片，Mode 留空即可。
+ * ------------------------------------------------------------------ */
+
+function captureCreate() {
+  let body = null;
+  return {
+    get body() { return body; },
+    call: (method, path, payload) => {
+      if (method === "POST" && path.indexOf("/api/v2/workflow/create") >= 0) {
+        body = payload;
+        return Promise.resolve({ ok: true, data: { workflowId: "W1" } });
+      }
+      if (method === "GET" && path.indexOf("/api/v2/workflow/history") >= 0) {
+        return Promise.resolve({ ok: true, data: { items: [] } });
+      }
+      return Promise.resolve({ ok: false, code: 500, message: "stub 未处理：" + path });
+    },
+  };
+}
+
+test("单条提交：视频线带 Mode=Full", async () => {
+  const cap = captureCreate();
+  await withDom({ call: cap.call }, async () => {
+    const panel = mountPanel();
+    findByTag(panel, "INPUT").value = "秋天的第一杯奶茶";
+    findButton(panel, "开始工作流").click();
+    await flush();
+    assert.strictEqual(cap.body.ContentType, "video");
+    assert.strictEqual(cap.body.Mode, "Full", "视频线必须走 Full，否则与联网文案脱节");
+  });
+});
+
+test("单条提交：图文线 Mode 留空（不出片，不需要调研）", async () => {
+  const cap = captureCreate();
+  await withDom({ call: cap.call }, async () => {
+    const panel = mountPanel();
+    findByTag(panel, "INPUT").value = "阳台种菜";
+    findButton(panel, "图文文章").click();
+    findButton(panel, "开始工作流").click();
+    await flush();
+    assert.strictEqual(cap.body.ContentType, "article");
+    assert.strictEqual(cap.body.Mode, "");
+  });
+});
+
+test("批量启动：视频线同样带 Mode=Full", async () => {
+  let body = null;
+  await withDom({
+    call: (method, path, payload) => {
+      if (method === "POST" && path.indexOf("/api/v2/workflow/create-batch") >= 0) {
+        body = payload;
+        return Promise.resolve({ ok: true, data: { total: 1, accepted: 1, rejected: [], items: [{ index: 0, workflowId: "W1", topic: "a" }] } });
+      }
+      return Promise.resolve({ ok: false, code: 500, message: "stub 未处理：" + path });
+    },
+  }, async () => {
+    const panel = mountPanel();
+    findByTag(panel, "TEXTAREA").value = "a";
+    findButton(panel, "批量启动").click();
+    await flush();
+    assert.strictEqual(body.ContentType, "video");
+    assert.strictEqual(body.Mode, "Full");
+  });
+});
+
 test("批量启动响应缺失（ok 无 data）：留本页说明情况，按钮保留", async () => {
   await withDom({
     call: () => Promise.resolve({ ok: true, data: null }),
@@ -439,6 +521,106 @@ test("批量启动响应缺失（ok 无 data）：留本页说明情况，按钮
     assert.ok(btn && connectedToRoot(btn, panel), "响应异常不该把按钮清掉");
     assert.ok(!/已启动 0 条/.test(bodyText(panel)), "不得把响应异常报成「已启动 0 条」");
     assert.ok(/启动结果/.test(bodyText(panel)), "应给出「启动结果未知」的说明");
+  });
+});
+
+/* ------------------------------------------------------------------
+ * 数字人（AI 主播）：只挂在「口播解读」下，与「视频成片」严格分开。
+ * 服务端契约：create 请求带 DigitalHumanId / DigitalHumanVoiceType /
+ * DigitalHumanVoiceResourceId 三件套；缺一条服务端会整条忽略数字人，
+ * 所以客户端要么三个都带，要么一个都不带。
+ * ------------------------------------------------------------------ */
+
+const DH_ITEM = {
+  resourceId: "7592140027379961097",
+  name: "天意-温柔",
+  voiceType: "zh_female_iclvop_xstaiyangkepu",
+  voiceResourceId: "7585495838223273226",
+  isVip: false,
+  coverUrl: "https://cdn.example.test/dh.jpg",
+};
+
+test("数字人入口只在口播解读出现，视频成片不显示", () => {
+  withDom(() => {
+    const panel = mountPanel();
+    const dhBtn = findButton(panel, "选择数字人形象");
+    assert.ok(dhBtn, "应渲染数字人选择按钮（默认隐藏）");
+    assert.strictEqual(dhBtn.closest(".wf-section").style.display, "none", "视频成片不该出现数字人入口");
+    findButton(panel, "口播解读").click();
+    assert.strictEqual(dhBtn.closest(".wf-section").style.display, "", "口播解读应展开展示数字人入口");
+  });
+});
+
+test("口播解读选数字人：提交带三件套、ARoll 清空、批量入口收起", async () => {
+  let body = null;
+  await withDom({
+    call: (method, path, payload) => {
+      if (method === "GET" && path.indexOf("/api/v2/digital-human/list") >= 0) {
+        return Promise.resolve({ ok: true, data: { items: [DH_ITEM] } });
+      }
+      if (method === "POST" && path.indexOf("/api/v2/workflow/create") >= 0) {
+        body = payload;
+        return Promise.resolve({ ok: true, data: { workflowId: "W1" } });
+      }
+      if (method === "GET" && path.indexOf("/api/v2/workflow/history") >= 0) {
+        return Promise.resolve({ ok: true, data: { items: [] } });
+      }
+      return Promise.resolve({ ok: false, code: 500, message: "stub 未处理：" + path });
+    },
+  }, async () => {
+    const panel = mountPanel();
+    findByTag(panel, "INPUT").value = "AI 芯片战";
+    findButton(panel, "口播解读").click();
+    findButton(panel, "选择数字人形象").click();
+    await flush();
+    findButton(panel, "天意-温柔").click();
+    await flush();
+
+    // 选中后：真人素材区收起，批量入口收起（create-batch 没有数字人字段）
+    assert.strictEqual(findButton(panel, "批量启动").closest(".wf-section").style.display, "none",
+      "选中数字人后批量入口应收起，避免静默忽略数字人");
+
+    findButton(panel, "开始工作流").click();
+    await flush();
+    assert.strictEqual(body.ContentType, "narration");
+    assert.strictEqual(body.DigitalHumanId, DH_ITEM.resourceId);
+    assert.strictEqual(body.DigitalHumanVoiceType, DH_ITEM.voiceType);
+    assert.strictEqual(body.DigitalHumanVoiceResourceId, DH_ITEM.voiceResourceId);
+    assert.deepStrictEqual(body.ARollMaterialIds, [], "数字人与真人素材互斥，不应再带 A-roll");
+  });
+});
+
+test("数字人选中后切回视频成片：提交不带任何数字人字段", async () => {
+  let body = null;
+  await withDom({
+    call: (method, path, payload) => {
+      if (method === "GET" && path.indexOf("/api/v2/digital-human/list") >= 0) {
+        return Promise.resolve({ ok: true, data: { items: [DH_ITEM] } });
+      }
+      if (method === "POST" && path.indexOf("/api/v2/workflow/create") >= 0) {
+        body = payload;
+        return Promise.resolve({ ok: true, data: { workflowId: "W1" } });
+      }
+      if (method === "GET" && path.indexOf("/api/v2/workflow/history") >= 0) {
+        return Promise.resolve({ ok: true, data: { items: [] } });
+      }
+      return Promise.resolve({ ok: false, code: 500, message: "stub 未处理：" + path });
+    },
+  }, async () => {
+    const panel = mountPanel();
+    findByTag(panel, "INPUT").value = "秋天的第一杯奶茶";
+    findButton(panel, "口播解读").click();
+    findButton(panel, "选择数字人形象").click();
+    await flush();
+    findButton(panel, "天意-温柔").click();
+    await flush();
+    findButton(panel, "视频成片").click();
+    findButton(panel, "开始工作流").click();
+    await flush();
+    assert.strictEqual(body.ContentType, "video");
+    assert.ok(!("DigitalHumanId" in body), "视频成片不得携带数字人字段");
+    assert.ok(!("DigitalHumanVoiceType" in body));
+    assert.ok(!("DigitalHumanVoiceResourceId" in body));
   });
 });
 
@@ -641,6 +823,449 @@ test("取消即时留痕：取消成功后「进行中」当场出现已取消�
       assert.ok(text2.indexOf("已取消") >= 0 && text2.indexOf("取消也要留痕") >= 0,
         "去重之后提示仍在，口径与真实记录一致");
       assert.strictEqual(statusW1, 1, "取消后的真实状态拿到即停，不得重复轮询");
+    } finally {
+      mock.timers.reset();
+    }
+  });
+});
+
+/* ------------------------------------------------------------------
+ * 复核面板（2026-10-29 实测缺陷回归）：
+ * 1) box.appendChild.apply(box, kids) 只挂第一个子节点 —— 复核卡只剩标题，
+ *    正文、合规、候选标题和「确认发布/再等等」全被吞掉；
+ * 2) 复核数据必须来自 status：history 列表项没有 content/tags/
+ *    compliance/titleCandidates，拿它渲染等于让人盲确认；
+ * 3) 连点「查看并确认发布」会叠出多张卡。
+ * ------------------------------------------------------------------ */
+
+function reviewStatusStub(extra, onApprove) {
+  return (method, path, body) => {
+    if (method === "GET" && path.indexOf("/api/v2/workflow/history") >= 0) {
+      return Promise.resolve({
+        ok: true,
+        data: {
+          items: [{
+            workflowId: "W1", topic: "秋天的第一杯奶茶", stage: "awaiting-publish",
+            title: "系统标题", createdAt: "2026-10-28T10:00:00",
+          }],
+        },
+      });
+    }
+    if (path.indexOf("/api/v2/workflow/status?workflowId=W1") >= 0) {
+      return Promise.resolve({
+        ok: true,
+        data: Object.assign({
+          workflowId: "W1", topic: "秋天的第一杯奶茶", stage: "awaiting-publish",
+          title: "系统标题",
+          content: "这是即将发布的正文。",
+          tags: '["奶茶","秋天"]',
+          compliance: '{"evaluated":true,"safe":true,"note":""}',
+          titleCandidates: [
+            { title: "系统标题", score: 80, reasons: ["大纲"] },
+            { title: "秋天必喝清单", score: 61, reasons: ["有钩子"] },
+          ],
+          downloadUrl: "https://cdn.example.test/a.mp4",
+        }, extra || {}),
+      });
+    }
+    if (method === "POST" && path.indexOf("/api/v2/workflow/approve") >= 0) {
+      return Promise.resolve(onApprove ? onApprove(body) : { ok: true, data: {} });
+    }
+    return Promise.resolve({ ok: false, code: 500, message: "stub 未处理：" + path });
+  };
+}
+
+async function openFirstReview() {
+  const panel = mountPanel();
+  tabFor(panel, "进行中").click();
+  await flush();
+  findButton(panel, "查看并确认发布").click();
+  await flush();
+  return panel;
+}
+
+test("复核面板：把 status 的完整内容挂进卡里（正文/标签/合规/候选/确认与返回按钮）", async () => {
+  await withDom({ call: reviewStatusStub() }, async () => {
+    const mock = require("node:test").mock;
+    mock.timers.enable({ apis: ["setInterval"] });
+    try {
+      const panel = await openFirstReview();
+      const reviews = panel.querySelectorAll("wf-review");
+      assert.strictEqual(reviews.length, 1, "点一次只应有一张复核卡");
+      const text = reviews[0].textContent;
+      assert.ok(text.indexOf("这是即将发布的正文。") >= 0, "正文不得被 appendChild 吞掉");
+      assert.ok(text.indexOf("#奶茶") >= 0 && text.indexOf("#秋天") >= 0, "标签要可见");
+      assert.ok(text.indexOf("合规检查通过") >= 0, "合规结论要可见");
+      assert.ok(text.indexOf("秋天必喝清单") >= 0, "标题候选要可见");
+      assert.ok(findButton(reviews[0], "确认发布"), "必须能点确认发布");
+      assert.ok(findButton(reviews[0], "再等等"), "必须能关掉复核卡");
+      assert.ok(findButton(reviews[0], "先看成片"), "有成片时给预览入口");
+    } finally {
+      mock.timers.reset();
+    }
+  });
+});
+
+test("复核面板：连点「查看并确认发布」不叠第二张卡", async () => {
+  await withDom({ call: reviewStatusStub() }, async () => {
+    const mock = require("node:test").mock;
+    mock.timers.enable({ apis: ["setInterval"] });
+    try {
+      const panel = mountPanel();
+      tabFor(panel, "进行中").click();
+      await flush();
+      const btn = findButton(panel, "查看并确认发布");
+      btn.click();
+      btn.click();          // 连点：第二次不得再请求/再挂一张
+      await flush();
+      assert.strictEqual(panel.querySelectorAll("wf-review").length, 1);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+});
+
+test("复核面板：标题候选再点一次取消选择，退回系统标题", async () => {
+  await withDom({ call: reviewStatusStub() }, async () => {
+    const mock = require("node:test").mock;
+    mock.timers.enable({ apis: ["setInterval"] });
+    try {
+      const panel = await openFirstReview();
+      const review = panel.querySelectorAll("wf-review")[0];
+      const cands = review.querySelectorAll("wf-title-cand");
+      assert.strictEqual(cands.length, 2);
+      assert.ok(cands[0].classList.contains("is-current"), "初始高亮当前标题");
+
+      cands[1].click();
+      assert.ok(review.querySelector("wf-title-picked").textContent.indexOf("秋天必喝清单") >= 0,
+        "选中候选后应显示将使用的标题");
+      assert.ok(cands[1].classList.contains("is-current") && !cands[0].classList.contains("is-current"));
+
+      cands[1].click();
+      assert.ok(review.querySelector("wf-title-picked").textContent.indexOf("系统标题") >= 0,
+        "再点已选中的候选必须退回系统标题（旧实现取消不掉）");
+      assert.ok(cands[0].classList.contains("is-current"), "高亮应回到当前标题");
+    } finally {
+      mock.timers.reset();
+    }
+  });
+});
+
+test("复核面板：合规发现风险时展示风险等级与 Issues，确认时带 AcknowledgeRisk", async () => {
+  let approveBody = null;
+  const stub = reviewStatusStub({
+    compliance: '{"evaluated":true,"safe":false,"note":"检测到风险点",'
+      + '"riskLevel":"medium","issues":["绝对化用语","疑似引流"]}',
+  }, (body) => { approveBody = body; return { ok: true, data: {} }; });
+
+  await withDom({ call: stub }, async () => {
+    const mock = require("node:test").mock;
+    mock.timers.enable({ apis: ["setInterval"] });
+    try {
+      const panel = await openFirstReview();
+      const review = panel.querySelectorAll("wf-review")[0];
+      const text = review.textContent;
+      assert.ok(text.indexOf("发现风险") >= 0, "必须明说合规发现了风险");
+      assert.ok(text.indexOf("风险等级：中") >= 0, "风险等级要翻译成人话");
+      assert.ok(text.indexOf("绝对化用语") >= 0 && text.indexOf("疑似引流") >= 0,
+        "Issues 必须逐条展示，不能只给一句『未通过』");
+      assert.ok(!findButton(review, "确认发布"),
+        "有风险时不能再出现普通『确认发布』按钮，以免误点");
+      findButton(review, "我已确认风险，仍然发布").click();
+      await flush();
+      assert.ok(approveBody, "点击后应发出 approve 请求");
+      assert.strictEqual(approveBody.AcknowledgeRisk, true,
+        "人工确认风险后请求体必须带 AcknowledgeRisk");
+    } finally {
+      mock.timers.reset();
+    }
+  });
+});
+
+test("复核面板：没有合规结论时不带 AcknowledgeRisk（没判定 ≠ 用户确认过风险）", async () => {
+  let approveBody = null;
+  const stub = reviewStatusStub({
+    compliance: '{"evaluated":false,"safe":false,"riskLevel":"unknown","note":"合规服务暂时不可用"}',
+  }, (body) => { approveBody = body; return { ok: false, code: 400, message: "合规检查没跑完" }; });
+
+  await withDom({ call: stub }, async () => {
+    const mock = require("node:test").mock;
+    mock.timers.enable({ apis: ["setInterval"] });
+    try {
+      const panel = await openFirstReview();
+      const review = panel.querySelectorAll("wf-review")[0];
+      assert.ok(review.textContent.indexOf("没有合规检查结论") >= 0);
+      assert.ok(review.textContent.indexOf("合规服务暂时不可用") >= 0, "原因要原样透出");
+      const btn = findButton(review, "确认发布");
+      assert.ok(btn, "没判定过仍可尝试提交，由服务端把关");
+      btn.click();
+      await flush();
+      assert.strictEqual(approveBody.AcknowledgeRisk, undefined,
+        "未判定时绝不能替用户声明『已确认风险』");
+    } finally {
+      mock.timers.reset();
+    }
+  });
+});
+
+test("进行中卡片：warning 必须可见（非致命降级不能只留在日志里）", async () => {
+  const stub = (method, path) => {
+    if (method === "GET" && path.indexOf("/api/v2/workflow/history") >= 0) {
+      return Promise.resolve({
+        ok: true,
+        data: {
+          items: [{
+            workflowId: "W2", topic: "主题", stage: "compose",
+            title: "", createdAt: "2026-10-28T10:00:00",
+            warning: "缩略图未生成：生图服务没有返回图片",
+          }],
+        },
+      });
+    }
+    return Promise.resolve({ ok: true, data: {} });
+  };
+  await withDom({ call: stub }, async () => {
+    const mock = require("node:test").mock;
+    mock.timers.enable({ apis: ["setInterval"] });
+    try {
+      const panel = mountPanel();
+      tabFor(panel, "进行中").click();
+      await flush();
+      assert.ok(bodyText(panel).indexOf("缩略图未生成") >= 0, "warning 必须显示在卡片上");
+    } finally {
+      mock.timers.reset();
+    }
+  });
+});
+
+test("复核打开时若已不是待确认（别处处理过），不开卡而刷新列表", async () => {
+  await withDom({ call: reviewStatusStub({ stage: "completed" }) }, async () => {
+    const mock = require("node:test").mock;
+    mock.timers.enable({ apis: ["setInterval"] });
+    try {
+      const panel = await openFirstReview();
+      assert.strictEqual(panel.querySelectorAll("wf-review").length, 0,
+        "状态已变就不该再给复核入口");
+    } finally {
+      mock.timers.reset();
+    }
+  });
+});
+
+/* ------------------------------------------------------------------
+ * 页签竞态（2026-10-29 实测）：
+ * 轮询终态分支直接 renderRunning(root)，而 root 是三个页签共用的 body。
+ * 用户正在「发起工作流」填主题时，另一条到终态就把整张表单冲掉；
+ * 页签高亮还停在「发起工作流」。终态重画必须只看当前页签。
+ * ------------------------------------------------------------------ */
+
+test("轮询终态不冲掉其它页签：在发起页时到终态，表单保留，切回进行中仍看到结束提示", async () => {
+  let historyCalls = 0;
+  let statusCalls = 0;
+  await withDom({
+    call: (method, path) => {
+      if (method === "GET" && path.indexOf("/api/v2/workflow/history") >= 0) {
+        historyCalls++;
+        return Promise.resolve({
+          ok: true,
+          data: {
+            items: historyCalls === 1
+              ? [{ workflowId: "W1", topic: "跑到一半", stage: "produce", createdAt: "2026-10-28T10:00:00" }]
+              : [],
+          },
+        });
+      }
+      if (path.indexOf("/api/v2/workflow/status?workflowId=W1") >= 0) {
+        statusCalls++;
+        return Promise.resolve({
+          ok: true,
+          data: { workflowId: "W1", topic: "跑到一半", stage: "completed" },
+        });
+      }
+      return Promise.resolve({ ok: false, code: 500, message: "stub 未处理：" + path });
+    },
+  }, async () => {
+    const mock = require("node:test").mock;
+    mock.timers.enable({ apis: ["setInterval"] });
+    try {
+      const panel = mountPanel();
+      tabFor(panel, "进行中").click();
+      await flush();
+      tabFor(panel, "发起工作流").click();
+      await flush();
+      const topic = findByTag(panel, "INPUT");
+      topic.value = "我正在填的主题";
+
+      mock.timers.tick(6000);
+      await flush();
+      assert.strictEqual(statusCalls, 1, "前提：终态被问到");
+
+      const after = findByTag(panel, "INPUT");
+      assert.ok(after && after.parentNode, "发起表单不得被后台重画整份冲掉");
+      assert.strictEqual(after.value, "我正在填的主题", "已填主题不得丢失");
+      assert.ok(tabFor(panel, "发起工作流").classList.contains("active"), "页签高亮不应错位");
+      assert.ok(bodyText(panel).indexOf("已结束") < 0, "不得把进行中的内容画到发起页上");
+
+      tabFor(panel, "进行中").click();
+      await flush();
+      const text = bodyText(panel);
+      assert.ok(text.indexOf("跑到一半") >= 0 && text.indexOf("已完成") >= 0,
+        "切回进行中后，结束提示仍要在（root._wfExits 不丢）");
+      assert.ok(text.indexOf("现在没有进行中的工作流") >= 0);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+});
+
+/* ------------------------------------------------------------------
+ * 发起表单的本地状态：页签往返不重置（形态/主题/平台勾选）。
+ * ------------------------------------------------------------------ */
+
+test("页签往返不丢发起表单：主题、内容形态、平台勾选都保留", async () => {
+  await withDom(async () => {
+    const panel = mountPanel();
+    const topic = findByTag(panel, "INPUT");
+    topic.value = "保留我";
+    findButton(panel, "图文文章").click();
+
+    const plat = panel.querySelectorAll("wf-plat")[0];
+    const cb = plat.children.find((c) => c.tagName === "INPUT");
+    assert.strictEqual(cb.checked, true, "抖音默认勾选");
+    cb.checked = false;
+    (cb._handlers.change || []).forEach((fn) => fn({ type: "change" }));
+
+    tabFor(panel, "历史").click();
+    await flush();
+    tabFor(panel, "发起工作流").click();
+    await flush();
+
+    const topicAgain = findByTag(panel, "INPUT");
+    assert.strictEqual(topicAgain.value, "保留我", "主题不得被页签往返清空");
+    const activeType = panel.querySelectorAll("wf-type").find((x) => x.classList.contains("active"));
+    assert.strictEqual(activeType.textContent, "图文文章", "内容形态不得被重置");
+    const platAgain = panel.querySelectorAll("wf-plat")[0];
+    assert.strictEqual(platAgain.children.find((c) => c.tagName === "INPUT").checked, false,
+      "用户取消的平台勾选不得被重置");
+  });
+});
+
+test("空提交提示随输入消失（主题与批量两份）", async () => {
+  await withDom(async () => {
+    const panel = mountPanel();
+    findButton(panel, "开始工作流").click();
+    await flush();
+    assert.ok(bodyText(panel).indexOf("请先填主题") >= 0);
+
+    const topic = findByTag(panel, "INPUT");
+    topic.value = "填了";
+    (topic._handlers.input || []).forEach((fn) => fn({ type: "input" }));
+    assert.ok(bodyText(panel).indexOf("请先填主题") < 0, "填了主题后提示应消失");
+
+    findButton(panel, "批量启动").click();
+    await flush();
+    assert.ok(bodyText(panel).indexOf("请先填写至少一个主题") >= 0);
+
+    const ta = findByTag(panel, "TEXTAREA");
+    ta.value = "a";
+    (ta._handlers.input || []).forEach((fn) => fn({ type: "input" }));
+    assert.ok(bodyText(panel).indexOf("请先填写至少一个主题") < 0, "填了批量主题后提示应消失");
+  });
+});
+
+test("「待你确认」放慢轮询：6 秒窗口不问，30 秒窗口才问一次且不停更", async () => {
+  let statusCalls = 0;
+  await withDom({
+    call: (method, path) => {
+      if (method === "GET" && path.indexOf("/api/v2/workflow/history") >= 0) {
+        return Promise.resolve({
+          ok: true,
+          data: {
+            items: [{
+              workflowId: "W1", topic: "等你确认", stage: "awaiting-publish",
+              title: "标题", createdAt: "2026-10-28T10:00:00",
+            }],
+          },
+        });
+      }
+      if (path.indexOf("/api/v2/workflow/status?workflowId=W1") >= 0) {
+        statusCalls++;
+        return Promise.resolve({
+          ok: true,
+          data: { workflowId: "W1", topic: "等你确认", stage: "awaiting-publish" },
+        });
+      }
+      return Promise.resolve({ ok: false, code: 500, message: "stub 未处理：" + path });
+    },
+  }, async () => {
+    const mock = require("node:test").mock;
+    mock.timers.enable({ apis: ["setInterval"] });
+    try {
+      const panel = mountPanel();
+      tabFor(panel, "进行中").click();
+      await flush();
+      mock.timers.tick(6000);
+      await flush();
+      assert.strictEqual(statusCalls, 0, "待确认是静息态，6 秒窗口不该打扰服务端");
+      mock.timers.tick(24000);
+      await flush();
+      assert.strictEqual(statusCalls, 1, "30 秒窗口问一次");
+    } finally {
+      mock.timers.reset();
+    }
+  });
+});
+
+/* ------------------------------------------------------------------
+ * 图文文章：downloadUrl 是封面 JPG，不是成片。按钮沿用「成片」会让人
+ * 以为文章也生成了视频（2026-10-29 实测 article 下载到 .jpg）。
+ * ------------------------------------------------------------------ */
+
+test("图文文章：下载/预览按钮说「封面」而不是「成片」", async () => {
+  await withDom({
+    call: (method, path) => {
+      if (method === "GET" && path.indexOf("/api/v2/workflow/history") >= 0) {
+        return Promise.resolve({
+          ok: true,
+          data: {
+            items: [{
+              workflowId: "W2", topic: "阳台种菜新手最容易犯的三个错",
+              contentType: "article", stage: "awaiting-publish",
+              title: "阳台种菜新手最容易犯的三个错，你中了几个？",
+              downloadUrl: "/MediaFiles/cover_x.jpg",
+              createdAt: "2026-10-29T07:25:00",
+            }],
+          },
+        });
+      }
+      if (path.indexOf("/api/v2/workflow/status?workflowId=W2") >= 0) {
+        return Promise.resolve({
+          ok: true,
+          data: {
+            workflowId: "W2", contentType: "article", stage: "awaiting-publish",
+            title: "阳台种菜新手最容易犯的三个错，你中了几个？",
+            content: "文章正文。", tags: '["阳台种菜"]',
+            downloadUrl: "/MediaFiles/cover_x.jpg",
+          },
+        });
+      }
+      return Promise.resolve({ ok: false, code: 500, message: "stub 未处理：" + path });
+    },
+  }, async () => {
+    const mock = require("node:test").mock;
+    mock.timers.enable({ apis: ["setInterval"] });
+    try {
+      const panel = mountPanel();
+      tabFor(panel, "进行中").click();
+      await flush();
+      assert.ok(findButton(panel, "下载封面"), "图文卡片的下载按钮应说「封面」");
+      assert.ok(!findButton(panel, "下载成片"), "不得把封面叫成成片");
+      findButton(panel, "查看并确认发布").click();
+      await flush();
+      const review = panel.querySelectorAll("wf-review")[0];
+      assert.ok(review, "复核卡要打开");
+      assert.ok(findButton(review, "先看封面"), "复核卡的预览按钮应说「封面」");
+      assert.ok(!findButton(review, "先看成片"));
     } finally {
       mock.timers.reset();
     }

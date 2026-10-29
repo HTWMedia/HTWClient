@@ -129,14 +129,17 @@
         return formatErr(res) + (hint ? "\n\n可能的原因：" + hint : "");
       }
 
-      // 成片下载链接由服务端签过凭证，直接用；与营销/短剧面板同一套呈现方式
+      // 成片下载链接由服务端签过凭证，直接用；与营销/短剧面板同一套呈现方式。
+      // 下载链接改走源站直连：Cloudflare 忽略 Range，大文件会被截断。
       function showVideo(region, url, title) {
         const full = url.charAt(0) === "/" ? API.base + url : url;
+        const dlUrl = (window.HTWApi && typeof window.HTWApi.preferDirectUrl === "function")
+          ? window.HTWApi.preferDirectUrl(full) : full;
         UI.clear(region);
         UI.mount(region, UI.el("div", {}, [
           UI.el("div", { class: "result-area-text", text: title }),
           UI.el("video", { controls: true, style: "width:100%;max-width:480px;border-radius:8px;background:#000", src: full }),
-          UI.el("a", { class: "btn", href: full, download: "htw_edit_output.mp4", text: "下载成片" }),
+          UI.el("a", { class: "btn", href: dlUrl, download: "htw_edit_output.mp4", text: "下载成片" }),
         ]));
       }
 

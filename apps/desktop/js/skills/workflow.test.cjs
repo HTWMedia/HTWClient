@@ -138,6 +138,65 @@ test("isTextContent: 只有图文两形态为真（narration 走视频线）", (
   assert.strictEqual(I.isTextContent(null), false);
 });
 
+test("produceMode: 视频线强制 Full（先联网调研），图文线不带该字段", () => {
+  // 实录：Quick 出片（纯模型记忆）与发布文案（联网搜索）会讲成两个故事。
+  // 视频线必须走 Full 把两边的事实底座拉到同一份调研上。
+  assert.strictEqual(I.produceMode("video"), "Full");
+  assert.strictEqual(I.produceMode("narration"), "Full");
+  assert.strictEqual(I.produceMode(null), "Full", "空形态按 video 处理");
+  assert.strictEqual(I.produceMode("article"), "", "图文不出片，不需要 Mode");
+  assert.strictEqual(I.produceMode("weitoutiao"), "");
+});
+
+test("isDigitalHumanApplicable: 数字人只属口播解读，与视频成片严格区分", () => {
+  assert.strictEqual(I.isDigitalHumanApplicable("narration"), true);
+  ["video", "article", "weitoutiao", "", null].forEach((ct) => {
+    assert.strictEqual(I.isDigitalHumanApplicable(ct), false, ct + " 不该带数字人");
+  });
+});
+
+test("digitalHumanFields: 提交用 ResourceId，三件套缺一不可", () => {
+  const f = I.digitalHumanFields({
+    resourceId: "7592140027379961097",
+    voiceType: "zh_female_iclvop_xstaiyangkepu",
+    voiceResourceId: "7585495838223273226",
+    // 32 位 Id 是资源内部 id，绝不能拿来提交
+    id: "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+  });
+  assert.deepStrictEqual(f, {
+    DigitalHumanId: "7592140027379961097",
+    DigitalHumanVoiceType: "zh_female_iclvop_xstaiyangkepu",
+    DigitalHumanVoiceResourceId: "7585495838223273226",
+  });
+  // 服务端三字段缺任一项会整条忽略数字人 —— 客户端必须提前挡住
+  assert.strictEqual(I.digitalHumanFields({ resourceId: "1", voiceType: "x" }), null);
+  assert.strictEqual(I.digitalHumanFields({ voiceType: "x", voiceResourceId: "y" }), null);
+  assert.strictEqual(I.digitalHumanFields(null), null);
+});
+
+test("digitalHumanFields: 兼容 PascalCase 原始响应", () => {
+  const f = I.digitalHumanFields({
+    ResourceId: "7592140027379961097",
+    VoiceType: "zh_female_x",
+    VoiceResourceId: "7585495838223273226",
+  });
+  assert.strictEqual(f.DigitalHumanId, "7592140027379961097");
+});
+
+test("filterDigitalHumans: 名称搜索 + 只看免费", () => {
+  const items = [
+    { name: "天意-温柔", isVip: false },
+    { name: "小美", isVip: true },
+    { name: "天意-阳光", isVip: false },
+  ];
+  assert.strictEqual(I.filterDigitalHumans(items, "", true).length, 2, "只看免费应剔掉 VIP");
+  assert.deepStrictEqual(
+    I.filterDigitalHumans(items, "天意", true).map((x) => x.name),
+    ["天意-温柔", "天意-阳光"]);
+  assert.strictEqual(I.filterDigitalHumans(items, "", false).length, 3);
+  assert.strictEqual(I.filterDigitalHumans(null, "", false).length, 0);
+});
+
 test("模块导出 mount 供 app.js 挂载", () => {
   assert.strictEqual(typeof wf.mount, "function");
 });

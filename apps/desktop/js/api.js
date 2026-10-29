@@ -587,6 +587,34 @@
     return { ok: true, data: camelize(data !== undefined ? data : d), taskId: taskId || null };
   }
 
+  // 下载/预览地址改走源站直连（绕过 Cloudflare）。
+  // 🔴 2026-10-29：Cloudflare 对 /Download、/MediaFiles 这类自家端点会忽略 Range，
+  // 整包传十几 MB 就被掐断（客户端拿到缺 moov 的坏 mp4）。直连源站实测能完整下完。
+  //
+  // 只改写**自家 API 源**的地址（相对路径，或与 _base 同源的绝对地址）；
+  // 剪映等第三方 CDN 原样返回 —— 那不走我们的源站，换 IP 只会 404。
+  // 没配置直连（_directBase 为空）时一律不动，行为与旧版完全一致。
+  function preferDirectUrl(url) {
+    const s = String(url == null ? "" : url);
+    if (!s || !_directBase) return s;
+    let u;
+    let d;
+    let baseOrigin = "";
+    try {
+      u = new URL(s, _base);
+      d = new URL(_directBase);
+      baseOrigin = new URL(_base).origin;
+    } catch (e) { return s; }
+    if (u.protocol !== "http:" && u.protocol !== "https:") return s;
+    if (d.protocol !== "http:" && d.protocol !== "https:") return s;
+    // 已是直连地址原样返回；第三方 CDN 也不动
+    if (u.origin === d.origin) return s;
+    if (u.origin !== baseOrigin) return s;
+    u.protocol = d.protocol;
+    u.host = d.host;
+    return u.href;
+  }
+
   async function download(method, path, baseOverride) {
     if (!_key) throw keyError();
     // baseOverride 优先（显式指定）；否则由选路决定。
@@ -685,6 +713,7 @@
     shouldUseLocal: shouldUseLocal,
     hasKey: hasKey, authHeader: authHeader,
     call: call, get: get, post: post, upload: upload, download: download,
+    preferDirectUrl: preferDirectUrl,
     packageManifest: packageManifest,
     normalize: normalize, pollTask: pollTask, onQuotaExceeded: onQuotaExceeded,
     // 失败标记（可单测：界面层 / 汇总层也用它判别本地失败）。

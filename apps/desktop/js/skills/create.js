@@ -6,6 +6,11 @@ var Skills = (window.Skills = window.Skills || {});
 
 let recommendationsCache = null;
 
+// 选题面板「去创作」通过 setTopic 把标题塞进主题框。
+// mount 之后 setTopic 直接改当前 textarea；mount 之前先记下来，挂载时带进初始值。
+let mountedRoot = null;
+let pendingTopic = "";
+
 function loadRecommendations() {
   if (recommendationsCache) return Promise.resolve(recommendationsCache);
   return api.get('/api/v2/creation/recommendations').then(r => {
@@ -64,6 +69,13 @@ function renderInputCard(tab, state, root) {
   inner += `<div class="field inline"><button class="btn primary" id="cstart">开始创作</button><span class="muted" id="cstatus"></span></div>`;
 
   card.innerHTML = inner;
+
+  // 输入即写回 state：切换视频/图片/文章页签时 renderInputCard 用的是 state.topic，
+  // 不写回的话刚填的主题会在切页签时凭空消失。
+  const topicTa = card.querySelector('#ctopic');
+  if (topicTa) topicTa.addEventListener('input', () => { state.topic = topicTa.value; });
+  const refTa = card.querySelector('#cref');
+  if (refTa) refTa.addEventListener('input', () => { state.refurls = refTa.value; });
 
   recSection(tab).then(html => {
     const box = card.querySelector('#crecbox');
@@ -482,10 +494,13 @@ function act(tab, state, root, kind, instruction) {
 }
 
 Skills.create = { mount: function (root) {
+  mountedRoot = root;
+  const initialTopic = pendingTopic;
+  pendingTopic = "";
   const states = {
-    video: { sessionId: null, topic: '', refurls: '', vtype: null, steps: { research: true, keypoint: false, material: false, publish: false }, polling: false, acting: false },
-    image: { sessionId: null, topic: '', steps: { optimize: true }, polling: false, acting: false },
-    article: { sessionId: null, topic: '', steps: { optimize: true }, polling: false, acting: false }
+    video: { sessionId: null, topic: initialTopic, refurls: '', vtype: null, steps: { research: true, keypoint: false, material: false, publish: false }, polling: false, acting: false },
+    image: { sessionId: null, topic: initialTopic, steps: { optimize: true }, polling: false, acting: false },
+    article: { sessionId: null, topic: initialTopic, steps: { optimize: true }, polling: false, acting: false }
   };
   let current = 'video';
 
@@ -519,4 +534,16 @@ Skills.create = { mount: function (root) {
   });
 
   renderInputCard(current, states[current], root);
+},
+
+// 供「选题」面板调用：把标题写进当前创作页签的主题框。
+setTopic: function (text) {
+  const t = String(text == null ? "" : text);
+  pendingTopic = t;
+  if (!mountedRoot) return;
+  const ta = mountedRoot.querySelector('#ctopic');
+  if (!ta) return;
+  ta.value = t;
+  try { ta.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) { }
+  try { ta.focus(); } catch (e) { }
 } };

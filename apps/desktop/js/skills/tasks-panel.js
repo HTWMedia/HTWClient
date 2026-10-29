@@ -38,12 +38,20 @@
 
   // 产物地址常是带 token 的相对路径（/api/v2/...），与 batch.js / workflow.js 同法
   // 拼上 API 基址。少了这一步，相对地址过不了 http 判定，「下载」会被悄悄改成切面板。
+  // 自家端点统一改走源站直连（Cloudflare 会忽略 Range、把大文件截断）。
   function absolute(url) {
     const s = String(url || "");
-    if (/^https?:\/\//i.test(s)) return s;
-    const base = (window.HTWApi && window.HTWApi.base) || "";
-    if (!base) return s;
-    try { return new URL(s, base).href; } catch (e) { return s; }
+    let full = s;
+    if (!/^https?:\/\//i.test(s)) {
+      const base = (window.HTWApi && window.HTWApi.base) || "";
+      if (base) {
+        try { full = new URL(s, base).href; } catch (e) { full = s; }
+      }
+    }
+    if (window.HTWApi && typeof window.HTWApi.preferDirectUrl === "function") {
+      return window.HTWApi.preferDirectUrl(full);
+    }
+    return full;
   }
 
   function openExternal(url) {
@@ -82,6 +90,20 @@
     return "已完成";
   }
 
+  // workflow 的 step 存的是服务端 stage 词（package / awaiting-publish…），直接
+  // 显示就是英文。中文词表只应有一份，放在 Skills.workflow 里；这里按需取，
+  // 模块缺席（单测/加载顺序）时退回原词，宁可英文也不丢信息。
+  function stepText(t) {
+    if (t.domain === "workflow" && t.step) {
+      const wf = (typeof window !== "undefined" && window.Skills && window.Skills.workflow) || null;
+      const st = wf && wf._internal && typeof wf._internal.stage === "function"
+        ? wf._internal.stage(t.step)
+        : null;
+      if (st && st.text && st.text !== t.step) return st.text;
+    }
+    return t.step;
+  }
+
   function row(t) {
     const node = UI.el("div", { class: "card tk-row" });
 
@@ -100,7 +122,7 @@
         UI.el("div", { class: "tk-bar-fill", style: "width:" + t.progress + "%" }),
       ]));
     }
-    const detail = [t.progress != null ? t.progress + "%" : null, t.step].filter(Boolean).join(" · ");
+    const detail = [t.progress != null ? t.progress + "%" : null, stepText(t)].filter(Boolean).join(" · ");
     if (detail) node.appendChild(UI.el("div", { class: "hintline", text: detail }));
     if (t.error) node.appendChild(UI.el("div", { class: "wf-error", text: String(t.error) }));
 

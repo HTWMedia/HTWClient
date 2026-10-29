@@ -110,6 +110,8 @@ function withDom(opts, fn) {
     htw: { openExternal: (u) => calls.external.push(u) },
     HTWApi: { base: "https://api.example.test" },
   };
+  // 工作流任务的步骤要借 Skills.workflow 的中文词表；缺席时面板必须退回原词。
+  if (o.skills) global.window.Skills = o.skills;
   // noStore 模拟"tasks.js 晚于 skills 加载"：面板必须退化成空状态，
   // 而不是抛出去让 mountSkills() 标成「技能加载失败」。
   const installStore = (list) => {
@@ -324,4 +326,30 @@ test("容器晚到时面板自己能恢复，不能把「尚未就绪」变成�
     assert.ok(ctx.panel.textContent.indexOf("晚到的短剧") >= 0, "容器补上后必须自己渲染出列表");
     assert.strictEqual(ctx.listenerCount, 1, "恢复时要把订阅接上，后续变更才能继续刷新面板");
   });
+});
+
+/* ------------------------------------------------------------------
+ * 工作流任务的步骤：服务端存的是 stage 词（package/awaiting-publish），
+ * 直接显示就是英文。中文词表只在 Skills.workflow 里，面板按需取用。
+ * ------------------------------------------------------------------ */
+
+test("工作流任务的步骤显示中文词表，而不是服务端英文 stage", () => {
+  const wf = require("./workflow.js");
+  const panel = mountIn({
+    skills: { workflow: wf },
+    tasks: [
+      makeTask({ id: "w1", domain: "workflow", panel: "workflow", title: "工作流 · 机票", step: "awaiting-publish" }),
+      makeTask({ id: "w2", domain: "workflow", panel: "workflow", title: "工作流 · 种菜", step: "package" }),
+    ],
+  }).panel;
+  const text = panel.textContent;
+  assert.ok(text.indexOf("待你确认") >= 0, "awaiting-publish 要显示为待你确认");
+  assert.ok(text.indexOf("包装中") >= 0, "package 要显示为包装中");
+  assert.ok(text.indexOf("awaiting-publish") < 0, "不得把服务端词直接露给用户");
+  assert.ok(text.indexOf("package") < 0, "不得把服务端词直接露给用户");
+});
+
+test("工作流任务的步骤：workflow 模块缺席时退回原词，不丢信息", () => {
+  const panel = mount([makeTask({ id: "w3", domain: "workflow", panel: "workflow", title: "工作流 · 裸词", step: "produce" })]);
+  assert.ok(panel.textContent.indexOf("produce") >= 0, "拿不到词表时至少要显示原词");
 });

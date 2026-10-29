@@ -187,6 +187,32 @@ function findByClass(node, cls) {
   return null;
 }
 
+function findByTag(node, tag) {
+  if (node && node.tagName === tag) return node;
+  for (const c of (node && node.children) || []) {
+    const hit = findByTag(c, tag);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+test("ui.showResult: 提示语以媒体扩展名结尾时不当成地址（上传成功提示）", () => {
+  const prev = global.document;
+  global.document = doc;
+  try {
+    const cases = [
+      ["已上传 1 个：/MediaFiles/abc.png", "IMG"],
+      ["上传完成: /MediaFiles/abc.mp4", "VIDEO"],
+    ];
+    for (const [msg, tag] of cases) {
+      const region = makeNode("div");
+      UI.showResult(region, { message: msg });
+      assert.strictEqual(findByTag(region, tag), null, "提示语不应渲染成 " + tag + "：" + msg);
+      assert.ok(findByClass(region, "kv-val"), "应退化成纯文本：" + msg);
+    }
+  } finally { global.document = prev; }
+});
+
 test("ui.fileInput: 渲染拖放区（标题 + 提示 + 隐藏原生 input），accept/multiple 透传", () => {
   const prev = global.document;
   global.document = doc;

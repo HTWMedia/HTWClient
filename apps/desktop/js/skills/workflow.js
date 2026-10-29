@@ -41,6 +41,9 @@
   var POLL_MS = 6000;
   // 上限 30 分钟。超时就停手并指去"历史"看，而不是无限轮询一个可能已经死掉的任务。
   var POLL_LIMIT_MS = 30 * 60 * 1000;
+  // 「待你确认」是停在那里等人的状态，不是流水线在跑：放慢到 30 秒，
+  // 也不设上限（确认动作本身会触发重画，轮询只兜别处改状态的情况）。
+  var AWAIT_POLL_MS = 30000;
 
   // 平台复选框。发布目标与后端 WorkflowPublishConfig.Platforms 对应。
   var PLATFORMS = [
@@ -55,8 +58,8 @@
   // 再分段口播）；article/weitoutiao 跳过出片与包装，服务端直接从 compose 起步
   // （article 会用即梦补封面，weitoutiao 纯文本）。
   var CONTENT_TYPES = [
-    { id: "video", name: "视频成片", tip: "完整链路：AI 出片 → 智能包装 → 文案 → 发布（耗时较长）" },
-    { id: "narration", name: "口播解读", tip: "3-5 分钟时事/财经口播：先出调研简报再逐段口播出片（耗时最长，仅口播画面）" },
+    { id: "video", name: "视频成片", tip: "完整链路：先联网调研再 AI 出片 → 智能包装 → 文案 → 发布（耗时较长）" },
+    { id: "narration", name: "口播解读", tip: "3-5 分钟时事/财经口播：先出调研简报再逐段口播出片；可选数字人形象整片出镜（与视频成片的 AI 画面是两条线）" },
     { id: "article", name: "图文文章", tip: "不出片：AI 写文章并生成封面，直接进入文案与发布" },
     { id: "weitoutiao", name: "微头条", tip: "最轻：纯文本短内容，无封面无成片" },
   ];
@@ -73,6 +76,65 @@
   function isTextContent(s) {
     var v = normalizeContentType(s);
     return v === "article" || v === "weitoutiao";
+  }
+
+  // 视频线的出片模式。Full = 先联网调研再写脚本；Quick = 只靠模型记忆直接写。
+  // 🔴 2026-10-29：Quick 出片的脚本和发布文案（走联网搜索）会出现"同一主题两个故事"
+  // ——实录里成片说"校园专属账户/校园卡"，文案说的是"数字人民币钱包/财政资金追踪"，
+  // 事实层面直接冲突。视频线必须走 Full；图文线不出片，不需要这个字段。
+  function produceMode(ct) {
+    return isTextContent(ct) ? "" : "Full";
+  }
+
+  // ─────────── 数字人（AI 主播） ───────────
+  // 数字人只挂在「口播解读」下，与「视频成片」严格分开：
+  // 视频成片 = AI 画面 + 配音；数字人口播 = 同一个 AI 主播整片出镜（capflow A-roll 通道 need_dh）。
+  // 服务端只认 DigitalHumanId + VoiceType + VoiceResourceId 三件套，缺一条就静默退回无数字人，
+  // 所以这里在提交前必须自己校验齐全，不能把"选了却没生效"留给用户去发现。
+  var DIGITAL_HUMAN_CONTENT_TYPE = "narration";
+  var DH_RENDER_LIMIT = 60;
+
+  function isDigitalHumanApplicable(ct) {
+    return normalizeContentType(ct) === DIGITAL_HUMAN_CONTENT_TYPE;
+  }
+
+  // 目录项可能来自 camelCase（HTWApi 归一化）或 PascalCase（直连原始响应），两种都认。
+  function dhField(obj, camel, pascal) {
+    if (!obj) return "";
+    var v = obj[camel];
+    if (v === undefined || v === null || v === "") v = obj[pascal];
+    return v === undefined || v === null ? "" : String(v).trim();
+  }
+
+  // 目录项 → create 请求的三个数字人字段；缺音色信息返回 null。
+  // 🔴 提交必须用 ResourceId（19 位），不能用 Id（32 位 hex）—— 后者是资源内部 id，
+  // 拿它提交会失败；服务端注释里也是这么写的。
+  function digitalHumanFields(item) {
+    if (!item) return null;
+    var id = dhField(item, "resourceId", "ResourceId");
+    var voiceType = dhField(item, "voiceType", "VoiceType");
+    var voiceRes = dhField(item, "voiceResourceId", "VoiceResourceId");
+    if (!id || !voiceType || !voiceRes) return null;
+    return {
+      DigitalHumanId: id,
+      DigitalHumanVoiceType: voiceType,
+      DigitalHumanVoiceResourceId: voiceRes,
+    };
+  }
+
+  function isVipItem(item) {
+    return !!(item && (item.isVip === true || item.IsVip === true));
+  }
+
+  // 本地筛选：名称搜索 + 只看免费。目录可能有上万个形象，一次全画会卡死面板。
+  function filterDigitalHumans(items, query, freeOnly) {
+    var q = String(query || "").trim().toLowerCase();
+    return (items || []).filter(function (it) {
+      if (!it) return false;
+      if (freeOnly && isVipItem(it)) return false;
+      if (!q) return true;
+      return String(it.name || it.Name || "").toLowerCase().indexOf(q) >= 0;
+    });
   }
 
   // ─────────── 纯函数（导出供单测） ───────────
@@ -107,6 +169,15 @@
     // 后端这几个字段一律是字符串（DB 列是 TEXT），不是对象
     if (typeof s === "object") return s;
     try { return JSON.parse(s); } catch (e) { return null; }
+  }
+
+  // 合规服务的 riskLevel 是英文枚举，直接摆给用户看等于没解释
+  function riskWord(level) {
+    var v = String(level || "").toLowerCase();
+    if (v === "high") return "高";
+    if (v === "medium") return "中";
+    if (v === "low") return "低";
+    return "未知";
   }
 
   // 402/429/503 有专门的业务含义，原样透出会让用户只看到数字。
@@ -145,6 +216,12 @@
       { key: "history", text: "历史" },
     ];
     var tabBtns = {};
+    // 当前页签。轮询的终态分支要靠它判断"重画会不会冲掉用户正在看/在填的东西"。
+    var activeTab = "new";
+    // 「发起工作流」的表单常驻：页签往返不重建，已填的主题、选中的形态与
+    // 平台勾选都保留（此前每次 renderTab 重画，切去历史再回来全被重置）。
+    // 只在单条提交成功后丢弃，下次进来是一张干净的空表单。
+    var newView = null;
     tabDefs.forEach(function (t, i) {
       var b = UI.el("button", { class: "btn wf-tab" + (i === 0 ? " active" : ""), text: t.text });
       tabBtns[t.key] = b;
@@ -167,8 +244,12 @@
         if (t.key === key) tabBtns[t.key].classList.add("active");
         else tabBtns[t.key].classList.remove("active");
       });
+      activeTab = key;
       UI.clear(body);
-      if (key === "new") renderNew(body);
+      if (key === "new") {
+        if (!newView) newView = buildNew();
+        body.appendChild(newView);
+      }
       if (key === "running") renderRunning(body);
       if (key === "history") renderHistory(body);
     }
@@ -194,12 +275,21 @@
 
     // 服务端给的下载地址可能是 CDN 绝对直链，也可能是自家 /api/... 相对路径
     // （包装段产物没有 CDN 直链，只能走自家端点）。相对路径要拼上 API 基址。
+    // 自家端点一律改走源站直连：Cloudflare 会忽略 Range 并在十几 MB 处掐断，
+    // 客户端拿到的是缺 moov 的坏文件（2026-10-29 实测）。
     function absolute(url) {
       var s = String(url || "");
-      if (/^https?:\/\//i.test(s)) return s;
-      var base = (window.HTWApi && window.HTWApi.base) || "";
-      if (!base) return s;
-      try { return new URL(s, base).href; } catch (e) { return s; }
+      var full = s;
+      if (!/^https?:\/\//i.test(s)) {
+        var base = (window.HTWApi && window.HTWApi.base) || "";
+        if (base) {
+          try { full = new URL(s, base).href; } catch (e) { full = s; }
+        }
+      }
+      if (window.HTWApi && typeof window.HTWApi.preferDirectUrl === "function") {
+        return window.HTWApi.preferDirectUrl(full);
+      }
+      return full;
     }
 
     // 下载要交给系统浏览器：CDN 是跨域的，<a download> 会被浏览器忽略；
@@ -211,18 +301,24 @@
     }
 
     // ---------- 发起工作流 ----------
-    function renderNew(root) {
+    function buildNew() {
       var wrap = UI.el("div");
-      root.appendChild(wrap);
 
       var state = {
         auto: false,
         contentType: "video",
         platforms: { douyin: true, xhs: false, bili: false, toutiao: false },
+        digitalHuman: null,
       };
       var topic = UI.el("input", { class: "input", placeholder: "主题 / 话题" });
       var topicBox = UI.el("div");
       var msg = UI.el("div", { class: "wf-hint" });
+      // 空提交留下的校验提示要随输入消失，否则用户填完主题还看着「请先填主题」。
+      function clearHint() {
+        var t = msg.textContent || "";
+        if (t === "请先填主题，或点「让系统选题」" || t === "请先填写至少一个主题（每行一个）") msg.textContent = "";
+      }
+      topic.addEventListener("input", clearHint);
 
       // 口播专属：真人出镜素材（A-roll）。可选 —— 上传到素材池换 materialId 随 create 提交，
       // 服务端把口播稿的 host 段（钩子/观点/收尾）换成这些真人片段当主轨画面，其余段照常配画面。
@@ -237,6 +333,174 @@
         arollHint,
       ]);
       arollCard.style.display = "none";
+
+      // 数字人（AI 主播）：只在「口播解读」出现，与「视频成片」的 AI 画面是两条产品线。
+      // 选中后整片由该形象出镜口播（服务端走 capflow A-roll 通道 need_dh），音色随形象自带；
+      // 与真人出镜素材互斥 —— 服务端优先用真人片段，两者同时给只会白传；
+      // create-batch 没有数字人字段，所以选中数字人时把批量入口收起来。
+      var dh = { items: null, open: false, query: "", freeOnly: true };
+      var dhSelectedBox = UI.el("div");
+      var dhPickerBox = UI.el("div");
+      var dhMsg = UI.el("div", { class: "wf-hint" });
+      var dhCard = UI.el("div", { class: "wf-section" }, [
+        UI.el("h3", { text: "数字人形象（可选）" }),
+        UI.el("div", {
+          class: "wf-hint",
+          text: "口播解读专属：选一个数字人形象，整条片由 AI 主播出镜口播，音色随形象自带。不选则和「视频成片」一样用 AI 画面；选了就不再使用真人出镜素材，且只支持单条启动。",
+        }),
+        dhSelectedBox,
+        dhMsg,
+        dhPickerBox,
+      ]);
+      dhCard.style.display = "none";
+
+      function closeDhPicker() {
+        dh.open = false;
+        UI.clear(dhPickerBox);
+      }
+
+      function renderDh() {
+        var selected = state.digitalHuman;
+        var narration = state.contentType === "narration";
+        UI.clear(dhSelectedBox);
+
+        if (selected) {
+          var cover = selected.coverUrl
+            ? UI.el("img", { class: "wf-dh-cover-sm", src: selected.coverUrl })
+            : UI.el("div", { class: "wf-dh-cover-sm" });
+          var meta = UI.el("div", { class: "wf-dh-selected-meta" }, [
+            UI.el("div", { class: "wf-dh-name", text: selected.name || "数字人" }),
+            UI.el("div", { class: "wf-hint", text: "整条片由该形象出镜口播；音色随形象自带，无需另选。", style: "margin:2px 0 0" }),
+          ]);
+          var change = UI.el("button", { class: "btn btn-ghost", text: "更换形象" });
+          change.addEventListener("click", openDhPicker);
+          var off = UI.el("button", { class: "btn btn-ghost", text: "✕ 不用数字人" });
+          off.addEventListener("click", function () {
+            state.digitalHuman = null;
+            closeDhPicker();
+            dhMsg.textContent = "";
+            renderDh();
+          });
+          dhSelectedBox.appendChild(UI.el("div", { class: "wf-dh-selected" }, [cover, meta, change, off]));
+        } else {
+          var pick = UI.el("button", { class: "btn", text: "选择数字人形象" });
+          pick.addEventListener("click", openDhPicker);
+          dhSelectedBox.appendChild(UI.el("div", { class: "wf-row" }, [
+            pick,
+            UI.el("div", { class: "wf-hint", text: "不选 = 全程 AI 画面（与视频成片一致）。", style: "margin:0" }),
+          ]));
+        }
+
+        // 互斥与批量限制集中在这里：类型切换、选中/清除都会走一次。
+        arollCard.style.display = (narration && !selected) ? "" : "none";
+        // 批量只在「口播解读 + 已选数字人」时收起（其它形态下选中的数字人不会被提交）。
+        if (batchCard) batchCard.style.display = (narration && selected) ? "none" : "";
+      }
+
+      function openDhPicker() {
+        dh.open = true;
+        dhMsg.textContent = "";
+        if (dh.items) { renderDhPicker(); return; }
+        UI.clear(dhPickerBox);
+        dhPickerBox.appendChild(UI.el("div", { class: "wf-hint", text: "加载数字人形象…" }));
+        call("GET", "/api/v2/digital-human/list", null).then(function (r) {
+          if (!dh.open) return;
+          if (!r || !r.ok) {
+            UI.clear(dhPickerBox);
+            dhPickerBox.appendChild(UI.el("div", { class: "wf-hint", text: explain(r) }));
+            return;
+          }
+          var d = r.data || {};
+          var items = d.items || d.Items;
+          dh.items = Array.isArray(items) ? items : [];
+          renderDhPicker();
+        }).catch(function (e) {
+          if (!dh.open) return;
+          UI.clear(dhPickerBox);
+          dhPickerBox.appendChild(UI.el("div", { class: "wf-hint", text: errText(e) }));
+        });
+      }
+
+      function renderDhPicker() {
+        UI.clear(dhPickerBox);
+        var search = UI.el("input", { class: "input", placeholder: "搜索数字人形象名称" });
+        search.value = dh.query;
+        var free = UI.el("input", { type: "checkbox" });
+        free.checked = dh.freeOnly;
+        var close = UI.el("button", { class: "btn btn-ghost", text: "收起" });
+        close.addEventListener("click", closeDhPicker);
+        var grid = UI.el("div", { class: "wf-dh-grid" });
+        var info = UI.el("div", { class: "wf-hint" });
+
+        function renderGrid() {
+          var list = filterDigitalHumans(dh.items || [], dh.query, dh.freeOnly);
+          UI.clear(grid);
+          if (!list.length) {
+            info.textContent = (dh.items && dh.items.length)
+              ? "没有匹配的形象：换个关键词，或取消「只看免费」。"
+              : "目录里没有可用的数字人形象。";
+            return;
+          }
+          var shown = list.slice(0, DH_RENDER_LIMIT);
+          info.textContent = "共 " + list.length + " 个形象"
+            + (list.length > shown.length ? "，已显示前 " + shown.length + " 个，可用搜索缩小范围" : "")
+            + "。VIP 形象需要对应会员权益。";
+          shown.forEach(function (it) {
+            var name = it.name || it.Name || "未命名";
+            var fields = digitalHumanFields(it);
+            var rid = dhField(it, "resourceId", "ResourceId");
+            var active = state.digitalHuman && state.digitalHuman.resourceId === rid;
+            var card = UI.el("button", { class: "btn wf-dh-card" + (active ? " active" : "") }, [
+              (it.coverUrl || it.CoverUrl)
+                ? UI.el("img", { class: "wf-dh-cover", src: it.coverUrl || it.CoverUrl })
+                : UI.el("div", { class: "wf-dh-cover" }),
+              UI.el("span", { class: "wf-dh-name", text: name }),
+              UI.el("span", { class: "wf-dh-meta" }, [
+                isVipItem(it)
+                  ? UI.el("span", { class: "wf-dh-badge", text: "VIP" })
+                  : UI.el("span", { text: "免费" }),
+                UI.el("span", { text: fields ? "自带音色" : "缺少音色" }),
+              ]),
+            ]);
+            card.addEventListener("click", function () {
+              // 缺音色的形象服务端会整条忽略数字人（半生效最难查），这里直接挡掉。
+              if (!fields) {
+                dhMsg.textContent = "该形象缺少音色信息，服务端无法启用数字人，请换一个。";
+                return;
+              }
+              state.digitalHuman = {
+                resourceId: fields.DigitalHumanId,
+                voiceType: fields.DigitalHumanVoiceType,
+                voiceResourceId: fields.DigitalHumanVoiceResourceId,
+                name: name,
+                coverUrl: it.coverUrl || it.CoverUrl || "",
+                isVip: isVipItem(it),
+              };
+              dhMsg.textContent = "";
+              closeDhPicker();
+              renderDh();
+            });
+            grid.appendChild(card);
+          });
+        }
+
+        search.addEventListener("input", function () {
+          dh.query = search.value || "";
+          renderGrid();
+        });
+        free.addEventListener("change", function () {
+          dh.freeOnly = !!free.checked;
+          renderGrid();
+        });
+        dhPickerBox.appendChild(UI.el("div", { class: "wf-row" }, [
+          search,
+          UI.el("label", { class: "wf-plat" }, [free, " 只看免费"]),
+          close,
+        ]));
+        dhPickerBox.appendChild(grid);
+        dhPickerBox.appendChild(info);
+        renderGrid();
+      }
 
       function topicPlaceholder(ct) {
         var v = normalizeContentType(ct);
@@ -259,7 +523,9 @@
           b.classList.add("active");
           typeTip.textContent = t.tip;
           topic.placeholder = topicPlaceholder(t.id);
-          arollCard.style.display = t.id === "narration" ? "" : "none";
+          dhCard.style.display = t.id === "narration" ? "" : "none";
+          if (t.id !== "narration") closeDhPicker();
+          renderDh();
         });
         typeRow.appendChild(b);
       });
@@ -294,6 +560,7 @@
             ]);
             pick.addEventListener("click", function () {
               topic.value = c.title || "";
+              clearHint();
               grid.querySelectorAll(".wf-topic").forEach(function (x) { x.classList.remove("active"); });
               pick.classList.add("active");
             });
@@ -328,10 +595,19 @@
         if (!topicValue && !source) { msg.textContent = "请先填主题，或点「让系统选题」"; return; }
         go.disabled = true;
 
-        // narration 且选了真人素材：先上传素材池换 materialId，再随 create 提交。
+        // 数字人只在口播解读生效；视频成片/图文线一律不带（视频成片必须走 AI 画面线）。
+        var dhFields = isDigitalHumanApplicable(state.contentType)
+          ? digitalHumanFields(state.digitalHuman) : null;
+        if (isDigitalHumanApplicable(state.contentType) && state.digitalHuman && !dhFields) {
+          go.disabled = false;
+          msg.textContent = "所选数字人缺少音色信息，请重新选择形象。";
+          return;
+        }
+
+        // narration 且选了真人素材（且没选数字人）：先上传素材池换 materialId，再随 create 提交。
         // 上传失败要留在本页报错 —— 素材传不上去不该把整个工作流吞掉。
         var pre = Promise.resolve([]);
-        if (state.contentType === "narration") {
+        if (state.contentType === "narration" && !dhFields) {
           var input = arollInput.input;
           var files = (input.files && input.files.length) ? input.files : [];
           if (files.length) {
@@ -354,13 +630,21 @@
 
         pre.then(function (arollIds) {
           msg.textContent = "提交中…";
-          return call("POST", "/api/v2/workflow/create", {
+          var payload = {
             Topic: topicValue,
             TopicSource: source,
             ContentType: state.contentType,
-            ARollMaterialIds: arollIds || [],
+            Mode: produceMode(state.contentType),
+            // 数字人与真人素材互斥：选了数字人就清空 A-roll，避免两边都传。
+            ARollMaterialIds: dhFields ? [] : (arollIds || []),
             Publish: { Platforms: pickedPlatforms(), AutoPublish: false },
-          });
+          };
+          if (dhFields) {
+            payload.DigitalHumanId = dhFields.DigitalHumanId;
+            payload.DigitalHumanVoiceType = dhFields.DigitalHumanVoiceType;
+            payload.DigitalHumanVoiceResourceId = dhFields.DigitalHumanVoiceResourceId;
+          }
+          return call("POST", "/api/v2/workflow/create", payload);
         }).then(function (r) {
           go.disabled = false;
           // 🔴 错误只能写进 msg 自己：go 按钮与 msg 同属一个 wf-section，把
@@ -371,6 +655,8 @@
           // 判空再调：容器缺席时静默跳过，否则这一行抛出的 TypeError 会被下面的
           // catch 接成一句提交失败，把一次其实已经起成的工作流报成没起来。
           if (window.HTWTasks) window.HTWTasks.track({ domain: "workflow", taskId: workflowId, panel: "workflow", title: "工作流" });
+          // 单条已起成：丢掉这张表单，下次回到发起页是一张新的空表单。
+          newView = null;
           // 直接切到「进行中」看进度，不在这里弹成功提示：切走时该节点会被清掉，写了也看不见。
           renderTab("running");
         }).catch(function (e) {
@@ -383,8 +669,13 @@
         class: "input",
         placeholder: "一行一个主题，可一次跑多条",
       });
+      batchTopics.addEventListener("input", clearHint);
       var batchBtn = UI.el("button", { class: "btn btn-ghost", text: "批量启动" });
       batchBtn.addEventListener("click", function () {
+        if (isDigitalHumanApplicable(state.contentType) && digitalHumanFields(state.digitalHuman)) {
+          msg.textContent = "数字人只支持单条启动：请先清除数字人，或改用「开始工作流」。";
+          return;
+        }
         var topics = (batchTopics.value || "").split(/\r?\n/)
           .map(function (s) { return s.trim(); })
           .filter(function (s) { return s.length; });
@@ -394,6 +685,7 @@
         call("POST", "/api/v2/workflow/create-batch", {
           Topics: topics,
           ContentType: state.contentType,
+          Mode: produceMode(state.contentType),
           Publish: { Platforms: pickedPlatforms(), AutoPublish: false },
         }).then(function (r) {
           batchBtn.disabled = false;
@@ -443,6 +735,7 @@
       ]));
 
       wrap.appendChild(arollCard);
+      wrap.appendChild(dhCard);
 
       wrap.appendChild(UI.el("div", { class: "wf-section" }, [
         UI.el("h3", { text: "选题" }),
@@ -455,12 +748,18 @@
         msg,
       ]));
 
-      wrap.appendChild(UI.el("div", { class: "wf-section" }, [
+      var batchCard = UI.el("div", { class: "wf-section" }, [
         UI.el("h3", { text: "批量" }),
         UI.el("div", { class: "wf-hint", text: "一次跑多条。每条都各自计费、也都各自走完整条链路。" }),
         batchTopics,
         UI.el("div", { class: "wf-row" }, [batchBtn]),
-      ]));
+      ]);
+      wrap.appendChild(batchCard);
+
+      // 初始形态是视频成片：数字人区与真人素材区都收起，批量可用。
+      renderDh();
+
+      return wrap;
     }
 
     // ---------- 进行中 ----------
@@ -477,6 +776,12 @@
     function exitLine(w) {
       var head = "「" + (w.topic || "(无主题)") + "」已结束——" + stage(w.stage).text;
       return head + (w.error ? "：" + w.error : "") + "。成片与详情可到「历史」查看。";
+    }
+
+    // 图文线的 downloadUrl 是封面 JPG（2026-10-29 实测 article 下载的是 .jpg），
+    // 沿用「成片」字样会让人以为文章也生成了视频。
+    function mediaWord(w) {
+      return normalizeContentType(w.contentType) === "article" ? "封面" : "成片";
     }
 
     function renderRunning(root) {
@@ -502,19 +807,23 @@
           return;
         }
         items.forEach(function (w) {
-          wrap.appendChild(wfCard(w, function () { renderRunning(root); }, root));
+          // 重画只在进行中页签发生：异步操作（取消/确认）返回前用户可能已经切走，
+          // 这时把进行中列表画回共用 body 同样是冲掉别人的内容。
+          wrap.appendChild(wfCard(w, function () {
+            if (activeTab === "running") renderRunning(root);
+          }, root));
         });
         // 计时跟着页签内容走：showPanel 只切面板可见性（app.js），body 容器
         // 始终连着文档 —— 所以这套「每条一个计时器」其实一直挂到面板重挂为止，
         // 上面的去重（root._wfTimers）保证同一条至多一份，不会滚增。离开
         // 「进行中」页签时轮询照常在跑反而是对的：那段时间到终态的条目同样
         // 会进 _wfExits（root 同一次挂载内持续存活），切回来能看到原因。
-        items.forEach(function (w) { track(root, w.workflowId); });
+        items.forEach(function (w) { track(root, w.workflowId, w.stage); });
       });
     }
 
     // 轮询一条工作流。终态、超时、或面板已切走时都停手。
-    function track(root, id) {
+    function track(root, id, currentStage) {
       if (!id) return;
       // 🔴 同一条工作流同时只能有一个轮询计时器：一条到终态会触发 renderRunning
       // 重画、给仍在跑的条目重新 track —— 旧计时器不撤的话，每 6 秒会对同一条
@@ -523,9 +832,12 @@
       root._wfTimers = root._wfTimers || {};
       if (root._wfTimers[id]) clearInterval(root._wfTimers[id]);
       var started = Date.now();
+      // 「待你确认」没有流水线在跑，只是等人：慢节奏、不设 30 分钟上限。
+      var resting = currentStage === "awaiting-publish";
+      var every = resting ? AWAIT_POLL_MS : POLL_MS;
       var timer = setInterval(function () {
         if (!root.isConnected) { clearInterval(timer); delete root._wfTimers[id]; return; }
-        if (Date.now() - started > POLL_LIMIT_MS) {
+        if (!resting && Date.now() - started > POLL_LIMIT_MS) {
           clearInterval(timer);
           delete root._wfTimers[id];
           var box = root.querySelector('[data-wf-poll="' + id + '"]');
@@ -540,10 +852,13 @@
             // 先记下「哪条结束了、为什么」再重画：卡片马上要被 isWatching 滤出列表，
             // 不记的话用户看到的就是它凭空消失。
             noteExit(root, r.data || {});
-            renderRunning(root);
+            // 🔴 只在「进行中」页签重画：root 是三个页签共享的 body，后台重画会把
+            // 用户正在填的发起表单、正在看的历史列表整份冲掉（2026-10-29 实测）。
+            // 其它页签下只留 _wfExits，等切回进行中时再一并画出来。
+            if (activeTab === "running") renderRunning(root);
           }
         }).catch(function () { /* 单次失败不终止轮询 */ });
-      }, POLL_MS);
+      }, every);
       root._wfTimers[id] = timer;
     }
 
@@ -571,18 +886,41 @@
 
       if (w.title) kids.push(UI.el("div", { class: "wf-evidence", text: "标题：" + w.title }));
       if (w.error) kids.push(UI.el("div", { class: "wf-error", text: "✕ " + w.error }));
+      // warning 不阻断流程（缩略图没生成、合规发现风险转人工等），但必须让人看到，
+      // 否则"这次其实降级了"只有日志知道。
+      if (w.warning) kids.push(UI.el("div", { class: "wf-hint", text: "⚠ " + w.warning }));
 
       var actions = UI.el("div", { class: "wf-row" });
 
       // 人工确认闸 —— 这是设计上必须的一步，不是可选项
       if (w.stage === "awaiting-publish") {
         var review = UI.el("button", { class: "btn", text: "查看并确认发布" });
+        var opening = false;
         review.addEventListener("click", function () {
-          var panel = showReview(w, refresh);
-          if (panel) {
-            var card = review.closest(".wf-card");
-            if (card) card.appendChild(panel);
-          }
+          var card = review.closest(".wf-card");
+          // 连点会叠出多张一样的复核卡（2026-10-29 实测连点两次出现两张），
+          // 已经开着就不再开第二张。
+          if (opening || (card && card.querySelector(".wf-review"))) return;
+          opening = true;
+          review.disabled = true;
+          // 🔴 复核必须用 status 的完整数据：history 列表项不带
+          // content/tags/compliance/titleCandidates（2026-10-29 实测），
+          // 拿列表项渲染等于让人"盲确认"。
+          call("GET", "/api/v2/workflow/status?workflowId=" + encodeURIComponent(w.workflowId)).then(function (r) {
+            opening = false;
+            review.disabled = false;
+            if (!r || !r.ok) { UI.showError(poll, explain(r)); return; }
+            var full = Object.assign({}, w, r.data || {});
+            // 别处已经处理过（批准/取消）就不再给复核入口，直接刷新到最新状态。
+            if (full.stage && full.stage !== "awaiting-publish") { refresh(); return; }
+            if (card && card.querySelector(".wf-review")) return;
+            var panel = showReview(full, refresh);
+            if (panel && card) card.appendChild(panel);
+          }).catch(function (e) {
+            opening = false;
+            review.disabled = false;
+            UI.showError(poll, errText(e));
+          });
         });
         actions.appendChild(review);
       }
@@ -608,7 +946,7 @@
       // 会把大文件截断，客户端拿到的是缺 moov 的坏文件）。
       // 走系统浏览器打开而不是 <a download> —— CDN 是跨域的，download 属性会被忽略。
       if (w.downloadUrl) {
-        var dl = UI.el("button", { class: "btn btn-ghost", text: "⬇ 下载成片" });
+        var dl = UI.el("button", { class: "btn btn-ghost", text: "⬇ 下载" + mediaWord(w) });
         dl.addEventListener("click", function () { openExternal(absolute(w.downloadUrl)); });
         actions.appendChild(dl);
       }
@@ -642,24 +980,25 @@
         }));
 
         cands.forEach(function (c) {
-          var isCurrent = c.title === picked;
           var row = UI.el("div", {
-            class: "wf-title-cand" + (isCurrent ? " is-current" : ""),
+            class: "wf-title-cand" + (c.title === picked ? " is-current" : ""),
             onclick: function () {
-              // 幂等切换：点已选中的那条会取消选择，回到系统生成的标题
-              var next = isCurrent ? (w.title || "") : c.title;
-              picked = next;
+              // 幂等切换：再点一次已选中的候选就退回系统生成的标题。
+              // 判定必须读**当前**的 picked —— 旧实现用构建时捕获的 isCurrent，
+              // 选中之后再点永远取消不掉（2026-10-29 复查）。
+              picked = (picked === c.title) ? (w.title || "") : c.title;
               Array.prototype.forEach.call(titleBox.querySelectorAll(".wf-title-cand"), function (n) {
-                n.classList.remove("is-current");
+                if (n._title === picked) n.classList.add("is-current");
+                else n.classList.remove("is-current");
               });
-              if (next === c.title) row.classList.add("is-current");
               var line = titleBox.querySelector(".wf-title-picked");
-              if (line) line.textContent = next ? "将使用：" + next : "将使用系统生成的标题";
+              if (line) line.textContent = picked ? "将使用：" + picked : "将使用系统生成的标题";
             },
           }, [
             UI.el("span", { class: "wf-title-cand-text", text: c.title }),
             UI.el("span", { class: "wf-title-cand-score", text: String(c.score == null ? "" : c.score) }),
           ]);
+          row._title = c.title;
           // 分数旁边挂理由：让"为什么它排第一"可见，而不是黑盒分数
           if (Array.isArray(c.reasons) && c.reasons.length) {
             row.title = c.reasons.join("\n");
@@ -681,27 +1020,48 @@
         kids.push(UI.el("div", { class: "wf-tags", text: tags.map(function (t) { return "#" + t; }).join(" ") }));
       }
 
-      var comp = parseJson(w.compliance);
-      if (comp && comp.evaluated) {
+      var comp = parseJson(w.compliance) || {};
+      var judged = !!comp.evaluated;
+      var unsafe = judged && comp.safe === false;
+      if (judged && !unsafe) {
         kids.push(UI.el("div", {
           class: "wf-hint",
-          text: (comp.safe ? "✓ 合规检查通过" : "✕ 合规检查未通过") + (comp.note ? "：" + comp.note : ""),
+          text: "✓ 合规检查通过" + (comp.note ? "：" + comp.note : ""),
         }));
+      } else if (unsafe) {
+        // 🔴 发现风险点不再判死整条工作流（成片+包装已经跑完，重来代价太大）：
+        // 把风险等级和 Issues 原样摆出来，发布按钮改成"已确认风险"的明确动作，
+        // 请求体带 AcknowledgeRisk —— 服务端只接受**判定过**的这类确认。
+        var riskBox = UI.el("div", { class: "wf-error" });
+        riskBox.appendChild(UI.el("div", {
+          text: "✕ 合规检查发现风险（风险等级：" + riskWord(comp.riskLevel) + "）",
+        }));
+        var issues = Array.isArray(comp.issues) ? comp.issues : [];
+        issues.forEach(function (it) {
+          riskBox.appendChild(UI.el("div", { text: "· " + it }));
+        });
+        if (!issues.length && comp.note) riskBox.appendChild(UI.el("div", { text: "· " + comp.note }));
+        kids.push(riskBox);
       } else {
-        kids.push(UI.el("div", { class: "wf-hint", text: "本次没有合规检查结论，请自行确认内容。" }));
+        kids.push(UI.el("div", {
+          class: "wf-hint",
+          text: "本次没有合规检查结论" + (comp.note ? "（" + comp.note + "）" : "")
+            + "，发布前请自行确认内容。",
+        }));
       }
+      if (w.warning) kids.push(UI.el("div", { class: "wf-hint", text: "⚠ " + w.warning }));
 
       var errBox = UI.el("div");
       kids.push(errBox);
 
       // 待确认时成片已经在手上，先看再发是自然动作
       if (w.downloadUrl) {
-        var watch = UI.el("button", { class: "btn btn-ghost", text: "▶ 先看成片" });
+        var watch = UI.el("button", { class: "btn btn-ghost", text: "▶ 先看" + mediaWord(w) });
         watch.addEventListener("click", function () { openExternal(absolute(w.downloadUrl)); });
         kids.push(UI.el("div", { class: "wf-row" }, [watch]));
       }
 
-      var ok = UI.el("button", { class: "btn", text: "确认发布" });
+      var ok = UI.el("button", { class: "btn", text: unsafe ? "我已确认风险，仍然发布" : "确认发布" });
       var back = UI.el("button", { class: "btn btn-ghost", text: "再等等" });
       ok.addEventListener("click", function () {
         ok.disabled = true;
@@ -709,6 +1069,9 @@
         // 带上原标题虽然也合法，但让请求体保持"没改就不传"更干净。
         var approveBody = { WorkflowId: w.workflowId, Stage: "publish" };
         if (picked && picked !== w.title) approveBody.ChosenTitle = picked;
+        // 只有"判定为有风险"才带确认标记；没判定过（evaluated=false）带也没用 ——
+        // 服务端不会把"没查过"当成"用户看过风险了"。
+        if (unsafe) approveBody.AcknowledgeRisk = true;
         call("POST", "/api/v2/workflow/approve", approveBody)
           .then(function (r) {
             ok.disabled = false;
@@ -721,7 +1084,7 @@
       back.addEventListener("click", function () { if (box.parentNode) box.parentNode.removeChild(box); });
       kids.push(UI.el("div", { class: "wf-row" }, [ok, back]));
 
-      box.appendChild.apply(box, kids);
+      box.append.apply(box, kids);
       return box;
     }
 
@@ -777,7 +1140,11 @@
       parseTags: parseTags, parseJson: parseJson, explain: explain, fmtTime: fmtTime,
       PLATFORMS: PLATFORMS, CONTENT_TYPES: CONTENT_TYPES,
       normalizeContentType: normalizeContentType, isTextContent: isTextContent,
-      POLL_MS: POLL_MS, POLL_LIMIT_MS: POLL_LIMIT_MS,
+      produceMode: produceMode,
+      isDigitalHumanApplicable: isDigitalHumanApplicable,
+      digitalHumanFields: digitalHumanFields,
+      filterDigitalHumans: filterDigitalHumans,
+      POLL_MS: POLL_MS, POLL_LIMIT_MS: POLL_LIMIT_MS, AWAIT_POLL_MS: AWAIT_POLL_MS,
     },
   };
 });

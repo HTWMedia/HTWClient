@@ -59,11 +59,15 @@
       const platformEls = {};       // checkbox
       const platformDotEls = {};     // 状态点（cookie 是否有效）
       const cookieHas = {};         // 各平台是否已配置 Cookie
+      const cookieConn = {};        // 各平台登录态是否真的可用（true/false/undefined）
+      const cookieHeadEls = {};     // Cookie 页的平台标题，测试后原地刷新
+      const platWarnEls = {};       // 平台配置区的 Cookie 警告，状态变化时原地刷新
       const cookieMsgs = {};        // 各平台最近一次操作结果（刷新后保留提示）
       const selPlats = [];
 
       // ===== 发布编辑面板 =====
       const pubTitle = UI.el("input", { type: "text", placeholder: "标题", maxlength: "100" });
+      const titleHint = UI.el("div", { class: "hintline" });
       const pubContent = UI.el("textarea", { placeholder: "正文内容（可选）" });
       const tagInput = UI.el("input", { type: "text", placeholder: "输入标签，回车或逗号添加" });
       const tagBox = UI.el("div", { class: "tagbox" });
@@ -96,6 +100,37 @@
         const i = selPlats.indexOf(p);
         if (i >= 0) selPlats.splice(i, 1); else selPlats.push(p);
         renderPlatConfig();
+        updateTitleLimit();
+      }
+
+      // 标题上限来自 platform-config（titleMaxLength）。多平台取最严的一条，
+      // 否则给用户一个"能输入却必然被拒"的标题。maxlength 只挡新输入，
+      // 先选严格平台再改宽不会截断已有文字——所以提交前还要再校验一次。
+      function titleLimits() {
+        return selPlats.map(function (p) {
+          const cfg = platformCfg[p] || {};
+          const lim = Number(cfg.titleMaxLength != null ? cfg.titleMaxLength : cfg.TitleMaxLength) || 0;
+          return { p: p, name: PLAT_NAME[p] || p, limit: lim };
+        }).filter(function (x) { return x.limit > 0; });
+      }
+      function updateTitleLimit() {
+        const lims = titleLimits();
+        const n = pubTitle.value.length;
+        const over = lims.filter(function (x) { return n > x.limit; });
+        if (!lims.length) {
+          pubTitle.maxLength = 100;
+          titleHint.className = "hintline";
+          titleHint.textContent = "选择发布平台后按平台标题上限校验";
+          return;
+        }
+        pubTitle.maxLength = Math.min.apply(null, lims.map(function (x) { return x.limit; }));
+        if (over.length) {
+          titleHint.className = "hintline bad";
+          titleHint.textContent = "当前 " + n + " 字，超出 " + over.map(function (x) { return x.name + "（" + x.limit + "）"; }).join("、") + " 的标题上限";
+        } else {
+          titleHint.className = "hintline";
+          titleHint.textContent = "标题上限： " + lims.map(function (x) { return x.name + " " + x.limit + " 字"; }).join(" · ");
+        }
       }
       function addTag(v) {
         v = (v || "").trim(); if (!v || tags.indexOf(v) >= 0) return;
@@ -109,38 +144,61 @@
           tagBox.appendChild(UI.el("span", { class: "tagchip" }, [UI.el("span", { text: t }), x]));
         });
       }
+      function cookieGoLink() {
+        const go = UI.el("button", { class: "linkbtn", text: "去配置 Cookie" });
+        go.addEventListener("click", function () { switchTab("cookie"); });
+        return go;
+      }
+      // Cookie 状态可能在停留本页期间变化（测试连接/检测全部）。警告节点常驻、
+      // 只改文案与显隐，避免整块重画把用户已选的创作声明/分类清掉。
+      function paintPlatWarn(p) {
+        const ref = platWarnEls[p]; if (!ref) return;
+        let text = "";
+        if (!cookieHas[p]) text = "⚠ 该平台尚未配置 Cookie，发布将失败。";
+        else if (cookieConn[p] === false) text = "⚠ 该平台 Cookie 已失效，发布将失败。";
+        ref.warn.className = "hintline" + (text ? " bad" : "");
+        ref.warn.textContent = text;
+        ref.go.style.display = text ? "" : "none";
+      }
       function renderPlatConfig() {
         UI.clear(platConfigBox);
+        Object.keys(platWarnEls).forEach(function (k) { delete platWarnEls[k]; });
         selPlats.forEach(function (p) {
           const cfg = platformCfg[p]; if (!cfg) return;
-          const kids = [UI.el("strong", { text: (PLAT_NAME[p] || p) + " 配置" })];
-          if (!cookieHas[p]) {
-            const go = UI.el("button", { class: "linkbtn", text: "去配置 Cookie" });
-            go.addEventListener("click", function () { switchTab("cookie"); });
-            kids.push(UI.el("div", { class: "hintline bad", text: "⚠ 该平台尚未配置 Cookie，发布将失败。" }));
-            kids.push(go);
-          }
-          if (cfg.CreativeStatements && cfg.CreativeStatements.length) {
-            const sel = UI.el("select", {}, cfg.CreativeStatements.map(function (c) { return opt(c.Value, c.Label); }));
+          const warn = UI.el("div", { class: "hintline" });
+          const go = cookieGoLink();
+          platWarnEls[p] = { warn: warn, go: go };
+          const kids = [
+            UI.el("strong", { text: (PLAT_NAME[p] || p) + " 配置" }),
+            warn,
+            go,
+          ];
+          // platform-config 返回 camelCase；旧接口曾用 PascalCase，两者都认。
+          const statements = cfg.creativeStatements || cfg.CreativeStatements || [];
+          if (statements.length) {
+            const sel = UI.el("select", {}, statements.map(function (c) { return opt(c.value || c.Value, c.label || c.Label); }));
             sel.id = "cs-" + p;
             kids.push(field("创作声明", sel));
           }
-          if (cfg.HasCategory && cfg.Categories && cfg.Categories.length) {
-            const sel = UI.el("select", {}, cfg.Categories.map(function (c) { return opt(c); }));
+          const categories = cfg.categories || cfg.Categories || [];
+          if ((cfg.hasCategory || cfg.HasCategory) && categories.length) {
+            const sel = UI.el("select", {}, categories.map(function (c) { return opt(c); }));
             sel.id = "cat-" + p;
             kids.push(field("分类", sel));
           }
-          if (cfg.HasSavePermission) {
+          const hasSave = cfg.hasSavePermission != null ? cfg.hasSavePermission : cfg.HasSavePermission;
+          if (hasSave) {
             const sel = UI.el("select", {}, [opt("deny", "不允许保存"), opt("allow", "允许保存")]);
             sel.id = "sp-" + p;
             kids.push(field("保存权限", sel));
           }
           platConfigBox.appendChild(UI.el("div", { class: "subcfg" }, kids));
+          paintPlatWarn(p);
         });
       }
 
       const editCard = section("发布编辑 Publish", [
-        field("标题", pubTitle),
+        field("标题", UI.el("div", {}, [pubTitle, titleHint])),
         field("正文", pubContent),
         UI.el("div", { class: "field" }, [UI.el("label", { text: "标签" }), UI.el("div", {}, [UI.el("div", { class: "row" }, [tagInput, tagGenBtn]), tagBox])]),
         UI.el("div", { class: "field" }, [UI.el("label", { text: "媒体文件" }), UI.el("div", {}, [mediaFile, UI.el("div", { class: "row" }, [mediaUploadBtn]), mediaPrev])]),
@@ -172,7 +230,9 @@
             connBox.appendChild(UI.el("span", { class: "hintline", text: "正在逐个平台真实校验，可能需要十几秒…" }));
             const r = await API.call("GET", "/api/v2/publish/check-connections");
             if (!r.ok) { UI.showError(connBox, formatErr(r)); return; }
-            renderConn(connItems(r.data));
+            const list = connItems(r.data);
+            applyConnections(list);
+            renderConn(list);
           } catch (e) { UI.showError(connBox, "请求异常: " + (e && e.message ? e.message : String(e))); }
         });
       });
@@ -254,11 +314,13 @@
 
       // 加载平台配置 + cookie 状态
       API.call("GET", "/api/v2/publish/platform-config").then(function (r) {
-        if (r.ok && r.data) { platformCfg = r.data; renderPlatConfig(); }
+        if (r.ok && r.data) { platformCfg = r.data; renderPlatConfig(); updateTitleLimit(); }
       }).catch(function () {});
       refreshCookieStatus();
 
       // ===== 事件 =====
+      pubTitle.addEventListener("input", updateTitleLimit);
+      updateTitleLimit();
       tagInput.addEventListener("keydown", function (e) {
         if (e.key === "Enter" || e.key === "," || e.key === "，") { e.preventDefault(); addTag(tagInput.value); }
       });
@@ -330,14 +392,27 @@
         const title = pubTitle.value.trim();
         if (!title) { UI.showError(pubRegion, "请输入标题"); return; }
         if (!selPlats.length) { UI.showError(pubRegion, "请选择至少一个平台"); return; }
+        const tooLong = titleLimits().filter(function (x) { return title.length > x.limit; });
+        if (tooLong.length) {
+          UI.showError(pubRegion, "标题 " + title.length + " 字，超出 " + tooLong.map(function (x) { return x.name + "（上限 " + x.limit + " 字）"; }).join("、") + "，请缩短后再发布");
+          return;
+        }
         const missing = selPlats.filter(function (p) { return !cookieHas[p]; });
         if (missing.length) {
           const names = missing.map(function (p) { return PLAT_NAME[p] || p; }).join("、");
           UI.clear(pubRegion);
-          const go = UI.el("button", { class: "linkbtn", text: "去配置 Cookie" });
-          go.addEventListener("click", function () { switchTab("cookie"); });
           pubRegion.appendChild(UI.el("div", { class: "hintline bad", text: "以下平台尚未配置 Cookie，无法发布：" + names }));
-          pubRegion.appendChild(go);
+          pubRegion.appendChild(cookieGoLink());
+          return;
+        }
+        // 已保存 ≠ 登录态可用。cookie-status/check-connections 说 connected=false 时
+        // 提交必然在平台侧失败，提前拦下并给出入口，而不是留一条注定失败的发布记录。
+        const invalid = selPlats.filter(function (p) { return cookieConn[p] === false; });
+        if (invalid.length) {
+          const names = invalid.map(function (p) { return PLAT_NAME[p] || p; }).join("、");
+          UI.clear(pubRegion);
+          pubRegion.appendChild(UI.el("div", { class: "hintline bad", text: "以下平台 Cookie 已失效，无法发布：" + names + "。请重新登录获取 Cookie，或在 Cookie 页点「测试连接」确认。" }));
+          pubRegion.appendChild(cookieGoLink());
           return;
         }
         const platforms = selPlats.map(function (p) {
@@ -347,6 +422,12 @@
             savePermission: (document.getElementById("sp-" + p) && document.getElementById("sp-" + p).value) || "deny",
           };
         });
+        // 分类在 submit 契约里是顶层字段，平台元数据却按平台给分类列表；
+        // 取第一个选中且渲染了分类的平台值（目前只有 B 站需要）。
+        const category = selPlats.map(function (p) {
+          const el = document.getElementById("cat-" + p);
+          return el ? el.value : "";
+        }).filter(Boolean)[0] || "";
         UI.withLoading(pubBtn, async function () {
           try {
             const up = await API.call("POST", "/api/v2/publish/submit", {
@@ -355,6 +436,7 @@
               tags: tags.slice(),
               mediaUrls: mediaUrls.slice(),
               coverImage: coverUrl,
+              category: category,
               isDraft: false,
               platforms: platforms,
             });
@@ -382,6 +464,11 @@
         cancelled: { t: "已取消", c: "gy" },
       };
       function pubStatus(s) { return PUB_STATUS[s] || { t: s || "未知", c: "gy" }; }
+      // 后端目前给的 postUrl 多数是平台发布/上传页（mp.toutiao.com/.../publish、
+      // member.bilibili.com/.../new-edit），不是作品详情页；叫「查看作品」会误导。
+      function postLinkText(url) {
+        return /(publish|upload|new-edit|creator)/i.test(String(url || "")) ? "打开平台后台" : "查看作品";
+      }
 
       // 任务卡片。以前直接把整个响应塞给 UI.showResult 铺成 KV，
       // 一条任务里嵌套的子任务与长错误信息完全没法看，也没有任何操作入口。
@@ -402,7 +489,7 @@
             UI.el("span", { class: "pb-sub-plat", text: s.platform || s.platformName || "" }),
             UI.el("span", { class: "pb-sub-status", text: sst.t }),
             s.error ? UI.el("span", { class: "pb-sub-err", text: s.error, title: s.error }) : null,
-            s.postUrl ? UI.el("a", { class: "title-link", href: s.postUrl, text: "查看作品" }) : null,
+            s.postUrl ? UI.el("a", { class: "title-link", href: s.postUrl, text: postLinkText(s.postUrl), title: s.postUrl }) : null,
           ]);
           // 只有失败且拿得到子任务 id 才给重试：后端 retry 是按 subTaskId 定位子任务的，
           // 缺了这个字段（老版本接口不返回）按钮就是个必然失败的空壳。
@@ -435,12 +522,16 @@
       }
 
       function refreshQueue() {
+        UI.clear(queueRegion);
+        queueRegion.appendChild(UI.el("div", { class: "hintline", text: "加载中…" }));
         API.call("GET", "/api/v2/publish/queue-status").then(function (r) {
           if (!r.ok) { UI.showError(queueRegion, formatErr(r)); return; }
           renderTaskList(queueRegion, r, "暂无进行中的任务", refreshQueue);
         }).catch(function (e) { UI.showError(queueRegion, "请求异常: " + (e && e.message ? e.message : String(e))); });
       }
       function refreshHistory() {
+        UI.clear(histRegion);
+        histRegion.appendChild(UI.el("div", { class: "hintline", text: "加载中…" }));
         API.call("GET", "/api/v2/publish/history?page=1&pageSize=20").then(function (r) {
           if (!r.ok) { UI.showError(histRegion, formatErr(r)); return; }
           renderTaskList(histRegion, r, "暂无记录", refreshHistory);
@@ -450,11 +541,30 @@
       // ===== Cookie（注意保存后校验有效性）=====
       // 后端 cookie-status 同时给 hasCookie（存过 Cookie）与 connected（登录态真的可用）。
       // 只看 hasCookie 会把「配过但已失效」也画成绿勾，真发布时才被平台拒绝。
-      function cookieState(p) {
-        if (!p.hasCookie) return { cls: "gy", text: "未配置", icon: "⚪" };
-        if (p.connected === true) return { cls: "gn", text: "已连接", icon: "🟢" };
-        if (p.connected === false) return { cls: "rd", text: "Cookie 已失效", icon: "🟠" };
+      function connFlag(v) { return v === true ? true : (v === false ? false : undefined); }
+      function cookieState(platform) {
+        if (!cookieHas[platform]) return { cls: "gy", text: "未配置", icon: "⚪" };
+        if (cookieConn[platform] === true) return { cls: "gn", text: "已连接", icon: "🟢" };
+        if (cookieConn[platform] === false) return { cls: "rd", text: "Cookie 已失效", icon: "🟠" };
         return { cls: "gy", text: "已配置（未校验）", icon: "⚪" };
+      }
+      // 状态点在平台勾选行，标题在 Cookie 页；测试连接后两处都要原地更新，
+      // 不能只刷点不刷标题（否则同屏一边「已失效」一边「连接成功」）。
+      function paintCookie(platform) {
+        const st = cookieState(platform);
+        const dot = platformDotEls[platform];
+        if (dot) { dot.className = "dot " + st.cls; dot.title = st.text; }
+        const head = cookieHeadEls[platform];
+        if (head) head.textContent = st.icon + " " + (PLAT_NAME[platform] || platform) + "（" + st.text + "）";
+      }
+      function applyConnections(list) {
+        list.forEach(function (p) {
+          if (!p.id) return;
+          if (p.connected === true) cookieHas[p.id] = true; // 能连上就必然存过 Cookie
+          cookieConn[p.id] = connFlag(p.connected);
+          paintCookie(p.id);
+          paintPlatWarn(p.id);
+        });
       }
 
       function refreshCookieStatus() {
@@ -463,18 +573,25 @@
           const list = asList(r.data);
           list.forEach(function (p) {
             cookieHas[p.platform] = !!p.hasCookie;
-            const st = cookieState(p);
-            const dot = platformDotEls[p.platform];
-            if (dot) { dot.className = "dot " + st.cls; dot.title = st.text; }
+            cookieConn[p.platform] = connFlag(p.connected);
+            paintCookie(p.platform);
+            paintPlatWarn(p.platform);
           });
-          renderPlatConfig();
         }).catch(function () {});
       }
       function refreshCookie() {
         UI.clear(cookieRegion);
+        Object.keys(cookieHeadEls).forEach(function (k) { delete cookieHeadEls[k]; });
+        cookieRegion.appendChild(UI.el("div", { class: "hintline", text: "加载中…" }));
         API.call("GET", "/api/v2/publish/cookie-status").then(function (r) {
           if (!r.ok) { UI.showError(cookieRegion, formatErr(r)); return; }
           const list = asList(r.data);
+          // 本页自己也维护一份状态：refreshCookie 可能先于 refreshCookieStatus 返回。
+          list.forEach(function (p) {
+            cookieHas[p.platform] = !!p.hasCookie;
+            cookieConn[p.platform] = connFlag(p.connected);
+          });
+          UI.clear(cookieRegion);
           list.forEach(function (p) {
             const hint = COOKIE_HINTS[p.platform] || "从对应平台登录态获取 Cookie";
             const ta = UI.el("textarea", { placeholder: "在此粘贴 Cookie 字符串..." });
@@ -502,27 +619,36 @@
             testBtn.addEventListener("click", function () {
               UI.withLoading(testBtn, async function () {
                 try {
-                  const up = await API.call("POST", "/api/v2/publish/check-cookie", { platform: p.platform });
+                  // check-cookie 只回答“这条 Cookie 看起来有效”，会和真实登录态打架；
+                  // 真要判断能否发布，必须走 check-connections（force 重验）。
+                  // 该端点一次校验所有平台，回填全部状态，避免各平台各说各话。
+                  const up = await API.call("GET", "/api/v2/publish/check-connections");
+                  if (!up.ok) { cookieMsgs[p.platform] = { text: "✗ " + formatErr(up), cls: "hintline bad" }; resLine.textContent = cookieMsgs[p.platform].text; resLine.className = "hintline bad"; return; }
+                  const list = connItems(up.data || {});
+                  applyConnections(list);
+                  const me = list.filter(function (x) { return x.id === p.platform; })[0];
                   let msg, cls;
-                  if (!up.ok) { msg = "✗ " + formatErr(up); cls = "hintline bad"; }
-                  else if (up.data && up.data.hasCookie && up.data.valid) { msg = "✓ 连接成功，Cookie 有效" + (up.data.message ? "（" + up.data.message + "）" : ""); cls = "hintline ok"; }
-                  else if (up.data && up.data.hasCookie && !up.data.valid) { msg = "✗ 连接失败：Cookie 已失效" + (up.data.message ? "（" + up.data.message + "）" : ""); cls = "hintline bad"; }
-                  else { msg = "✗ 未配置 Cookie，无法连接"; cls = "hintline bad"; }
+                  if (!me || me.connected == null) { msg = "⚠ 未能校验连接状态，请稍后重试"; cls = "hintline"; }
+                  else if (me.connected) { msg = "✓ 已连接，登录态可用"; cls = "hintline ok"; }
+                  else { msg = "✗ 未连接：Cookie 已失效，请重新登录获取后保存"; cls = "hintline bad"; }
                   cookieMsgs[p.platform] = { text: msg, cls: cls };
                   resLine.textContent = msg; resLine.className = cls;
-                  refreshCookieStatus();
                 } catch (e) { cookieMsgs[p.platform] = { text: "✗ 请求异常: " + (e && e.message ? e.message : String(e)), cls: "hintline bad" }; resLine.textContent = cookieMsgs[p.platform].text; resLine.className = "hintline bad"; }
               });
             });
             clearBtn.addEventListener("click", function () { ta.value = ""; resLine.textContent = "已清空输入框"; resLine.className = "hintline"; });
+            const st = cookieState(p.platform);
+            const head = UI.el("h4", {}, [st.icon + " " + (PLAT_NAME[p.platform] || p.platform) + "（" + st.text + "）"]);
+            cookieHeadEls[p.platform] = head;
             cookieRegion.appendChild(UI.el("div", { class: "subcfg" }, [
-              UI.el("h4", {}, [cookieState(p).icon + " " + (PLAT_NAME[p.platform] || p.platform) + "（" + cookieState(p).text + "）"]),
+              head,
               UI.el("div", { class: "hintline", text: hint }),
               ta,
               UI.el("div", { class: "row" }, [saveBtn, testBtn, clearBtn]),
               resLine,
             ]));
           });
+          list.forEach(function (p) { paintCookie(p.platform); });
           if (!list.length) cookieRegion.appendChild(UI.el("div", { class: "hintline", text: "暂无平台信息" }));
         }).catch(function (e) { UI.showError(cookieRegion, "请求异常: " + (e && e.message ? e.message : String(e))); });
       }

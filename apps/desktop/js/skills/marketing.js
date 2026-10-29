@@ -303,12 +303,16 @@ Skills.marketing = {
         // 服务端已下发可直接使用的下载链接（带短时效凭证），桌面端直接作为
         // <video> 源与 <a download> 使用，避免用 AuthKey 头取二进制再转 Blob。
         if (url.charAt(0) === "/") url = api.base + url;
+        // 下载链接改走源站直连（Cloudflare 忽略 Range，大文件会被截断）；
+        // 播放保留原地址，第三方 CDN 不受影响。
+        var dlUrl = (window.HTWApi && typeof window.HTWApi.preferDirectUrl === "function")
+          ? window.HTWApi.preferDirectUrl(url) : url;
         resultCard.innerHTML = "";
         resultCard.appendChild(UI.el("div", { class: "result-area-text", text: "视频生成完成" }));
         var video = UI.el("video", { controls: true, style: "width:100%;max-width:480px;border-radius:8px;background:#000" });
         video.src = url;
         resultCard.appendChild(video);
-        resultCard.appendChild(UI.el("a", { class: "btn primary", href: url, download: "market_video.mp4", text: "下载视频" }));
+        resultCard.appendChild(UI.el("a", { class: "btn primary", href: dlUrl, download: "market_video.mp4", text: "下载视频" }));
         resultCard.style.display = "block";
         setErr("");
       } catch (e) {

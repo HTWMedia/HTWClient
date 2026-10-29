@@ -543,6 +543,72 @@ async function withRouting(opts, fn) {
   });
 }
 
+// 下载/预览地址改走源站直连。Cloudflare 会掐断自家 /Download、/MediaFiles，
+// 所以这些地址必须换成直连 IP。边界条件逐条钉住：
+// 只改写**自家 API 源**的地址（相对路径或同源绝对地址），第三方 CDN 与
+// 已是直连的地址一律原样返回；没配直连时整体退化为旧行为。
+async function withDirect(fn) {
+  return withStubWindow(
+    { htw: { apiBase: CLOUD, directBase: DIRECT, registerBase: () => {} } },
+    fn
+  );
+}
+
+test("preferDirectUrl: 相对路径 → 直连源站，保留路径/查询串", async () => {
+  await withDirect(async (A) => {
+    assert.strictEqual(
+      A.preferDirectUrl("/MediaFiles/packaged_x.mp4?token=a%2Bb&t=1"),
+      DIRECT + "/MediaFiles/packaged_x.mp4?token=a%2Bb&t=1"
+    );
+    assert.strictEqual(A.preferDirectUrl("/Download?id=9"), DIRECT + "/Download?id=9");
+  });
+});
+
+test("preferDirectUrl: 同源绝对地址 → 直连源站，保留查询串与锚点", async () => {
+  await withDirect(async (A) => {
+    assert.strictEqual(
+      A.preferDirectUrl(CLOUD + "/MediaFiles/a.mp4?x=1#frag"),
+      DIRECT + "/MediaFiles/a.mp4?x=1#frag"
+    );
+  });
+});
+
+test("preferDirectUrl: 第三方 CDN 不动（换 IP 只会 404）", async () => {
+  await withDirect(async (A) => {
+    const cdn = "https://cdn.example.net/video/abc.mp4?sig=1";
+    assert.strictEqual(A.preferDirectUrl(cdn), cdn);
+  });
+});
+
+test("preferDirectUrl: 已是直连地址原样返回", async () => {
+  await withDirect(async (A) => {
+    const direct = DIRECT + "/Download?id=9";
+    assert.strictEqual(A.preferDirectUrl(direct), direct);
+  });
+});
+
+test("preferDirectUrl: 非 http(s) 与空值原样返回", async () => {
+  await withDirect(async (A) => {
+    assert.strictEqual(A.preferDirectUrl("file:///C:/x.mp4"), "file:///C:/x.mp4");
+    assert.strictEqual(A.preferDirectUrl(""), "");
+    assert.strictEqual(A.preferDirectUrl(null), "");
+    assert.strictEqual(A.preferDirectUrl(undefined), "");
+  });
+});
+
+test("preferDirectUrl: 未配置直连 → 一律原样返回", async () => {
+  await withStubWindow(
+    { htw: { apiBase: CLOUD, directBase: "", registerBase: () => {} } },
+    async (A) => {
+      assert.strictEqual(A.preferDirectUrl("/MediaFiles/x.mp4"), "/MediaFiles/x.mp4");
+      assert.strictEqual(
+        A.preferDirectUrl(CLOUD + "/Download?id=1"),
+        CLOUD + "/Download?id=1"
+      );
+    }
+  );
+});
+
 // 小文件（整包上传用）。
 function smallFile(name) {
   const buf = new ArrayBuffer(8);

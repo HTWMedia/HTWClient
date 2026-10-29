@@ -220,12 +220,20 @@
     }
 
     // status 里的下载地址是带 token 的相对路径（/api/v2/...），拼上 API 基址
+    // 后改走源站直连：Cloudflare 忽略 Range，大文件会在十几 MB 处被截断。
     function absolute(url) {
       var s = String(url || "");
-      if (/^https?:\/\//i.test(s)) return s;
-      var base = (window.HTWApi && window.HTWApi.base) || "";
-      if (!base) return s;
-      try { return new URL(s, base).href; } catch (e) { return s; }
+      var full = s;
+      if (!/^https?:\/\//i.test(s)) {
+        var base = (window.HTWApi && window.HTWApi.base) || "";
+        if (base) {
+          try { full = new URL(s, base).href; } catch (e) { full = s; }
+        }
+      }
+      if (window.HTWApi && typeof window.HTWApi.preferDirectUrl === "function") {
+        return window.HTWApi.preferDirectUrl(full);
+      }
+      return full;
     }
 
     function openExternal(url) {
