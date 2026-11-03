@@ -53,17 +53,17 @@ HTW Media Client 把 **选题 → 创作 → 剪辑 → 发布** 收进同一个
 
 | # | 视频 | 时长 | 看点 |
 |---|---|---|---|
-| 01 | [安装与初始配置](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/01_安装与初始配置.mp4) | 1:59 | AuthKey 配置（**必看**）、本地模式 |
-| 02 | [剪辑 · 视频粗剪](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/02_剪辑-视频粗剪.mp4) | 2:28 | 带口播的长视频 → 自动剪出带配音字幕的成片 |
-| 03 | [剪辑 · 剪同款](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/03_剪辑-剪同款.mp4) | 1:18 | 搜模板 → 换素材 → 云端套模板出片 |
-| 04 | [剪辑 · 智能包装](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/04_剪辑-智能包装.mp4) | 0:53 | 一键加字幕、音效、贴纸 |
-| 05 | [剪辑 · 草稿导出 / 超分 / 解密](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/05_剪辑-草稿导出_超分_解密.mp4) | 1:44 | 剪映草稿渲染成片、画质增强、加密草稿解密 |
-| 06 | [洞察与选题](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/06_洞察与选题.mp4) | 1:00 | 爆款文案拆解、带数据证据的每日选题 |
-| 07 | [工具](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/07_工具.mp4) | 0:49 | 转写、翻译、人声分离、配音、图像生成 |
-| 08 | [批量](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/08_批量.mp4) | 0:51 | 一个模板 × N 条素材 = N 条成片 |
-| 09 | [营销成片与工作流](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/09_营销成片与工作流.mp4) | 0:46 | 电商带货批量出片、全链路自动串接 |
-| 10 | [发布与任务中心](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/10_发布与任务中心.mp4) | 0:56 | 四平台一键分发、任务进度实时推送 |
-| 11 | [短剧 · 助手 · 创作 · 总结](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/11_短剧_助手_创作_总结.mp4) | 1:07 | 剧本 → 分集 → 成片的短剧批量生产 |
+| 01 | [安装与初始配置](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/01-setup.mp4) | 1:59 | AuthKey 配置（**必看**）、本地模式 |
+| 02 | [剪辑 · 视频粗剪](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/02-coarse-cut.mp4) | 2:28 | 带口播的长视频 → 自动剪出带配音字幕的成片 |
+| 03 | [剪辑 · 剪同款](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/03-cutsame.mp4) | 1:18 | 搜模板 → 换素材 → 云端套模板出片 |
+| 04 | [剪辑 · 智能包装](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/04-smart-pack.mp4) | 0:53 | 一键加字幕、音效、贴纸 |
+| 05 | [剪辑 · 草稿导出 / 超分 / 解密](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/05-draft-sr-decrypt.mp4) | 1:44 | 剪映草稿渲染成片、画质增强、加密草稿解密 |
+| 06 | [洞察与选题](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/06-insight-topics.mp4) | 1:00 | 爆款文案拆解、带数据证据的每日选题 |
+| 07 | [工具](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/07-tools.mp4) | 0:49 | 转写、翻译、人声分离、配音、图像生成 |
+| 08 | [批量](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/08-batch.mp4) | 0:51 | 一个模板 × N 条素材 = N 条成片 |
+| 09 | [营销成片与工作流](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/09-marketflow.mp4) | 0:46 | 电商带货批量出片、全链路自动串接 |
+| 10 | [发布与任务中心](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/10-publish-tasks.mp4) | 0:56 | 四平台一键分发、任务进度实时推送 |
+| 11 | [短剧 · 助手 · 创作 · 总结](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/11-shortdrama-assistant.mp4) | 1:07 | 剧本 → 分集 → 成片的短剧批量生产 |
 
 > 🤖 **彩蛋**：这 11 集教程本身就是用仓库内 [guide-videos/](guide-videos/) 的流水线**自动录制**的 —— 项目自带 TTS 配音、CDP 驱动真机逐场景操作、云端等待段自动加速、字幕烧录。想让 Agent 替你干活？先看看它怎么替这个项目干活。
 >

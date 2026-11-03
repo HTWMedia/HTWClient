@@ -4,20 +4,21 @@
 高分辨率窗口纯净画面 + 中文配音 + 烧录字幕；云端渲染等待段已加速并标注。
 
 成片 mp4 以 GitHub Release 附件分发（不入 git），点击直达下载；旁白文案在 [../scripts/](../scripts/)。
+> GitHub Release 资产名仅限 ASCII，下载文件名用英文缩写（与 modules/ 命名对应）；Release 页显示中文标签，对应关系见下表。
 
 | 视频 | 时长 | 文案 |
 |---|---|---|
-| [01_安装与初始配置.mp4](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/01_安装与初始配置.mp4) | 1:59 | [01_安装与初始配置.md](../scripts/01_安装与初始配置.md) |
-| [02_剪辑-视频粗剪.mp4](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/02_剪辑-视频粗剪.mp4) | 2:28 | [02_剪辑-视频粗剪.md](../scripts/02_剪辑-视频粗剪.md) |
-| [03_剪辑-剪同款.mp4](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/03_剪辑-剪同款.mp4) | 1:18 | [03_剪辑-剪同款.md](../scripts/03_剪辑-剪同款.md) |
-| [04_剪辑-智能包装.mp4](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/04_剪辑-智能包装.mp4) | 0:53 | [04_剪辑-智能包装.md](../scripts/04_剪辑-智能包装.md) |
-| [05_剪辑-草稿导出_超分_解密.mp4](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/05_剪辑-草稿导出_超分_解密.mp4) | 1:44 | [05_剪辑-草稿导出_超分_解密.md](../scripts/05_剪辑-草稿导出_超分_解密.md) |
-| [06_洞察与选题.mp4](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/06_洞察与选题.mp4) | 1:00 | [06_洞察与选题.md](../scripts/06_洞察与选题.md) |
-| [07_工具.mp4](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/07_工具.mp4) | 0:49 | [07_工具.md](../scripts/07_工具.md) |
-| [08_批量.mp4](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/08_批量.mp4) | 0:51 | [08_批量.md](../scripts/08_批量.md) |
-| [09_营销成片与工作流.mp4](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/09_营销成片与工作流.mp4) | 0:46 | [09_营销成片与工作流.md](../scripts/09_营销成片与工作流.md) |
-| [10_发布与任务中心.mp4](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/10_发布与任务中心.mp4) | 0:56 | [10_发布与任务中心.md](../scripts/10_发布与任务中心.md) |
-| [11_短剧_助手_创作_总结.mp4](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/11_短剧_助手_创作_总结.mp4) | 1:07 | [11_短剧_助手_创作_总结.md](../scripts/11_短剧_助手_创作_总结.md) |
+| [01 安装与初始配置](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/01-setup.mp4) | 1:59 | [01_安装与初始配置.md](../scripts/01_安装与初始配置.md) |
+| [02 剪辑 · 视频粗剪](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/02-coarse-cut.mp4) | 2:28 | [02_剪辑-视频粗剪.md](../scripts/02_剪辑-视频粗剪.md) |
+| [03 剪辑 · 剪同款](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/03-cutsame.mp4) | 1:18 | [03_剪辑-剪同款.md](../scripts/03_剪辑-剪同款.md) |
+| [04 剪辑 · 智能包装](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/04-smart-pack.mp4) | 0:53 | [04_剪辑-智能包装.md](../scripts/04_剪辑-智能包装.md) |
+| [05 剪辑 · 草稿导出 / 超分 / 解密](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/05-draft-sr-decrypt.mp4) | 1:44 | [05_剪辑-草稿导出_超分_解密.md](../scripts/05_剪辑-草稿导出_超分_解密.md) |
+| [06 洞察与选题](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/06-insight-topics.mp4) | 1:00 | [06_洞察与选题.md](../scripts/06_洞察与选题.md) |
+| [07 工具](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/07-tools.mp4) | 0:49 | [07_工具.md](../scripts/07_工具.md) |
+| [08 批量](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/08-batch.mp4) | 0:51 | [08_批量.md](../scripts/08_批量.md) |
+| [09 营销成片与工作流](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/09-marketflow.mp4) | 0:46 | [09_营销成片与工作流.md](../scripts/09_营销成片与工作流.md) |
+| [10 发布与任务中心](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/10-publish-tasks.mp4) | 0:56 | [10_发布与任务中心.md](../scripts/10_发布与任务中心.md) |
+| [11 短剧 · 助手 · 创作 · 总结](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/11-shortdrama-assistant.mp4) | 1:07 | [11_短剧_助手_创作_总结.md](../scripts/11_短剧_助手_创作_总结.md) |
 
 合计约 14 分钟。
 
