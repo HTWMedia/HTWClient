@@ -26,3 +26,28 @@ Logs/
 docs/review-*.md
 local-web.log
 __pycache__/
+
+# 教程录制工作区（guide-videos）：调试/探针/一次性脚本与中间产物不入库（含真实请求日志与素材，绝不公开）
+guide-videos/_*
+guide-videos/e2e_*
+guide-videos/meta_*.json
+guide-videos/*.png
+guide-videos/*.jpg
+guide-videos/take_*.mp4
+guide-videos/out_test.mp4
+guide-videos/phys_*.py
+guide-videos/probe_*.py
+guide-videos/tts_*.py
+guide-videos/run_all.py
+guide-videos/restart_app.py
+guide-videos/fix05_superres.py
+guide-videos/h05b.py
+guide-videos/hybrid_b2.py
+guide-videos/inspect_batch.py
+guide-videos/tmpl/
+guide-videos/work/
+guide-videos/work_test/
+guide-videos/assets/
+# 成片 mp4 走 GitHub Release 附件分发，不进 git（索引见 out/README.md）
+guide-videos/out/*.mp4
+guide-videos/out/preview/

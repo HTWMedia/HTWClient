@@ -12,7 +12,7 @@ HTW Media Client 把 **选题 → 创作 → 剪辑 → 发布** 收进同一个
   <img src="docs/images/banner.png" width="720" alt="HTW Media Client">
 </p>
 
-[![Version](https://img.shields.io/badge/version-v0.4.0-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
+[![Version](https://img.shields.io/badge/version-v0.5.0-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
 [![Download](https://img.shields.io/badge/download-Windows%20exe-brightgreen.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20desktop%20%7C%20Web%20any-lightgrey.svg)](https://htwmedia.dpdns.org)
 [![Electron](https://img.shields.io/badge/Electron-31-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
@@ -21,7 +21,7 @@ HTW Media Client 把 **选题 → 创作 → 剪辑 → 发布** 收进同一个
 
 简体中文 ｜ [问题反馈](https://github.com/HTWMedia/HTWClient/issues) ｜ [版本发布](https://github.com/HTWMedia/HTWClient/releases) ｜ [在线体验](https://htwmedia.dpdns.org)
 
-**关键词**：AI 短视频 · 多平台一键发布 · 自动剪辑 · 剪同款 · 选题雷达 · 热榜趋势 · 字幕提取 · Agent Skills · Electron 客户端
+**关键词**：AI 短视频 · 多平台一键发布 · 自动剪辑 · 剪同款 · 选题雷达 · 热榜趋势 · 字幕提取 · Agent Skills · Electron 客户端 · 视频教程
 
 </div>
 
@@ -47,6 +47,30 @@ HTW Media Client 把 **选题 → 创作 → 剪辑 → 发布** 收进同一个
 
 ---
 
+## 📺 视频教程（11 集 · 约 14 分钟）
+
+每个功能一集：功能介绍 + 真实操作过程 + 结果展示 + 提示说明，中文配音与烧录字幕，云端渲染等待段已加速并标注。
+
+| # | 视频 | 时长 | 看点 |
+|---|---|---|---|
+| 01 | [安装与初始配置](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/01_安装与初始配置.mp4) | 1:59 | AuthKey 配置（**必看**）、本地模式 |
+| 02 | [剪辑 · 视频粗剪](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/02_剪辑-视频粗剪.mp4) | 2:28 | 带口播的长视频 → 自动剪出带配音字幕的成片 |
+| 03 | [剪辑 · 剪同款](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/03_剪辑-剪同款.mp4) | 1:18 | 搜模板 → 换素材 → 云端套模板出片 |
+| 04 | [剪辑 · 智能包装](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/04_剪辑-智能包装.mp4) | 0:53 | 一键加字幕、音效、贴纸 |
+| 05 | [剪辑 · 草稿导出 / 超分 / 解密](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/05_剪辑-草稿导出_超分_解密.mp4) | 1:44 | 剪映草稿渲染成片、画质增强、加密草稿解密 |
+| 06 | [洞察与选题](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/06_洞察与选题.mp4) | 1:00 | 爆款文案拆解、带数据证据的每日选题 |
+| 07 | [工具](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/07_工具.mp4) | 0:49 | 转写、翻译、人声分离、配音、图像生成 |
+| 08 | [批量](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/08_批量.mp4) | 0:51 | 一个模板 × N 条素材 = N 条成片 |
+| 09 | [营销成片与工作流](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/09_营销成片与工作流.mp4) | 0:46 | 电商带货批量出片、全链路自动串接 |
+| 10 | [发布与任务中心](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/10_发布与任务中心.mp4) | 0:56 | 四平台一键分发、任务进度实时推送 |
+| 11 | [短剧 · 助手 · 创作 · 总结](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/11_短剧_助手_创作_总结.mp4) | 1:07 | 剧本 → 分集 → 成片的短剧批量生产 |
+
+> 🤖 **彩蛋**：这 11 集教程本身就是用仓库内 [guide-videos/](guide-videos/) 的流水线**自动录制**的 —— 项目自带 TTS 配音、CDP 驱动真机逐场景操作、云端等待段自动加速、字幕烧录。想让 Agent 替你干活？先看看它怎么替这个项目干活。
+>
+> 📖 更系统的图文版教程（9 章，功能点 / 步骤 / 效果 / 注意事项）：[guide-videos/out/使用说明.md](guide-videos/out/使用说明.md)。
+
+---
+
 ## 快速开始 🚀
 
 ### 方式一：直接下载（推荐）
@@ -55,8 +79,8 @@ HTW Media Client 把 **选题 → 创作 → 剪辑 → 发布** 收进同一个
 
 | 文件 | 说明 | 直接下载 |
 | --- | --- | --- |
-| `HTW.Media.Setup.0.4.0.exe` | 安装版，带开始菜单快捷方式 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.4.0/HTW.Media.Setup.0.4.0.exe) |
-| `HTW.Media.0.4.0.exe` | 便携版，双击即用，不写注册表 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.4.0/HTW.Media.0.4.0.exe) |
+| `HTW.Media.Setup.0.5.0.exe` | 安装版，带开始菜单快捷方式 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/HTW.Media.Setup.0.5.0.exe) |
+| `HTW.Media.0.5.0.exe` | 便携版，双击即用，不写注册表 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/HTW.Media.0.5.0.exe) |
 
 > 注：打包产物的文件名带空格，GitHub Release 上传后会替换成点号，所以下载链接里是点号形式。
 
@@ -111,17 +135,15 @@ npm start        # 启动工作台
 
 ---
 
-## 🆕 v0.4.0 本次更新
+## 🆕 v0.5.0 本次更新
 
 | 模块 | 更新内容 |
 | --- | --- |
-| ✂️ **剪同款** | 新增 **剪同款**：搜剪映官方模板 → 选中 → 上传自己的素材 → 云端套模板渲染出片；模板卡片显示片段数 / 时长 / 使用量，付费或未解锁的置灰 |
-| 🎭 短剧创作 | 新增 **动态镜头**：可为前 1–3 个钩子镜头生成真实动态画面，其余镜头保持静态图 + 运镜；未配置时自动回退，不影响出片 |
-| 📝 字幕提取 | 新增 **引擎切换**（Kimi / OCR）；上游凭据或额度出问题时给出具体原因，不再笼统提示「检查凭据」 |
-| 📈 洞察 Analysis | 实时热榜触发限流时**自动回落**到已采样榜单，并在结果顶部标注采样时间 |
-| ✂️ 剪辑 / 打包 | 大文件分片上传更稳；修复非 80 端口部署时大文件转发失败 |
-| ⏱️ 任务状态 | 修复渲染完成后偶发卡在 100% 不结束的问题（进度回调与终态的竞态） |
-| 🔧 接口健壮性 | 多处参数绑定修复、上游错误文案人话化，排查问题时少走弯路 |
+| ⏱️ **任务中心** | 新增任务中心面板：所有面板的创作任务统一登记、按域聚合，展示真实进度百分比与终态（绿 / 红 / 灰） |
+| 📡 **进度推送** | 长任务进度经 SSE 实时推送更新，断线自动恢复并重新挂接已有记录，不再靠轮询空转 |
+| 🧭 会话与批量 | 同域任务复用同一会话，避免一个任务被拆成多条；批量任务统一登记，不留「永远进行中」的僵尸记录 |
+| ✋ 审批等待 | 等待用户确认的任务不再空转轮询，状态变化即时更新提示 |
+| 🔧 修复 | 启动时服务端不可达不再停在「没有任务记录」；推送恢复后正确清除「状态未确认」标记并渲染终态分组 |
 
 ---
 
@@ -196,6 +218,7 @@ node htw-skills.mjs call insight --hot --dry-run
 ├─ agent/               # Agent Skills + Node CLI（可被 npx / AI Agent 调用）
 │  ├─ skills/           # htw-media-{insight,create,publish,tools,edit,marketing,shortdrama}
 │  └─ cli/
+├─ guide-videos/        # 教程视频流水线：TTS 配音 → CDP 真机录制 → 加速拼接 → 字幕烧录（成片见 Releases）
 └─ docs/                # 上手指南、选题 PRD、路线图、演示分镜
 ```
 

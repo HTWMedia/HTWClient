@@ -90,3 +90,10 @@ a post about ...".
 - **HTW_API_KEY not set** — the CLI prints setup guidance; export the key first.
 - **fetch failed / ECONNREFUSED** — check network access to
   `https://htwmedia.dpdns.org`.
+
+## Video tutorials
+
+11 short walkthrough videos (~14 min total, Chinese narration) cover every panel:
+[guide-videos/out/README.md](../guide-videos/out/README.md) — videos are served as
+GitHub Release assets; the written guide lives next to it
+([使用说明.md](../guide-videos/out/使用说明.md)).
