@@ -9,16 +9,20 @@
   "use strict";
 
   /*
-   * 批量面板：把服务端 /api/v2/batch 的三种 kind 接到桌面端。
+   * 批量面板：把服务端 /api/v2/batch 的 kind 接到桌面端。
    * 服务端契约见后端 Controllers/Api/V2/BatchController.cs 与 docs 内批量说明：
    *   POST /api/v2/batch/upload            上传素材到素材池 → materialId（24h 有效）
    *   POST /api/v2/batch/market-video      批量营销成片（条目：商品名/卖点/比例/时长/素材）
-   *   POST /api/v2/batch/cut-same          批量剪同款（整批共用 draftPackageUrl，条目差异在素材）
    *   POST /api/v2/batch/smart-package     批量智能包装（条目 = 恰好一个视频素材）
    *   GET  /api/v2/batch/status?batchId=   整批状态（items + summary + packageUrl）
    *   POST /api/v2/batch/cancel            整批取消
    *   POST /api/v2/batch/retry             重提（indexes 或 failedOnly）
    *   GET  /api/v2/batch/download?...      整批 zip 打包（packageUrl 由 status 下发）
+   *
+   * ⚠️ batch/cut-same（批量剪同款）已于 2026-11-06 下线，服务端返回 410。
+   * 原因：它要下载剪映的模板包并替换模板作者的素材，模板/素材版权属于剪映及模板作者，
+   * 站外提供同类服务已有生效判决认定构成不正当竞争（重庆首例案，判赔 20 万）。
+   * 因此 KINDS 里不再保留这一项，模板搜索卡片也随之不再出现。
    *
    * 响应经 HTWApi.normalize 转 camelCase 后读取；请求体用 PascalCase（与工作流面板一致，
    * 服务端 Newtonsoft 大小写不敏感，但同库内保持一种口径）。
@@ -29,7 +33,6 @@
 
   var KINDS = [
     { id: "market-video", name: "营销成片", tip: "每条 = 一个商品。AI 写口播 + 自动剪辑出带货成片。" },
-    { id: "cut-same", name: "剪同款", tip: "整批共用一个模板，N 个视频各套一遍。" },
     { id: "smart-package", name: "智能包装", tip: "给已有视频自动配字幕、贴片与包装。" },
   ];
 

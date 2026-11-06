@@ -2,11 +2,11 @@
 
 # HTW Media
 
-### 不装剪映，把剪映草稿直接渲成片
+### 短视频工作台：选题 → 脚本 → 剪辑 → 四平台发布
 
-草稿目录丢进去，云端渲染，成片回写到同目录。加密草稿自动解密，素材自动上传，可以批量跑。
+一个后端包完「今天发什么 → 发出去没」。桌面端是图形壳，CLI 与 Agent Skills 调的是同一套 `/api/v2/*`。
 
-再往上，同一个后端还包了选题、脚本、剪辑和四平台发布 —— 桌面端是它的图形壳。
+<sub>非官方工具，与字节跳动 / 剪映无从属关系。涉及剪映的部分只处理**你自己**的草稿与账号，不代管他人账号、不下载他人模板，见文末「合规边界」。</sub>
 
 <p align="center">
   <img src="docs/images/banner.png" width="720" alt="HTW Media">
@@ -21,13 +21,13 @@
 
 简体中文 ｜ [English](README_EN.md) ｜ [问题反馈](https://github.com/HTWMedia/HTWClient/issues) ｜ [版本发布](https://github.com/HTWMedia/HTWClient/releases) ｜ [在线体验](https://htwmedia.dpdns.org)
 
-**关键词**：剪映草稿 · CapCut draft · 草稿批量导出成片 · 加密草稿解密 · 云端渲染 · 不装剪映导出视频 · 抖音小红书B站头条一键发布 · AI 短视频工作台
+**关键词**：短视频工作台 · 抖音小红书B站头条一键发布 · AI 选题 · 爆款拆解 · 批量出片 · 剪映草稿工程 · 草稿导出 · Agent Skills
 
 </div>
 
 ---
 
-## 60 秒跑通：草稿 → 成片
+## 60 秒跑通：先看「今天发什么」
 
 ```bash
 git clone --depth 1 https://github.com/HTWMedia/HTWClient
@@ -35,29 +35,32 @@ cd HTWClient
 
 export HTW_API_KEY="你的-key"        # PowerShell: $env:HTW_API_KEY="你的-key"
 
-node agent/cli/htw-skills.mjs draft "C:\Users\你\AppData\Local\JianyingPro\User Data\Projects\com.lveditor.draft\我的草稿"
+node agent/cli/htw-skills.mjs call topics --daily
 ```
 
-```
-打包草稿目录 → htw-draft-1793973908448.zip …
-  已打包 12 个文件 (86.4 MB)
-上传中: htw-draft-1793973908448.zip (86.4 MB) …
-已提交，taskId=7655554647196713003
-  任务状态: running 42%
-  任务状态: completed 100%
-下载成片 …
-完成: 我的草稿-成片-20261106220513.mp4 (18.2 MB)
-```
+不用配任何平台账号就能跑：
 
-- 传**目录**会自动打包（含素材、保留子目录），也可以直接传已打好的 `.zip`；
-- 草稿路径不用猜：剪映里右键草稿 →「打开草稿文件夹」，就是它；
-- 加密草稿（剪映 5.9 之后默认加密）服务端自动解，不用先处理；
-- 其他参数：`--out <目录>` 指定输出位置 · `--no-wait` 只提交不等待 · `--json` 输出机器可读结果。
-
-**退出码**可以直接进脚本：`0` 成功 · `1` 渲染失败 · `2` 参数/路径错误 · `3` 未设置 key · `4` 额度用完。
+- 每条选题带**数据证据**（对标账号近期的高播放内容、热榜走势），不是拍脑袋的标题；
+- 采纳后直接进创作，脚本 / 图文 / 文章三种形态都能出；
+- `--json` 输出机器可读结果，方便接进自己的流程。
 
 > 需要 AuthKey：到 [HTW 媒体平台](https://htwmedia.dpdns.org) 注册后在「设置」里创建。
 > 免费档每月 **60 分钟**渲染时长，按月重置；额度只在真正出片时扣，失败不扣。
+
+### 进阶：把自己剪的草稿工程渲成片
+
+```bash
+node agent/cli/htw-skills.mjs draft "<草稿目录>"
+```
+
+传**目录**会自动打包（含素材、保留子目录），也可以直接传已打好的 `.zip`；成片回写到同目录。
+草稿路径不用猜：剪映里右键草稿 →「打开草稿文件夹」，就是它。
+
+- 这是**进阶用法**，对象是你自己机器上、你自己剪的工程。服务端需要配置一个剪映账号，渲染走该账号的云端权益；
+- **它不是绕过剪映会员的途径**：没有该账号的权益，需要会员的功能照样渲不出来；
+- 加密草稿（5.9 之后默认加密）服务端读得出来，不用先处理；
+- 参数：`--out <目录>` 指定输出位置 · `--no-wait` 只提交不等待 · `--json` 输出 JSON。
+  退出码：`0` 成功 · `1` 渲染失败 · `2` 参数/路径错误 · `3` 未设置 key · `4` 额度用完。
 
 ---
 
@@ -78,13 +81,13 @@ node agent/cli/htw-skills.mjs draft "C:\Users\你\AppData\Local\JianyingPro\User
 
 ---
 
-## 只有这里才有的三件事
+## 三个入口，同一个后端
 
-1. **剪映草稿 → 成片，不依赖本机剪映。** 服务端把草稿和素材传到剪映云端渲染，再回传成片。加密草稿、素材缺失、并发排队都替你处理掉。同类工具大多只做到「生成草稿」，到成片这一公里要么手动导出，要么装剪映。
+1. **一条流水线串起来。** 选题 → 脚本 → 剪辑 → 发布，四段各自能单独用，也能一次跑完；产物在后端直接传给下一步，不用在四个工具之间搬文件。桌面端、CLI、Agent Skills 用的是同一套接口。
 2. **渲完直接发四个平台。** 抖音 · 小红书 · B站 · 今日头条，一次提交，发布前跑合规检测，失败可单独重试。
 3. **同一套能力以 Agent Skills 开放。** `agent/skills/` 可装进 Claude Code / Cursor，让 AI 助手自己编排「查热点 → 写脚本 → 出片 → 发布」。
 
-> 姊妹项目 [HDraft](https://github.com/HTWMedia/JyDraft) 是这条渲染链路的纯 CLI 版（多草稿并发、断点续传）；本仓库的 `draft` 命令是它的单条版，共用同一个后端。
+> 姊妹项目 [HDraft](https://github.com/HTWMedia/JyDraft) 是草稿渲染的纯 CLI 版（多草稿并发、断点续传），定位更单一。
 
 ---
 
@@ -92,7 +95,7 @@ node agent/cli/htw-skills.mjs draft "C:\Users\你\AppData\Local\JianyingPro\User
 
 | 面板 | 输入 → 输出 | 核心能力 | 什么时候用 |
 | --- | --- | --- | --- |
-| ✂️ **剪辑 Edit** | 视频 / 剪映草稿 → 成片或工程 | 草稿导出成片、剪同款（搜模板 → 换素材 → 出片）、粗剪、超分、草稿解密 | 已有素材要加工；或套现成模板快速出片 |
+| ✂️ **剪辑 Edit** | 视频 / 自己的草稿工程 → 成片或工程 | 粗剪、智能包装、超分、草稿导出成片、加密草稿读取 | 已有素材要加工；或把自己的工程渲成片 |
 | 📤 **发布 Publish** | 成片 → 四个平台 | 一次分发到抖音 · 小红书 · B站 · 今日头条；发布前合规检测；AI 生成文案与封面；任务队列 / 历史 / 重试 | 一次搞定四个平台 |
 | 💡 **选题 Topics** | 垂类画像 → 今日选题卡 | 今日选题（带数据证据）、对标雷达、热榜趋势（上升 / 平台 / 过气） | 每天早上决定「今天发什么」 |
 | 📈 **洞察 Analysis** | 文案 / 视频链接 / 账号主页 → 报告 | 文案拆解（标题 · 标签 · 钩子 · 爆款元素）、视频解析（B站 / 小红书 / 抖音）、热榜速览 | 拆解同行爆款，找可复用套路 |
@@ -117,12 +120,11 @@ node agent/cli/htw-skills.mjs draft "C:\Users\你\AppData\Local\JianyingPro\User
 |---|---|---|---|
 | 01 | [安装与初始配置](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/01-setup.mp4) | 1:59 | AuthKey 配置（**必看**）、本地模式 |
 | 02 | [剪辑 · 视频粗剪](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/02-coarse-cut.mp4) | 2:28 | 带口播的长视频 → 自动剪出带配音字幕的成片 |
-| 03 | [剪辑 · 剪同款](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/03-cutsame.mp4) | 1:18 | 搜模板 → 换素材 → 云端套模板出片 |
 | 04 | [剪辑 · 智能包装](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/04-smart-pack.mp4) | 0:53 | 一键加字幕、音效、贴纸 |
-| 05 | [剪辑 · 草稿导出 / 超分 / 解密](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/05-draft-sr-decrypt.mp4) | 1:44 | 剪映草稿渲染成片、画质增强、加密草稿解密 |
+| 05 | [剪辑 · 草稿导出 / 超分](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/05-draft-sr-decrypt.mp4) | 1:44 | 自己的草稿工程渲成片、画质增强 |
 | 06 | [洞察与选题](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/06-insight-topics.mp4) | 1:00 | 爆款文案拆解、带数据证据的每日选题 |
 | 07 | [工具](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/07-tools.mp4) | 0:49 | 转写、翻译、人声分离、配音、图像生成 |
-| 08 | [批量](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/08-batch.mp4) | 0:51 | 一个模板 × N 条素材 = N 条成片 |
+| 08 | [批量](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/08-batch.mp4) | 0:51 | 按商品条目批量出片（营销成片 / 智能包装） |
 | 09 | [营销成片与工作流](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/09-marketflow.mp4) | 0:46 | 电商带货批量出片、全链路自动串接 |
 | 10 | [发布与任务中心](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/10-publish-tasks.mp4) | 0:56 | 四平台一键分发、任务进度实时推送 |
 | 11 | [短剧 · 助手 · 创作 · 总结](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/11-shortdrama-assistant.mp4) | 1:07 | 剧本 → 分集 → 成片的短剧批量生产 |
@@ -224,6 +226,25 @@ node htw-skills.mjs call insight --hot --dry-run
 | 有人看我的内容吗？ | **没有**。转写 / 剪辑 / 发布均由自动化流水线处理，无人工介入 |
 | 会不会跑一半跑路？ | 平台持续运营中；免费档每月 60 分钟额度，按月重置。演进规划公开在[路线图](docs/roadmap.md) |
 | AuthKey 是干什么用的？ | 防流量攻击的准入闸口，不做内容授权、不采集素材 |
+
+---
+
+## 合规边界
+
+这个项目**不是剪映的替代品，也不是绕过剪映付费权益的工具**。为避免误解，把边界写清楚：
+
+**做这些**：处理你自己拍摄、自己剪辑的素材与工程；用你自己的账号发布到各平台。
+
+**不做这些**（部分功能已因此下线）：
+
+| 事项 | 现状 |
+| --- | --- |
+| 下载、套用剪映的模板 / 贴纸 / 特效并对外出片（「剪同款」） | **已于 2026-11-06 下线**。模板与素材的版权属于剪映及其模板作者，站外提供同类服务已有生效判决认定构成不正当竞争 |
+| 多账号轮换以绕开剪映按账号的限流（原「账号池」） | **已移除**。现在固定使用一个账号，撞限流就如实失败，不换号重试 |
+| 提供剪映会员专属功能给非会员 | **不提供**。没有对应权益，需要会员的功能照样渲不出来 |
+
+商标「剪映」「CapCut」归其权利人所有，本项目仅以指示性方式说明兼容的文件格式。
+如果你认为本项目的某项行为越过了边界，请提 issue 或邮件联系，我们会核实并调整。
 
 ---
 

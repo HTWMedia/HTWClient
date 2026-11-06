@@ -364,14 +364,12 @@ function buildCall(feature, o, dry, bare) {
       const f = `-F "width=${o.width || 1708}" -F "height=${o.height || 960}"`;
       return uploadHint(o["super-res"], "/api/v2/edit/super-res", f);
     }
-    // 剪同款两步：先搜模板（只读、不扣额度），再把选中模板的 draftPackageUrl 带回提交。
-    // 先判 search，否则 --cut-same-search 会被 --cut-same 的短路吃掉（同名前缀）。
-    if (o["cut-same-search"]) {
-      return req("GET", `/api/v2/edit/cutsame/search?keyword=${encodeURIComponent(o["cut-same-search"])}&count=${o.count || 20}`);
-    }
-    if (o["cut-same"]) {
-      return uploadHint(o["cut-same"], "/api/v2/edit/cutsame/submit",
-        `-F "draftPackageUrl=${o["template-url"] || ""}"`, "videos");
+    // 剪同款（--cut-same / --cut-same-search）已于 2026-11-06 下线，服务端返回 410：
+    // 它要下载剪映的模板包并替换模板作者的素材，模板/素材版权属于剪映及模板作者，
+    // 站外提供同类服务已有生效判决认定构成不正当竞争。这里保留一句提示而不是直接删选项，
+    // 免得老脚本失败时只看到 410 不知道发生了什么。
+    if (o["cut-same-search"] || o["cut-same"]) {
+      return { success: false, error: "剪同款已下线：模板与素材版权属于剪映及模板作者，本站不再提供。用自己的工程出片请用 --draft-export。" };
     }
     if (o.status) return req("GET", `/api/v2/edit/status/${encodeURIComponent(o.status)}`);
   }

@@ -344,9 +344,10 @@ test("八个面板的 track 调用点都必须先判空容器", () => {
         name + ".js:" + (i + 1) + " 的 track 调用没有判空容器：" + line.trim());
     });
   }
-  // 数量下限：八面板当前共 20 处（tools 9 / edit 3 / workflow 2 / shortdrama 2，
+  // 数量下限：八面板当前共 19 处（tools 9 / edit 2 / workflow 2 / shortdrama 2，
   // 其余各 1）。低于这个数说明有面板被整体删掉了登记点。
-  assert.ok(sites >= 20, "登记点不该少于 20 处，实际 " + sites);
+  // 2026-11-06：edit 从 3 降到 2 —— 剪同款下线，那条 track 调用随之删除。
+  assert.ok(sites >= 19, "登记点不该少于 19 处，实际 " + sites);
 });
 
 test("track：域名字面量不认识时不登记（登记点打错字的最后一道防线）", () => {

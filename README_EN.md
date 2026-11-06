@@ -2,24 +2,24 @@
 
 # HTW Media
 
-### Render a CapCut / JianYing draft to video — without installing CapCut
+### Short-video workbench: topics → script → edit → publish to four platforms
 
-Point it at a draft folder. The server uploads the assets, renders on JianYing's cloud, and writes the video back next to your draft. Encrypted drafts are decrypted automatically. Batch friendly.
+One backend covers "what to post today" through "did it go out". The desktop app is a GUI shell; the CLI and Agent Skills call the same `/api/v2/*` endpoints.
 
-On top of that, the same backend also covers topic research, scripting, editing and one-click publishing to Douyin / Xiaohongshu / Bilibili / Toutiao. The desktop app is a GUI shell over it.
+<sub>Unofficial tool, not affiliated with ByteDance or CapCut/JianYing. Anything involving JianYing only touches **your own** drafts and accounts — no other people's accounts, no third-party template downloads. See "Compliance boundaries" below.</sub>
 
 [![Version](https://img.shields.io/badge/version-v0.5.0-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 [中文](README.md) ｜ [Issues](https://github.com/HTWMedia/HTWClient/issues) ｜ [Releases](https://github.com/HTWMedia/HTWClient/releases) ｜ [Web app](https://htwmedia.dpdns.org)
 
-**Keywords**: CapCut draft export · JianYing 剪映 draft render · encrypted draft decrypt · cloud video rendering · batch draft to video · Douyin Xiaohongshu Bilibili auto publish · AI short-video pipeline
+**Keywords**: short-video workbench · Douyin Xiaohongshu Bilibili Toutiao auto publish · AI topic research · viral post breakdown · batch video production · JianYing draft project · draft export · Agent Skills
 
 </div>
 
 ---
 
-## Draft → video in one command
+## 60 seconds: see what to post today
 
 ```bash
 git clone --depth 1 https://github.com/HTWMedia/HTWClient
@@ -27,32 +27,36 @@ cd HTWClient
 
 export HTW_API_KEY="your-key"        # PowerShell: $env:HTW_API_KEY="your-key"
 
-node agent/cli/htw-skills.mjs draft "/path/to/your/draft-folder"
+node agent/cli/htw-skills.mjs call topics --daily
 ```
 
-```
-打包草稿目录 → htw-draft-1793973908448.zip …
-  已打包 12 个文件 (86.4 MB)
-上传中: htw-draft-1793973908448.zip (86.4 MB) …
-已提交，taskId=7655554647196713003
-  任务状态: running 42%
-  任务状态: completed 100%
-下载成片 …
-完成: 我的草稿-成片-20261106220513.mp4 (18.2 MB)
-```
+Nothing else to configure — no platform accounts needed:
 
-- Pass a **folder** (it gets zipped, assets and subfolders included) or an already-packed `.zip`.
-- Find your draft folder in CapCut: right-click a draft → "Open draft folder". It contains `draft_content.json`.
-- Encrypted drafts (default since JianYing 5.9) are decrypted server-side.
-- Options: `--out <dir>` · `--no-wait` · `--json`. Exit codes: `0` ok, `1` render failed, `2` bad args, `3` missing key, `4` quota exhausted.
+- Every topic comes with **evidence** (recent high-performing posts from accounts you track, hot-list movement), not a made-up headline.
+- Accept one and it flows straight into scripting: short video, image post, or article.
+- `--json` for machine-readable output.
 
 Get a key at <https://htwmedia.dpdns.org> (Settings → create AuthKey). The free tier includes **60 render-minutes per month**, reset monthly; failed tasks are not charged.
 
+### Advanced: render one of your own draft projects
+
+```bash
+node agent/cli/htw-skills.mjs draft "/path/to/your/draft-folder"
+```
+
+Pass a **folder** (it gets zipped, assets and subfolders included) or an already-packed `.zip`; the video is written back next to your draft.
+Find the folder in JianYing: right-click a draft → "Open draft folder".
+
+- This is an **advanced** path, for drafts you cut yourself on your own machine. The server needs one JianYing account configured, and rendering uses that account's cloud entitlement.
+- **It is not a way around a JianYing subscription** — features that require membership still won't render without it.
+- Encrypted drafts (default since JianYing 5.9) are readable server-side; no manual step needed.
+- Options: `--out <dir>` · `--no-wait` · `--json`. Exit codes: `0` ok, `1` render failed, `2` bad args, `3` missing key, `4` quota exhausted.
+
 ---
 
-## Why this instead of the usual draft libraries
+## Why this instead of a pile of separate tools
 
-1. **It finishes the last mile.** Most open-source JianYing/CapCut tooling stops at *generating* `draft_content.json`; you still have to open CapCut and export manually. This renders the draft to an actual MP4 — no CapCut install, no local GPU.
+1. **One pipeline, not four tools.** Topics → script → edit → publish; each stage works alone, and each hands its output to the next inside the backend. Desktop app, CLI and Agent Skills all speak the same API.
 2. **Then publishes.** Douyin, Xiaohongshu, Bilibili, Toutiao in one submit, with a compliance check before publishing and per-platform retry.
 3. **Agent-native.** The same capabilities ship as Agent Skills (`agent/skills/`) so Claude Code / Cursor can orchestrate "research → script → render → publish".
 
@@ -89,6 +93,25 @@ Full CLI reference: [docs/getting-started.md](docs/getting-started.md).
 - Media is used only while a task is running and deleted afterwards.
 - **Platform cookies are uploaded to the server** when you configure publishing — the server posts on your behalf. That is equivalent to handing over your account credentials; only do it if you trust the service, and rotate your passwords afterwards.
 - No human reviews your content; everything runs through automation.
+
+## Compliance boundaries
+
+This project is **not a CapCut/JianYing replacement, and not a way to bypass its paid tiers**. To be explicit:
+
+**We do**: process footage and projects *you* shot and edited; publish through *your* accounts.
+
+**We don't** (some features were removed for this reason):
+
+| Item | Status |
+| --- | --- |
+| Downloading and re-applying JianYing templates / stickers / effects to render videos ("cut same") | **Removed 2026-11-06.** Template and asset copyrights belong to JianYing and their creators; a Chinese court has already ruled that offering an equivalent service constitutes unfair competition |
+| Rotating multiple accounts to get around JianYing's per-account rate limits (the old "account pool") | **Removed.** One account is used; hitting a rate limit fails honestly instead of retrying on another account |
+| Unlocking membership-only features for non-members | **Not offered.** Without the entitlement, membership features still won't render |
+
+The "JianYing" / "CapCut" marks belong to their owners; this project refers to them only to describe the file formats it reads.
+If you believe any behaviour here crosses a line, open an issue — we will verify and adjust.
+
+---
 
 ## License
 

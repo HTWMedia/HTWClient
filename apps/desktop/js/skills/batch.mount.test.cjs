@@ -198,24 +198,16 @@ function apiStub(spec) {
   return stub;
 }
 
-// 走完整「批量剪同款」提交流程：切类型 → 搜模板 → 选模板 → 选 2 个文件 → 点提交
-async function submitCutSame(panel) {
-  const kindBtn = findBtn(panel, /^剪同款$/)[0];
-  assert.ok(kindBtn, "应能找到「剪同款」类型按钮");
+// 走完整「批量智能包装」提交流程：切类型 → 选 2 个文件 → 点提交。
+// 原先是「批量剪同款」（切类型 → 搜模板 → 选模板 → 选文件 → 提交），
+// 该功能 2026-11-06 下线，改用不需要模板的智能包装跑同一条提交链路。
+async function submitBatch(panel) {
+  const kindBtn = findBtn(panel, /^智能包装$/)[0];
+  assert.ok(kindBtn, "应能找到「智能包装」类型按钮");
   kindBtn.dispatch("click"); await settle();
-  const kw = (function findKw() {
-    let hit = null;
-    (function walk(n) { (n.children || []).forEach((c) => { if (c.tagName === "INPUT" && c.placeholder === "模板关键词") hit = c; if (c.querySelectorAll) walk(c); }); })(panel);
-    return hit;
-  })();
-  kw.value = "旅行";
-  findBtn(panel, /搜模板/)[0].dispatch("click"); await settle();
-  const topic = panel.querySelectorAll("wf-topic")[0];
-  assert.ok(topic, "搜索后应出现模板卡片");
-  topic.dispatch("click"); await settle();
   const wraps = [];
   (function walk(n) { (n.children || []).forEach((c) => { if (c.input) wraps.push(c); if (c.querySelectorAll) walk(c); }); })(panel);
-  assert.ok(wraps.length >= 2, "应有商品素材与视频文件两个文件控件");
+  assert.ok(wraps.length >= 1, "应有视频文件控件");
   wraps.forEach((w) => {
     w.input.files = [
       { name: "v1.mp4", arrayBuffer: async () => new ArrayBuffer(8) },
@@ -256,7 +248,7 @@ test("提交失败（ok=false）：错误写入提示区，「提交批次」按
     const api = apiStub({ submit: { ok: false, code: 400, message: "模板地址不合法，请重新选择模板" } });
     const panel = mountPanel();
     global.window.HTWApi = api;
-    await submitCutSame(panel);
+    await submitBatch(panel);
     const go = findBtn(panel, /提交批次/)[0];
     assert.ok(go, "提交失败后「提交批次」按钮应还在页面上（不得整区被清）");
     assert.ok(connectedToRoot(go, panel), "按钮必须仍连接在面板上");
@@ -277,7 +269,7 @@ test("提交成功但全部被拒（accepted=0）：原因摊开在提示区，�
     });
     const panel = mountPanel();
     global.window.HTWApi = api;
-    await submitCutSame(panel);
+    await submitBatch(panel);
     const go = findBtn(panel, /提交批次/)[0];
     assert.ok(go && connectedToRoot(go, panel), "全拒后「提交批次」按钮应还在页面上");
     assert.ok(/批量剪同款需要工作室档位/.test(bodyText(panel)), "被拒原因应对用户可见");
@@ -303,7 +295,7 @@ test("提交成功 accepted>0：切到批次状态页且页签高亮同步，进
     const mock = require("node:test").mock;
     mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
     try {
-      await submitCutSame(panel);
+      await submitBatch(panel);
       assert.ok(tabFor(panel, "批次状态").classList.contains("active"), "切到批次状态页后，该页签应高亮");
       assert.ok(!tabFor(panel, "发起批次").classList.contains("active"), "发起批次页签不应再高亮");
       assert.ok(panel.querySelectorAll("wf-acct").length === 2, "状态页应渲染出 2 个条目行（进度可见）");
@@ -319,7 +311,7 @@ test("提交成功但响应缺批次 ID：留在发起页说明情况，按钮�
     const api = apiStub({ submit: { ok: true, data: { accepted: 2, total: 2, rejected: [] } } });
     const panel = mountPanel();
     global.window.HTWApi = api;
-    await submitCutSame(panel);
+    await submitBatch(panel);
     const go = findBtn(panel, /提交批次/)[0];
     assert.ok(go && connectedToRoot(go, panel), "缺批次 ID 时不该把按钮清掉");
     assert.ok(tabFor(panel, "发起批次").classList.contains("active"), "没有批次 ID 就不该切页出去");
@@ -332,7 +324,7 @@ test("提交成功但响应没有批次信息（ok 无 data）：留在发起页
     const api = apiStub({ submit: { ok: true, data: null } });
     const panel = mountPanel();
     global.window.HTWApi = api;
-    await submitCutSame(panel);
+    await submitBatch(panel);
     const go = findBtn(panel, /提交批次/)[0];
     assert.ok(go && connectedToRoot(go, panel), "响应异常不该把按钮清掉，也不能把成功误报成「已启动 0 条」");
     assert.ok(!/已启动 0 条/.test(bodyText(panel)), "响应异常不得显示「已启动 0 条」的误导文案");
@@ -359,7 +351,7 @@ test("状态查询首查失败：自动重试，成功后进度照常渲染", as
     const mock = require("node:test").mock;
     mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
     try {
-      await submitCutSame(panel);
+      await submitBatch(panel);
       assert.strictEqual(api.statusSeen(), 1, "首查只发一次");
       assert.ok(!panel.querySelectorAll("wf-acct").length, "首查失败时还没有条目行");
       assert.ok(/自动重试/.test(bodyText(panel)), "首查失败应显示自动重试提示，而不是死错误框");
@@ -393,7 +385,7 @@ test("自动重试挂起时手动点「查询」：旧的重试轮次作废，�
     const mock = require("node:test").mock;
     mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
     try {
-      await submitCutSame(panel);
+      await submitBatch(panel);
       assert.ok(/自动重试/.test(bodyText(panel)), "前提：首查失败在等自动重试");
       // 用户不等重试，手动点「查询」
       const atManual = api.calls.length;
@@ -445,7 +437,7 @@ test("轮询不叠加：重查（取消后）后同一状态区仍是单个轮�
     const mock = require("node:test").mock;
     mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
     try {
-      await submitCutSame(panel);
+      await submitBatch(panel);
       mock.timers.tick(2000); // 自动重试 → 成功 → renderBatch → track
       await settle();
       assert.ok(api.statusSeen() === 2, "前提：首查失败 + 重试成功共两次查询");

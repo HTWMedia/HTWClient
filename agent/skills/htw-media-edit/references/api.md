@@ -8,13 +8,11 @@ Base URL: `https://htwmedia.dpdns.org` — headers: `AuthKey: <key>`.
 | POST | `/api/v2/edit/draft-export` | multipart `file` (CapCut draft ZIP, must contain `draft_content.json`) → `{ taskId, warnings }` |
 | POST | `/api/v2/edit/super-res` | multipart `video`, form `width`, `height` → `{ taskId }` |
 | POST | `/api/v2/edit/decrypt` | multipart `file` (.json ≤ 50MB) → `{ isPlain, msg, draft_content }` |
-| GET | `/api/v2/edit/cutsame/search` | query `keyword`, `count` (≤30) → `{ templates: [{ id, name, coverUrl, durationMs, fragmentCount, usageAmount, available, draftPackageUrl }] }` |
-| POST | `/api/v2/edit/cutsame/submit` | multipart `videos` (repeatable, ≤ 20), form `draftPackageUrl` → `{ taskId }` |
+| — | ~~`/api/v2/edit/cutsame/*`~~ | **已下线（2026-11-06）**，返回 410。模板与素材版权属于剪映及模板作者，站外提供同类服务已有生效判决认定构成不正当竞争。 |
 | GET | `/api/v2/edit/status/{taskId}` | path `taskId` → `{ status, phase, progress, currentStep, downloadUrl, outputFile, error }` |
 
-剪同款两步：先 `cutsame/search` 挑模板（只读、不计额度），把选中模板的
-`draftPackageUrl` 原样回传给 `cutsame/submit`。`available = false` 的模板拿不到
-草稿包（付费或未解锁），提交会被拒。素材少于模板片段数时会自动循环复用。
+剪同款已整体下线。要出片请走两条路：`draft-export`（用户自己的草稿工程）
+或 `coarse-cut` / 智能包装（从素材开始）。
 
 Errors: missing/invalid key → HTTP 401; quota exceeded → HTTP 402;
 bad input → HTTP 400; unknown task → HTTP 404. The body is the V2 envelope

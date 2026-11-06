@@ -30,7 +30,7 @@ test("normalize: HTTP non-2xx without envelope", () => {
   assert.strictEqual(r.message, "服务器错误（HTTP 500），请稍后重试");
 });
 
-// 🔴 2026-10-25 教程录制实录：服务端繁忙时段剪同款提交撞 Cloudflare 524，
+// 🔴 2026-10-25 教程录制实录：服务端繁忙时段草稿导出提交撞 Cloudflare 524，
 // 界面只显示「[524] HTTP 524」，用户无从下手 —— 守卫这条：无信封的网关类
 // 状态码必须翻译成可行动的文案，码本身保留在 code 里供排查。
 test("normalize: 网关类状态码翻译成人话（524/503/429）", () => {
@@ -694,9 +694,9 @@ test("选路: upload 命中走本地、未命中走云端", async () => {
 // （2026-10-28 录 03 实录：13.2MB 卡在 2%）。有直连站时整包必须走直连站。
 test("选路: 多文件整包上传走直连站", async () => {
   await withRouting({ endpoints: [] }, async (api, seen) => {
-    await api.upload("POST", "/api/v2/edit/cutsame", [smallFile("a.mp4"), smallFile("b.mp4")], {});
+    await api.upload("POST", "/api/v2/edit/draft-export", [smallFile("a.mp4"), smallFile("b.mp4")], {});
     assert.strictEqual(seen.upload[0].base, DIRECT, "多文件整包上传走直连站");
-    assert.strictEqual(seen.upload[0].path, "/api/v2/edit/cutsame", "路径逐字不变");
+    assert.strictEqual(seen.upload[0].path, "/api/v2/edit/draft-export", "路径逐字不变");
   });
 });
 

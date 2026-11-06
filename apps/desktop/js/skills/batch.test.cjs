@@ -9,9 +9,9 @@ const I = batch._internal;
  * 条目解析错一行、payload 少个字段、部分被拒没摊开 —— 这里逐个钉住。
  */
 
-test("KINDS 与服务端三种批量 kind 对齐", () => {
+test("KINDS 与服务端在用的批量 kind 对齐（剪同款已下线）", () => {
   const ids = I.KINDS.map((k) => k.id);
-  assert.deepStrictEqual(ids, ["market-video", "cut-same", "smart-package"]);
+  assert.deepStrictEqual(ids, ["market-video", "smart-package"]);
 });
 
 test("parseItemLines: 商品名|卖点|折扣 三段齐全", () => {
