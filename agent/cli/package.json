@@ -4,7 +4,7 @@
   "description": "Open Agent Skills pack for the HTW media platform V2 API (insight / create / publish / tools / edit).",
   "type": "module",
   "bin": {
-    "htw-skills": "./bin/htw-skills.mjs"
+    "htw-skills": "./htw-skills.mjs"
   },
   "engines": {
     "node": ">=18"

@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // htw-skills — CLI for the HTW media platform API.
 // Key comes from the HTW_API_KEY environment variable ONLY.
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { closeSync, cpSync, createReadStream, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import http from "node:http";
+import https from "node:https";
 
 const API_BASE = process.env.API_BASE || "https://htwmedia.dpdns.org";
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -48,6 +50,7 @@ function usage() {
     "htw-skills <command> [args]",
     "",
     "Commands:",
+    "  draft <草稿.zip|目录>         剪映草稿 → 云端渲染 → 下载成片（一条命令）",
     "  list                          List the four skills",
     "  guide [feature]               Print the guide for a feature (default: all)",
     "  install [feature]             Copy skills into ~/.agents/skills (+ ~/.claude/skills)",
@@ -56,6 +59,8 @@ function usage() {
     "Features: insight | create | topics | publish | tools | edit | workflow",
     "",
     "Examples:",
+    "  htw-skills draft \"C:\\Users\\me\\AppData\\Local\\JianyingPro\\...\\我的草稿\"",
+    "  htw-skills draft my-draft.zip --out ./out",
     "  htw-skills list",
     "  htw-skills guide insight",
     "  htw-skills install",
@@ -90,11 +95,20 @@ async function callApi(path, { method = "GET", body, form, query = "" } = {}) {
   let json;
   try { json = JSON.parse(text); } catch { json = { success: false, error: text.slice(0, 500) }; }
   if (!res.ok) {
-    return { success: false, error: json.error || json.errMsg || `HTTP ${res.status}`, status: json.errCode || res.status, httpStatus: res.status };
+    return { success: false, error: json.ErrMsg || json.error || json.errMsg || `HTTP ${res.status}`, status: json.ErrCode || json.errCode || res.status, httpStatus: res.status };
   }
-  // V2 envelope uses { ok, errMsg }; V1 uses { success, error }
-  if (json.ok === false || json.success === false) {
-    return { success: false, error: json.errMsg || json.error || "request failed", status: json.errCode || res.status, httpStatus: res.status, raw: json };
+  // 服务端是 Newtonsoft 默认契约 → 信封键是 PascalCase 的 { Ok, Data, ErrCode, TaskId }。
+  // 这里两种写法都认：FailApi 两参（HTTP 200 + ErrCode）只能靠 Ok 字段判别，漏了就会把
+  // 失败当成功返回（CLI 只是 printResult，肉眼很难发现）。
+  const ok = json.Ok !== undefined ? json.Ok : json.ok;
+  if (ok === false || json.success === false) {
+    return {
+      success: false,
+      error: json.ErrMsg || json.errMsg || json.error || "request failed",
+      status: json.ErrCode || json.errCode || res.status,
+      httpStatus: res.status,
+      raw: json,
+    };
   }
   return json;
 }
@@ -375,6 +389,339 @@ function uploadHint(filePath, path, formFields = "", fileField = "file") {
   return UPLOAD_HINT;
 }
 
+// ---------- 草稿 → 成片：一条命令跑完整条链路 ----------
+//
+// 这条路走 /api/v2/edit/draft-export（服务端 DraftExportService：剪映草稿包 → 云端成片）。
+// 之前 edit --draft-export 只会打印一条 curl 提示，等于把"唯一别人做不了的事"关在门外。
+
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c;
+  }
+  return t;
+})();
+
+function crcUpdate(crc, buf) {
+  let c = crc ^ -1;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+
+function dosStamp(d = new Date()) {
+  return {
+    time: (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1),
+    date: ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate(),
+  };
+}
+
+function crcOfFile(p) {
+  return new Promise((res, rej) => {
+    let crc = 0;
+    const rs = createReadStream(p);
+    rs.on("data", (c) => { crc = crcUpdate(crc, c); });
+    rs.on("end", () => res(crc >>> 0));
+    rs.on("error", rej);
+  });
+}
+
+function appendFileBytes(outFd, p) {
+  const inFd = openSync(p, "r");
+  try {
+    const buf = Buffer.allocUnsafe(1024 * 1024);
+    for (;;) {
+      const n = readSync(inFd, buf, 0, buf.length, null);
+      if (n <= 0) break;
+      writeSync(outFd, buf, 0, n);
+    }
+  } finally {
+    closeSync(inFd);
+  }
+}
+
+/**
+ * 把草稿文件夹打成 ZIP（store-only，不压缩）。
+ *
+ * 素材本来就是已压缩的音视频，deflate 收益极低；而 store-only 可以边读边写、
+ * 不需要把几百 MB 素材读进内存。CRC 先扫一遍再写头，是因为 ZIP 的本地头必须
+ * 带 CRC —— 用数据描述符能省这一趟，但 .NET 的 ZipArchive 对它的兼容性不值这趟风险。
+ */
+async function zipFolder(srcDir, zipPath) {
+  const files = [];
+  (function walk(dir) {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const abs = join(dir, e.name);
+      if (e.isDirectory()) walk(abs);
+      else if (e.isFile()) files.push({ abs, rel: relative(srcDir, abs).split(sep).join("/") });
+    }
+  })(srcDir);
+
+  const { time, date } = dosStamp();
+  const outFd = openSync(zipPath, "w");
+  const central = [];
+  let offset = 0;
+  try {
+    for (const f of files) {
+      const st = statSync(f.abs);
+      const nameBuf = Buffer.from(f.rel, "utf8");
+      const crc = await crcOfFile(f.abs);
+      const size = st.size;
+
+      const lh = Buffer.alloc(30);
+      lh.writeUInt32LE(0x04034b50, 0);
+      lh.writeUInt16LE(20, 4);
+      lh.writeUInt16LE(0x0800, 6);
+      lh.writeUInt16LE(0, 8);
+      lh.writeUInt16LE(time, 10);
+      lh.writeUInt16LE(date, 12);
+      lh.writeUInt32LE(crc, 14);
+      lh.writeUInt32LE(size, 18);
+      lh.writeUInt32LE(size, 22);
+      lh.writeUInt16LE(nameBuf.length, 26);
+      lh.writeUInt16LE(0, 28);
+
+      writeSync(outFd, lh);
+      writeSync(outFd, nameBuf);
+      appendFileBytes(outFd, f.abs);
+
+      central.push({ nameBuf, crc, size, offset });
+      offset += 30 + nameBuf.length + size;
+    }
+
+    const cdStart = offset;
+    for (const c of central) {
+      const ch = Buffer.alloc(46);
+      ch.writeUInt32LE(0x02014b50, 0);
+      ch.writeUInt16LE(20, 4);
+      ch.writeUInt16LE(20, 6);
+      ch.writeUInt16LE(0x0800, 8);
+      ch.writeUInt16LE(0, 10);
+      ch.writeUInt16LE(time, 12);
+      ch.writeUInt16LE(date, 14);
+      ch.writeUInt32LE(c.crc, 16);
+      ch.writeUInt32LE(c.size, 20);
+      ch.writeUInt32LE(c.size, 24);
+      ch.writeUInt16LE(c.nameBuf.length, 28);
+      ch.writeUInt16LE(0, 30);
+      ch.writeUInt16LE(0, 32);
+      ch.writeUInt16LE(0, 34);
+      ch.writeUInt16LE(0, 36);
+      ch.writeUInt32LE(0, 38);
+      ch.writeUInt32LE(c.offset, 42);
+      writeSync(outFd, ch);
+      writeSync(outFd, c.nameBuf);
+      offset += 46 + c.nameBuf.length;
+    }
+
+    const cdSize = offset - cdStart;
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0);
+    eocd.writeUInt16LE(0, 4);
+    eocd.writeUInt16LE(0, 6);
+    eocd.writeUInt16LE(central.length, 8);
+    eocd.writeUInt16LE(central.length, 10);
+    eocd.writeUInt32LE(cdSize, 12);
+    eocd.writeUInt32LE(cdStart, 16);
+    eocd.writeUInt16LE(0, 20);
+    writeSync(outFd, eocd);
+  } finally {
+    closeSync(outFd);
+  }
+  return files.length;
+}
+
+function hasDraftContent(dir) {
+  let hit = false;
+  (function walk(d) {
+    if (hit) return;
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (hit) return;
+      const abs = join(d, e.name);
+      if (e.isDirectory()) walk(abs);
+      else if (e.name === "draft_content.json") hit = true;
+    }
+  })(dir);
+  return hit;
+}
+
+function asciiFileName(p) {
+  // Content-Disposition 里放原文名，非 ASCII 在部分反代上会被截断/乱码。
+  // 服务端只用扩展名做校验，稳定的 ASCII 名称更安全。
+  const ext = extname(p) || ".zip";
+  return "draft" + ext.replace(/[^\x20-\x7e]/g, "");
+}
+
+function uploadMultipart(filePath, path, { field = "file", fields = {} } = {}) {
+  return new Promise((resolvePromise, reject) => {
+    const boundary = "----htw" + Math.random().toString(16).slice(2);
+    const size = statSync(filePath).size;
+    let head = "";
+    for (const [k, v] of Object.entries(fields)) {
+      head += `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`;
+    }
+    head += `--${boundary}\r\nContent-Disposition: form-data; name="${field}"; filename="${asciiFileName(filePath)}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
+    const tail = `\r\n--${boundary}--\r\n`;
+
+    const url = new URL(API_BASE + path);
+    const lib = url.protocol === "https:" ? https : http;
+    const req = lib.request(
+      {
+        method: "POST",
+        hostname: url.hostname,
+        port: url.port || (url.protocol === "https:" ? 443 : 80),
+        path: url.pathname + url.search,
+        headers: {
+          AuthKey: key(),
+          "X-App-Source": "HTWClient",
+          "Content-Type": `multipart/form-data; boundary=${boundary}`,
+          "Content-Length": Buffer.byteLength(head) + size + Buffer.byteLength(tail),
+        },
+      },
+      (res) => {
+        let buf = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => { buf += c; });
+        res.on("end", () => {
+          let json;
+          try { json = JSON.parse(buf); } catch { json = { Ok: false, ErrMsg: buf.slice(0, 500) || `HTTP ${res.statusCode}` }; }
+          resolvePromise({ httpStatus: res.statusCode, json });
+        });
+      }
+    );
+    req.on("error", reject);
+    req.write(head);
+    const rs = createReadStream(filePath);
+    rs.on("error", reject);
+    rs.pipe(req, { end: false });
+    rs.on("end", () => req.end(tail));
+  });
+}
+
+const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+
+async function waitForTask(taskId, { quiet = false, intervalMs = 5000, timeoutMs = 45 * 60 * 1000 } = {}) {
+  const t0 = Date.now();
+  let lastShown = "";
+  for (;;) {
+    const r = await callApi(`/api/v2/edit/status/${encodeURIComponent(taskId)}`);
+    if (r.success === false) return { ok: false, error: r.error };
+    const d = r.Data || {};
+    const st = d.status || "";
+    const shown = `${st}${d.progress !== undefined && d.progress !== null ? " " + d.progress + "%" : ""}`;
+    if (!quiet && shown !== lastShown) {
+      console.log(`  任务状态: ${shown}${d.currentStep ? " · " + d.currentStep : ""}`);
+      lastShown = shown;
+    }
+    if (st === "completed") return { ok: true, data: d };
+    if (TERMINAL.has(st)) return { ok: false, error: d.error || `任务${st}`, data: d };
+    if (Date.now() - t0 > timeoutMs) return { ok: false, error: "等待超时，任务可能仍在服务端渲染", data: d };
+    await new Promise((r2) => setTimeout(r2, intervalMs));
+  }
+}
+
+async function downloadTo(url, destPath) {
+  const abs = /^https?:\/\//i.test(url) ? url : API_BASE + (url.startsWith("/") ? url : "/" + url);
+  const res = await fetch(abs);
+  if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  writeFileSync(destPath, buf);
+  return buf.length;
+}
+
+function stamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+async function cmdDraft(args) {
+  const input = args[0] && !args[0].startsWith("--") ? args[0] : "";
+  const o = parseKeyValues(args.slice(1));
+  const quiet = o.json === true;
+  const log = (...a) => { if (!quiet) console.log(...a); };
+
+  if (!input) {
+    console.log("用法: htw-skills draft <草稿.zip | 草稿文件夹> [--out <目录>] [--no-wait] [--json]");
+    process.exitCode = 2;
+    return;
+  }
+  if (!key()) { console.log(noKeyGuide()); process.exitCode = 3; return; }
+
+  const src = resolve(input);
+  if (!existsSync(src)) { console.log(`找不到路径: ${src}`); process.exitCode = 2; return; }
+
+  let zipPath = src;
+  let tempZip = "";
+  const isDir = statSync(src).isDirectory();
+  if (isDir) {
+    if (!hasDraftContent(src)) {
+      console.log(`这个文件夹里没有 draft_content.json，不是剪映草稿目录: ${src}`);
+      console.log("提示：剪映里右键草稿 →「打开草稿文件夹」，填那个目录。");
+      process.exitCode = 2;
+      return;
+    }
+    tempZip = join(tmpdir(), `htw-draft-${Date.now()}.zip`);
+    log(`打包草稿目录 → ${basename(tempZip)} …`);
+    const n = await zipFolder(src, tempZip);
+    log(`  已打包 ${n} 个文件 (${(statSync(tempZip).size / 1048576).toFixed(1)} MB)`);
+    zipPath = tempZip;
+  } else if (extname(src).toLowerCase() !== ".zip") {
+    console.log(`请传 .zip 或草稿文件夹，收到: ${basename(src)}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  try {
+    log(`上传中: ${basename(zipPath)} (${(statSync(zipPath).size / 1048576).toFixed(1)} MB) …`);
+    const up = await uploadMultipart(zipPath, "/api/v2/edit/draft-export");
+    const body = up.json || {};
+    if (body.Ok === false || up.httpStatus >= 400) {
+      const code = body.ErrCode || up.httpStatus;
+      console.log(`提交失败（${code}）: ${body.ErrMsg || "未知错误"}`);
+      if (code === 402) console.log("额度用完，充值页: " + API_BASE + "/Home/Recharge");
+      process.exitCode = code === 402 ? 4 : 1;
+      return;
+    }
+    const taskId = body.TaskId || (body.Data && body.Data.taskId);
+    if (!taskId) { console.log("服务端没返回 taskId: " + JSON.stringify(body).slice(0, 300)); process.exitCode = 1; return; }
+    log(`已提交，taskId=${taskId}`);
+    const warnings = body.Data && body.Data.warnings;
+    if (Array.isArray(warnings) && warnings.length) log(`  警告 ${warnings.length} 条（素材缺失等），仍会继续渲染`);
+
+    if (o["no-wait"] === true) {
+      if (quiet) console.log(JSON.stringify({ taskId }));
+      else console.log(`\n不等待。之后可查: htw-skills call edit --status ${taskId}`);
+      return;
+    }
+
+    const r = await waitForTask(taskId, { quiet });
+    if (!r.ok) {
+      console.log(`\n渲染失败: ${r.error}`);
+      if (r.data && r.data.downloadUrl) console.log("部分产物: " + r.data.downloadUrl);
+      process.exitCode = 1;
+      return;
+    }
+
+    const url = r.data.downloadUrl;
+    if (!url) { console.log("任务完成但没拿到成片地址: " + JSON.stringify(r.data).slice(0, 300)); process.exitCode = 1; return; }
+
+    const outDir = o.out ? resolve(o.out) : dirname(zipPath === tempZip ? src : zipPath);
+    mkdirSync(outDir, { recursive: true });
+    const baseName = isDir ? basename(src) : basename(src, extname(src));
+    const dest = join(outDir, `${baseName}-成片-${stamp()}.mp4`);
+    log("下载成片 …");
+    const bytes = await downloadTo(url, dest);
+    if (quiet) console.log(JSON.stringify({ taskId, file: dest, bytes }));
+    else console.log(`\n完成: ${dest} (${(bytes / 1048576).toFixed(1)} MB)`);
+  } finally {
+    if (tempZip && existsSync(tempZip)) {
+      try { unlinkSync(tempZip); } catch { /* 临时文件删不掉不影响结果 */ }
+    }
+  }
+}
+
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") { console.log(usage()); return; }
@@ -383,6 +730,7 @@ async function main() {
     case "guide": cmdGuide(rest); break;
     case "install": cmdInstall(rest); break;
     case "call": await cmdCall(rest); break;
+    case "draft": await cmdDraft(rest); break;
     default:
       if (!resolveFeature(cmd)) { console.log(`Unknown command: ${cmd}\n`); console.log(usage()); }
       else await cmdCall([cmd, ...rest]);
