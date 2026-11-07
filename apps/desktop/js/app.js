@@ -1114,7 +1114,22 @@
       setLocalPairResult(pairResultWithBase((r && r.message) ? r.message : "配对失败。", localBase));
       return r;
     }
-    setLocalPairResult(pairResultWithBase("配对成功。", localBase));
+    // 配对完成后立刻激活一次本机渲染订阅许可（这是唯一一次为许可发生的联网）。
+    // 激活失败不把配对结果翻成失败：已有未过期许可仍允许离线出片，
+    // 那道判据在本地实例的渲染闸门里，桌面端不越权替它做决定。
+    let licenseNote = "";
+    try {
+      const lr = await api.call("POST", "/api/local/license/refresh", {}, localBase);
+      if (lr && lr.ok === true && lr.data && lr.data.valid === true) {
+        licenseNote = " 订阅许可已激活。";
+      } else {
+        const why = (lr && lr.data && lr.data.msg) || (lr && lr.errMsg) || "站方未返回许可";
+        licenseNote = " 订阅许可未激活：" + why + "（已有有效许可仍可离线出片）。";
+      }
+    } catch (e) {
+      licenseNote = " 订阅许可激活请求失败（已有有效许可仍可离线出片）。";
+    }
+    setLocalPairResult(pairResultWithBase("配对成功。" + licenseNote, localBase));
     // 只刷新状态行，不清结果行（刚写进去的成功提示不能被自己抹掉）。
     await probeLocal();
     return r;
