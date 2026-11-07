@@ -6,7 +6,7 @@
 
 One backend covers "what to post today" through "did it go out". The desktop app is a GUI shell; the CLI and Agent Skills call the same `/api/v2/*` endpoints.
 
-<sub>Unofficial tool, not affiliated with ByteDance or CapCut/JianYing. Anything involving JianYing only touches **your own** drafts and accounts — no other people's accounts, no third-party template downloads. See "Compliance boundaries" below.</sub>
+<sub>Unofficial tool, not affiliated with ByteDance or CapCut/JianYing. Anything involving JianYing only touches **your own** drafts and login — the login is supplied by you and used for a single request; no other people's accounts, no third-party template downloads. See "Compliance boundaries" below.</sub>
 
 [![Version](https://img.shields.io/badge/version-v0.5.0-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -38,19 +38,21 @@ Nothing else to configure — no platform accounts needed:
 
 Get a key at <https://htwmedia.dpdns.org> (Settings → create AuthKey). The free tier includes **60 render-minutes per month**, reset monthly; failed tasks are not charged.
 
-### Advanced: render one of your own draft projects
+### Advanced: render one of your own draft projects (cloud render)
 
 ```bash
-node agent/cli/htw-skills.mjs draft "/path/to/your/draft-folder"
+node agent/cli/htw-skills.mjs draft "/path/to/your/draft-folder" --cookie-file ./jy-cookie.txt
 ```
 
 Pass a **folder** (it gets zipped, assets and subfolders included) or an already-packed `.zip`; the video is written back next to your draft.
 Find the folder in JianYing: right-click a draft → "Open draft folder".
 
-- This is an **advanced** path, for drafts you cut yourself on your own machine. The server needs one JianYing account configured, and rendering uses that account's cloud entitlement.
-- **It is not a way around a JianYing subscription** — features that require membership still won't render without it.
-- Encrypted drafts (default since JianYing 5.9) are readable server-side; no manual step needed.
-- Options: `--out <dir>` · `--no-wait` · `--json`. Exit codes: `0` ok, `1` render failed, `2` bad args, `3` missing key, `4` quota exhausted.
+- **Rendering runs in the cloud.** The job is submitted to the platform and billed by finished duration (an exhausted quota returns HTTP 402).
+- **The account is yours.** You must supply your own login (`--cookie` / `--cookie-file` / `HTW_JIANYING_COOKIE`) — the platform keeps no account pool and does not rotate accounts. The login is used for that one request and never stored; the desktop app keeps it **in plaintext** in the local config file `userData/htw-jianying.json` (same folder as your AuthKey) and the "Clear" button deletes it.
+- Pointing at a local instance is still possible with `--local-base`, but it is an optional override, no longer a prerequisite.
+- **It is not a way around a subscription** — features that require membership still won't render without it.
+- Encrypted drafts (default since JianYing 5.9) are readable; no manual step needed.
+- Options: `--out <dir>` · `--no-wait` · `--json`. Exit codes: `0` ok, `1` render failed, `2` bad args, `3` missing key.
 
 ---
 

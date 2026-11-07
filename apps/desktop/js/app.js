@@ -7,8 +7,8 @@
   // 每个功能点的一句话说明：切到该面板时显示在标题下（.panel-desc）。
   // 🔴 新增面板必须在这里补一条——app.panels.test.mjs 有守卫核对（漏了会红）。
   const SKILL_DESCRIPTIONS = {
-    tools: "独立小工具集：语音转写、语音翻译、音频总结、歌词识别、人声分离、文字转语音，选一个即开即用。",
-    insight: "看清内容和账号的表现：视频 / 账号 / 文案分析、热榜与头条素材，帮你决定下一步做什么。",
+    tools: "语音、视频、图片小工具集：转写 / 翻译 / 总结 / 配音、视频生成、字幕提取、模板搜索、图像生成与识别，按 tab 分类即开即用。",
+    insight: "看清内容和账号的表现：视频 / 账号 / 文案分析、各平台热榜与全网搜索，帮你决定下一步做什么。",
     topics: "配置对标账号、关键词与目标受众，系统据此每天给你出选题建议。",
     create: "AI 创作工作台：从选题到图文 / 视频成片，可上传素材、分步开关每道工序。",
     workflow: "把选题、创作、发布串成自动流水线，一次配置按计划跑。",
@@ -1114,22 +1114,10 @@
       setLocalPairResult(pairResultWithBase((r && r.message) ? r.message : "配对失败。", localBase));
       return r;
     }
-    // 配对完成后立刻激活一次本机渲染订阅许可（这是唯一一次为许可发生的联网）。
-    // 激活失败不把配对结果翻成失败：已有未过期许可仍允许离线出片，
-    // 那道判据在本地实例的渲染闸门里，桌面端不越权替它做决定。
-    let licenseNote = "";
-    try {
-      const lr = await api.call("POST", "/api/local/license/refresh", {}, localBase);
-      if (lr && lr.ok === true && lr.data && lr.data.valid === true) {
-        licenseNote = " 订阅许可已激活。";
-      } else {
-        const why = (lr && lr.data && lr.data.msg) || (lr && lr.errMsg) || "站方未返回许可";
-        licenseNote = " 订阅许可未激活：" + why + "（已有有效许可仍可离线出片）。";
-      }
-    } catch (e) {
-      licenseNote = " 订阅许可激活请求失败（已有有效许可仍可离线出片）。";
-    }
-    setLocalPairResult(pairResultWithBase("配对成功。" + licenseNote, localBase));
+    // 配对成功就够，不再额外拉一次许可：2026-11-07 晚间草稿渲染已回退为服务端代跑，
+    // 本地实例只剩几条常量查询类能力（无额度、无渲染），订阅许可没有要挡的东西了。
+    // 站方仍保留 /api/local/license/* 端点（自建实例想用仍可用），桌面端不再自动激活。
+    setLocalPairResult(pairResultWithBase("配对成功。", localBase));
     // 只刷新状态行，不清结果行（刚写进去的成功提示不能被自己抹掉）。
     await probeLocal();
     return r;

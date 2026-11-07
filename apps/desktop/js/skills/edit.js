@@ -25,11 +25,12 @@
     return r.message || "请求失败";
   }
 
-  // 云端渲染引擎的已知失败码 → 用户能看懂的原因与自助处理建议。
-  // 服务端只回 "Render failed (code=...)"，不翻译的话用户无从下手。
+  // 剪映云渲染的已知失败码 → 用户能看懂的原因与自助处理建议。
+  // 执行端只回 "Render failed (code=...)"，不翻译的话用户无从下手。
+  // 注意这里的「云端」指**剪映自己的渲染服务**（本机实例出站调它），不是本站云端。
   var RENDER_HINTS = [
     [/19070005/, "草稿里可能存在多条视频轨且上层轨道层级（render_index）未高于主轨。"
-      + "剪映桌面端能容忍这种草稿，但云端渲染不允许：请把上层视频轨的相对层级调高后重新导出草稿包"],
+      + "剪映桌面端能容忍这种草稿，但剪映云渲染不接受：请把上层视频轨的相对层级调高后重新导出草稿包"],
   ];
 
   function failureHint(err) {
@@ -40,7 +41,7 @@
     return "";
   }
 
-  // 服务端对草稿包做素材核对后返回 warnings（缺了哪些素材）。原样 JSON 用户看不懂，
+  // 执行端对草稿包做素材核对后返回 warnings（缺了哪些素材）。原样 JSON 用户看不懂，
   // 翻译成「缺什么、有什么后果、怎么办」。缺素材不会导致任务失败，只会让画面缺内容。
   function describeWarnings(warnings) {
     if (!warnings || !warnings.length) return "素材核对通过：草稿引用的素材都已随包上传。";
@@ -50,8 +51,8 @@
       const type = { video: "视频", audio: "音频", image: "图片", font: "字体", effect: "特效", sticker: "贴纸" }[w.Type || w.type] || (w.Type || w.type) || "素材";
       return type + " ×" + (w.Count != null ? w.Count : "?") + "：" + files + more;
     });
-    return "云端缺少以下素材（成片里对应内容会缺失或黑屏）：\n" + lines.join("\n")
-      + "\n如需完整画面，请把素材文件与 draft_content.json 一起打包后重新上传。";
+    return "草稿包里缺少以下素材（成片里对应内容会缺失或黑屏）：\n" + lines.join("\n")
+      + "\n如需完整画面，请把素材文件与 draft_content.json 一起打包后重新导出。";
   }
 
   Skills.edit = {
@@ -102,13 +103,17 @@
         UI.mount(region, progressNode(d.currentStep || "处理中…", pct));
       }
 
-      async function pollEdit(taskId, region) {
+      // statusPrefix：进度查询的路径前缀。默认是云端那三条（粗剪 / 超分 / 智能包装）共用的
+      // /api/v2/edit/status/；草稿导出传 /api/v2/edit/draft-status/ —— 两条路由刻意分开，
+      // 复用它会把仍在云端执行的任务轮询切到本地实例上（那边根本没有这些任务）。
+      async function pollEdit(taskId, region, statusPrefix) {
+        const prefix = statusPrefix || "/api/v2/edit/status/";
         return API.pollTask(taskId, {
           interval: 3000,
           // 智能包装全程 3-8 分钟（视频越长越久），10 分钟的上限会在成片前就超时
           timeout: 1800000,
           fetcher: async function (id) {
-            const r = await API.call("GET", "/api/v2/edit/status/" + encodeURIComponent(id));
+            const r = await API.call("GET", prefix + encodeURIComponent(id));
             if (!r.ok) return r;
             const d = r.data || {};
             if (d.status === "completed") return { ok: true, data: { status: "done", result: d } };
@@ -208,10 +213,110 @@
       const packCard = section("智能包装 Smart-package", [packFile], packBtn, packRegion, "fa-wand-magic-sparkles");
       packCard.appendChild(hint("AI 自动加字幕、音效、贴纸并突出重点内容，直接输出成片，全程约 3-8 分钟；建议时长 30 秒 - 20 分钟、分辨率 1080P 以内，成片 24 小时后自动删除。"));
 
+      // ====== 草稿导出（服务端执行，用调用方自己的登录态）======
+      //
+      // 🔴 2026-11-07 晚回退：渲染恢复由**站点服务端**执行（上一版强制「只在本机执行」，
+      //    本地实例未就绪就直接拒绝，而本地实例已决定不下发，那条判据会把草稿导出对所有人锁死）。
+      //    回退只改「在哪执行」：Cookie 仍是**必填**，站方不代管账号池，按成片时长计费。
+      const DRAFT_PATH = "/api/v2/edit/draft-export";
+      // 进度查询与上面那条成对，且是**独立路由**（/edit/status 仍然只服务云端的
+      // 粗剪 / 超分 / 智能包装）。走错一条的症状是"任务一直在跑、永远查不到"。
+      const DRAFT_STATUS_PREFIX = "/api/v2/edit/draft-status/";
+      // 剪映登录态落盘的槽位名 → userData/htw-jianying.json（与 AuthKey 同一个目录）。
+      // 刻意**不进** htw-config.json 的五键白名单：那五个键每次必须整套一起写，
+      // 多塞一个键，任何一处漏写就会把它悄悄清空。
+      const JY_STORE = "jianying";
+
       const draftFile = UI.fileInput({ label: "选择 CapCut 草稿 ZIP", accept: ".zip" });
+      const draftCookie = UI.el("input", {
+        type: "password", id: "edit-draft-cookie",
+        placeholder: "粘贴剪映登录态 Cookie（形如 sessionid=...; ttwid=...）",
+      });
+      const draftReveal = UI.el("input", { type: "checkbox", id: "edit-draft-reveal" });
+      const draftSaveBtn = UI.el("button", { class: "btn", type: "button", id: "edit-draft-save", text: "保存到本机" });
+      const draftClearBtn = UI.el("button", { class: "btn", type: "button", id: "edit-draft-clear", text: "清除" });
+      const draftCookieNote = UI.el("div", { class: "detail-progress", id: "edit-draft-cookie-note" });
       const draftRegion = UI.el("div");
-      const draftBtn = UI.el("button", { class: "btn", text: "导出草稿" });
-      const draftCard = section("草稿导出 Draft-export", [draftFile], draftBtn, draftRegion, "fa-file-zipper");
+      const draftBtn = UI.el("button", { class: "btn", id: "edit-draft-btn", text: "导出草稿" });
+      const draftCard = section("草稿导出 Draft-export", [
+        draftFile,
+        field("剪映登录态 Cookie（必填）", draftCookie),
+        UI.el("div", { class: "row" }, [
+          UI.el("label", { class: "field" }, [draftReveal, " 显示"]), draftSaveBtn, draftClearBtn,
+        ]),
+        draftCookieNote,
+        hint("草稿导出用你自己的剪映账号渲染（服务端执行，但站方不代管账号），所以必须填 Cookie；"
+          + "按成片时长计费。登录态保存本机，导出时随这一次请求发给本站，用完不落盘、不写日志。"
+          + "取 Cookie：浏览器登录剪映网页版后，开发者工具 Network 里任一请求的请求头 Cookie 整段复制。"),
+      ], draftBtn, draftRegion, "fa-file-zipper");
+
+      // 落盘桥：主进程的通用 json 槽位（window.htw.loadJson / saveJson）。
+      // 环境里没有它（浏览器直开 / 冒烟替身）时**不假装保存成功** —— 返回 null，
+      // 调用方据此说明"只在本次运行内有效"。
+      function jyBridge() {
+        const h = (typeof window !== "undefined" && window.htw) || null;
+        if (!h || typeof h.loadJson !== "function" || typeof h.saveJson !== "function") return null;
+        return h;
+      }
+
+      // Cookie 归一化：从开发者工具复制常带 "Cookie:" 前缀与换行，
+      // 服务端只认成对的值，带着前缀过去会被判成无效登录态。
+      function cleanCookie(v) {
+        return String(v == null ? "" : v)
+          .replace(/^\s*cookie\s*:/i, "")
+          .replace(/[\r\n\t]+/g, " ")
+          .trim();
+      }
+
+      function setCookieNote(text) { if (draftCookieNote) draftCookieNote.textContent = text; }
+
+      async function loadSavedCookie() {
+        const h = jyBridge();
+        if (!h) { setCookieNote("当前环境不能落盘：登录态只在本次运行内有效。"); return; }
+        let saved = "";
+        try {
+          const j = await h.loadJson(JY_STORE);
+          saved = (j && typeof j.cookie === "string") ? j.cookie : "";
+        } catch (e) { saved = ""; }
+        if (!saved) {
+          setCookieNote("尚未保存登录态：填好后点「保存到本机」，下次打开就不用重填。");
+          return;
+        }
+        // 读盘是异步的：用户可能已经先手输了一条，别把它盖掉。
+        if (!cleanCookie(draftCookie.value)) draftCookie.value = saved;
+        setCookieNote("已读取本机保存的登录态（" + saved.length + " 个字符）。");
+      }
+
+      async function persistCookie() {
+        const cookie = cleanCookie(draftCookie.value);
+        if (!cookie) { UI.showError(draftRegion, "请先填入剪映登录态 Cookie"); return; }
+        if (cookie.indexOf("=") < 0) {
+          UI.showError(draftRegion, "这看起来不是 Cookie：应形如 sessionid=...; ttwid=...（请求头里 Cookie 那一整段）。");
+          return;
+        }
+        const h = jyBridge();
+        if (!h) { UI.showError(draftRegion, "当前环境不能落盘，登录态只在本次运行内有效。"); return; }
+        let saved = false;
+        try { saved = (await h.saveJson(JY_STORE, { cookie: cookie, savedAt: Date.now() })) === true; } catch (e) { saved = false; }
+        if (!saved) { UI.showError(draftRegion, "保存失败：本机配置文件写不进去。"); return; }
+        UI.clear(draftRegion);
+        setCookieNote("已保存到本机（userData/" + JY_STORE + ".json）。导出时会随那一次请求发给本站，服务端用完不落盘。");
+      }
+
+      async function clearSavedCookie() {
+        draftCookie.value = "";
+        const h = jyBridge();
+        if (h) {
+          // 清不掉也不该炸界面：内存里的值已经清空了，落盘那份下次覆盖即可。
+          try { await h.saveJson(JY_STORE, { cookie: "" }); } catch (e) { /* 忽略 */ }
+        }
+        UI.clear(draftRegion);
+        setCookieNote("已清除本机保存的登录态。");
+      }
+
+      // 「会不会落到本机」不再由这里判：服务端下发的能力清单里已没有 draft-export，
+      // 所以 shouldUseLocal 对它恒为 false，请求一律打云端。本地实例即便还开着，
+      // 也不接这条（服务端侧已无「就地执行」分支）。
 
       const srFile = UI.fileInput({ label: "选择视频", accept: "video/*" });
       const srW = UI.el("input", { type: "number", value: "1920", placeholder: "宽" });
@@ -268,27 +373,53 @@
       draftBtn.addEventListener("click", function () {
         UI.withLoading(draftBtn, async function () {
           try {
+            // Cookie 必填：渲染虽在服务端执行，但账号必须是调用方自己的（站方不做账号池代跑）。
+            const cookie = cleanCookie(draftCookie.value);
+            if (!cookie) {
+              UI.showError(draftRegion, "请先填入剪映登录态 Cookie —— 草稿导出用你自己的账号渲染，不填导不了。");
+              return;
+            }
+            if (cookie.indexOf("=") < 0) {
+              UI.showError(draftRegion, "这看起来不是 Cookie：应形如 sessionid=...; ttwid=...（请求头里 Cookie 那一整段）。");
+              return;
+            }
             const files = await readFiles(draftFile);
             if (!files.length) { UI.showError(draftRegion, "请选择 ZIP 文件"); return; }
-            const up = await API.upload("POST", "/api/v2/edit/draft-export", files, {});
+            // jianyingCookie 是 form 字段（后端签名里的 [FromForm]）。
+            const up = await API.upload("POST", DRAFT_PATH, files, { jianyingCookie: cookie });
             if (!up.ok) { UI.showError(draftRegion, formatErr(up)); return; }
             const taskId = up.taskId || (up.data && up.data.taskId);
             if (!taskId) { UI.showError(draftRegion, "未返回 taskId: " + JSON.stringify(up.data)); return; }
             if (window.HTWTasks) window.HTWTasks.track({ domain: "edit", taskId: taskId, panel: "edit", title: "草稿导出" });
             UI.showResult(draftRegion, {
-              message: "已提交，taskId=" + taskId + "，处理中…\n" + describeWarnings(up.data && up.data.warnings),
+              message: "已提交渲染，taskId=" + taskId + "，处理中…\n" + describeWarnings(up.data && up.data.warnings),
             });
-            const res = await pollEdit(taskId, draftRegion);
+            const res = await pollEdit(taskId, draftRegion, DRAFT_STATUS_PREFIX);
             if (!res.ok) {
-              UI.showError(draftRegion, taskErrorText(res));
+              // 失败时补一句口径：这条链路用的是你自己的剪映登录态，出错先看它是否失效。
+              UI.showError(draftRegion, taskErrorText(res)
+                + "\n\n如果提示与登录态有关：重新登录剪映网页版，换一条 Cookie 再试。");
               return;
             }
-            UI.showResult(draftRegion, res.data);
+            const d = (res.data && res.data.result) || res.data || {};
+            // downloadUrl 由服务端按本次请求的 Scheme+Host 拼成绝对地址（或剪映直链），
+            // 这里不能再补前缀，否则会拼出双域名。
+            const url = d && (d.downloadUrl || d.download_url);
+            if (url) showVideo(draftRegion, url, "草稿导出完成");
+            else UI.showResult(draftRegion, d);
           } catch (e) {
             UI.showError(draftRegion, "请求异常: " + (e && e.message ? e.message : String(e)));
           }
         });
       });
+
+      // 卡片挂上之后再读一次本机保存的登录态（异步，不阻塞面板渲染）。
+      draftReveal.addEventListener("change", function () {
+        draftCookie.type = draftReveal.checked ? "text" : "password";
+      });
+      draftSaveBtn.addEventListener("click", function () { persistCookie(); });
+      draftClearBtn.addEventListener("click", function () { clearSavedCookie(); });
+      loadSavedCookie();
 
       srBtn.addEventListener("click", function () {
         UI.withLoading(srBtn, async function () {

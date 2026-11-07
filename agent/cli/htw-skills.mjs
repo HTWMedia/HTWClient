@@ -51,6 +51,7 @@ function usage() {
     "",
     "Commands:",
     "  draft <草稿.zip|目录>         剪映草稿 → 云端渲染 → 下载成片（一条命令）",
+    "                               --cookie/--cookie-file 必填（用你自己的剪映账号）；--local-base 可选",
     "  list                          List the four skills",
     "  guide [feature]               Print the guide for a feature (default: all)",
     "  install [feature]             Copy skills into ~/.agents/skills (+ ~/.claude/skills)",
@@ -59,8 +60,8 @@ function usage() {
     "Features: insight | create | topics | publish | tools | edit | workflow",
     "",
     "Examples:",
-    "  htw-skills draft \"C:\\Users\\me\\AppData\\Local\\JianyingPro\\...\\我的草稿\"",
-    "  htw-skills draft my-draft.zip --out ./out",
+    "  htw-skills draft \"C:\\Users\\me\\AppData\\Local\\JianyingPro\\...\\我的草稿\" --out ./out",
+    "  htw-skills draft my-draft.zip --cookie-file ./jy-cookie.txt --out ./out",
     "  htw-skills list",
     "  htw-skills guide insight",
     "  htw-skills install",
@@ -79,9 +80,11 @@ function guideFor(id) {
   return existsSync(file) ? `# ${id}\n\n${readFileSync(file)}` : `No skill found for '${id}'.`;
 }
 
-async function callApi(path, { method = "GET", body, form, query = "" } = {}) {
+async function callApi(path, { method = "GET", body, form, query = "", base } = {}) {
   const k = key();
-  const url = `${API_BASE}${path}${query ? "?" + query : ""}`;
+  // base：显式指定请求基地址（如本机实例）。缺省是云端 API_BASE —— 绝大多数端点走云端。
+  const root = String(base || API_BASE).replace(/\/+$/, "");
+  const url = `${root}${path}${query ? "?" + query : ""}`;
   const headers = { AuthKey: k, "X-App-Source": "HDraft" };
   let payload = null;
   if (form) {
@@ -358,7 +361,12 @@ function buildCall(feature, o, dry, bare) {
       const f = `-F "voice=${o.voice || "zh-CN-XiaoxiaoNeural"}" -F "durationMin=${o["duration-min"] || 60}" -F "durationMax=${o["duration-max"] || 180}"` + (o.blur ? ` -F "blur=true"` : "");
       return uploadHint(o["coarse-cut"], "/api/v2/edit/coarse-cut", f);
     }
-    if (o["draft-export"]) return uploadHint(o["draft-export"], "/api/v2/edit/draft-export");
+    // 草稿导出由服务端执行（2026-11-07 晚回退）。--local-base 仍可指定本机实例（若还跑着）。
+    if (o["draft-export"]) {
+      const lb = String(o["local-base"] || process.env.HTW_LOCAL_BASE || "").replace(/\/+$/, "");
+      return uploadHint(o["draft-export"], "/api/v2/edit/draft-export",
+        '-F "jianyingCookie=<可选：你自己的剪映Cookie>"', "file", lb || undefined);
+    }
     if (o.decrypt) return uploadHint(o.decrypt, "/api/v2/edit/decrypt");
     if (o["super-res"]) {
       const f = `-F "width=${o.width || 1708}" -F "height=${o.height || 960}"`;
@@ -382,15 +390,18 @@ const UPLOAD_HINT = Symbol("upload-hint");
 // Multipart uploads (files) are not JSON — guide the user to the curl form.
 // `formFields` is an optional string of extra `-F "k=v"` segments;
 // `fileField` defaults to `file` (端点收取多个文件时用 `videos` 之类，且可重复)。
-function uploadHint(filePath, path, formFields = "", fileField = "file") {
-  console.log(`Upload via curl (multipart):\n  curl -H "AuthKey: <key>" -F "${fileField}=@${filePath}" ${formFields} ${API_BASE}${path}`);
+// `base` 指定请求基地址（本机实例）；缺省是云端 API_BASE。
+function uploadHint(filePath, path, formFields = "", fileField = "file", base) {
+  const root = String(base || API_BASE).replace(/\/+$/, "");
+  console.log(`Upload via curl (multipart):\n  curl -H "AuthKey: <key>" -F "${fileField}=@${filePath}" ${formFields} ${root}${path}`);
   return UPLOAD_HINT;
 }
 
 // ---------- 草稿 → 成片：一条命令跑完整条链路 ----------
 //
-// 这条路走 /api/v2/edit/draft-export（服务端 DraftExportService：剪映草稿包 → 云端成片）。
 // 之前 edit --draft-export 只会打印一条 curl 提示，等于把"唯一别人做不了的事"关在门外。
+// 2026-11-07 晚回退后默认由**服务端**执行（账号池 + 按成片时长计费）；
+// 给了 --local-base 才打到本机实例（可选，本地实例已不再主动下发）。
 
 const CRC_TABLE = (() => {
   const t = new Int32Array(256);
@@ -551,7 +562,7 @@ function asciiFileName(p) {
   return "draft" + ext.replace(/[^\x20-\x7e]/g, "");
 }
 
-function uploadMultipart(filePath, path, { field = "file", fields = {} } = {}) {
+function uploadMultipart(filePath, path, { field = "file", fields = {}, base } = {}) {
   return new Promise((resolvePromise, reject) => {
     const boundary = "----htw" + Math.random().toString(16).slice(2);
     const size = statSync(filePath).size;
@@ -562,7 +573,7 @@ function uploadMultipart(filePath, path, { field = "file", fields = {} } = {}) {
     head += `--${boundary}\r\nContent-Disposition: form-data; name="${field}"; filename="${asciiFileName(filePath)}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
     const tail = `\r\n--${boundary}--\r\n`;
 
-    const url = new URL(API_BASE + path);
+    const url = new URL(String(base || API_BASE).replace(/\/+$/, "") + path);
     const lib = url.protocol === "https:" ? https : http;
     const req = lib.request(
       {
@@ -599,11 +610,14 @@ function uploadMultipart(filePath, path, { field = "file", fields = {} } = {}) {
 
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
-async function waitForTask(taskId, { quiet = false, intervalMs = 5000, timeoutMs = 45 * 60 * 1000 } = {}) {
+// statusPath：进度查询的路径前缀。粗剪 / 超分 / 智能包装用云端那条（默认），
+// 草稿导出必须用本机的 /api/v2/edit/draft-status/ —— 两条路由刻意分开，
+// 混用的症状是「任务一直在跑、永远查不到」。
+async function waitForTask(taskId, { quiet = false, intervalMs = 5000, timeoutMs = 45 * 60 * 1000, statusPath = "/api/v2/edit/status/", base } = {}) {
   const t0 = Date.now();
   let lastShown = "";
   for (;;) {
-    const r = await callApi(`/api/v2/edit/status/${encodeURIComponent(taskId)}`);
+    const r = await callApi(statusPath + encodeURIComponent(taskId), { base });
     if (r.success === false) return { ok: false, error: r.error };
     const d = r.Data || {};
     const st = d.status || "";
@@ -619,8 +633,11 @@ async function waitForTask(taskId, { quiet = false, intervalMs = 5000, timeoutMs
   }
 }
 
-async function downloadTo(url, destPath) {
-  const abs = /^https?:\/\//i.test(url) ? url : API_BASE + (url.startsWith("/") ? url : "/" + url);
+async function downloadTo(url, destPath, base) {
+  const root = String(base || API_BASE).replace(/\/+$/, "");
+  // 本地实例给的 downloadUrl 已经是**绝对**地址（http://127.0.0.1:端口/Download/…），
+  // 这时不能再补云端域名，否则会去云端找一个不存在的文件。
+  const abs = /^https?:\/\//i.test(url) ? url : root + (url.startsWith("/") ? url : "/" + url);
   const res = await fetch(abs);
   if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
@@ -634,6 +651,32 @@ function stamp() {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
+// ---------- 草稿 → 成片：一条命令跑完整条链路（默认服务端执行）----------
+//
+// 这条路走 /api/v2/edit/draft-export。缺省由**站点服务端**代跑（账号池登录态 +
+// 按成片时长计费）；想用自己的剪映账号就带 --cookie，登录态只在本机命令行里出现。
+// --local-base 仍保留：指向本机实例时打本机执行（可选能力，不再主动下发）。
+
+// 登录态归一化：从开发者工具复制常带 "Cookie: " 前缀与换行，服务端只认成对的值。
+function cleanCookie(v) {
+  return String(v == null ? "" : v).replace(/^\s*cookie\s*:/i, "").replace(/[\r\n\t]+/g, " ").trim();
+}
+
+function draftUsageGuide() {
+  return [
+    "草稿导出由站点服务端执行，但用的是你自己的剪映账号 —— 站方不做账号池代跑，所以 Cookie 必填。",
+    "按成片时长计费（额度不足回 402）。登录态只随这一次请求发送，服务端用完不落盘。",
+    "",
+    "  htw-skills draft 我的草稿.zip --cookie \"sessionid=...; ttwid=...\" --out ./out",
+    "  htw-skills draft 我的草稿.zip --cookie-file ./jy-cookie.txt --out ./out",
+    "",
+    "  · Cookie 也可以用环境变量：HTW_JIANYING_COOKIE。",
+    "  · --cookie-file 比 --cookie 稳妥：不会留在 shell 历史里。",
+    "  · Cookie 怎么拿：浏览器登录剪映网页版 → 开发者工具 Network → 任一请求的请求头 Cookie 整段复制。",
+    "  · 想打本机实例（若你还跑着）就加 --local-base http://127.0.0.1:<端口>。",
+  ].join("\n");
+}
+
 async function cmdDraft(args) {
   const input = args[0] && !args[0].startsWith("--") ? args[0] : "";
   const o = parseKeyValues(args.slice(1));
@@ -641,11 +684,40 @@ async function cmdDraft(args) {
   const log = (...a) => { if (!quiet) console.log(...a); };
 
   if (!input) {
-    console.log("用法: htw-skills draft <草稿.zip | 草稿文件夹> [--out <目录>] [--no-wait] [--json]");
+    console.log("用法: htw-skills draft <草稿.zip | 草稿文件夹>"
+      + " [--cookie <cookie> | --cookie-file <文件>] [--local-base <本机实例地址>]"
+      + " [--out <目录>] [--no-wait] [--json]");
     process.exitCode = 2;
     return;
   }
   if (!key()) { console.log(noKeyGuide()); process.exitCode = 3; return; }
+
+  // ① 基地址：默认云端；给了 --local-base 才打本机实例（可选，不再是必填）。
+  const localBase = String(o["local-base"] || process.env.HTW_LOCAL_BASE || "").replace(/\/+$/, "");
+  if (localBase && !/^https?:\/\//i.test(localBase)) {
+    console.log(`--local-base 需要 http(s) 地址，收到: ${localBase}`);
+    process.exitCode = 2;
+    return;
+  }
+  const base = localBase || API_BASE;
+
+  // ② 剪映登录态（必填）：渲染在服务端执行，但账号必须是调用方自己的 —— 站方不做账号池代跑。
+  let cookie = cleanCookie(o.cookie || process.env.HTW_JIANYING_COOKIE || "");
+  if (!cookie && o["cookie-file"]) {
+    try { cookie = cleanCookie(readFileSync(resolve(String(o["cookie-file"])), "utf8")); }
+    catch (e) { console.log(`读不到 --cookie-file: ${e && e.message ? e.message : e}`); process.exitCode = 2; return; }
+  }
+  if (!cookie) {
+    console.log("缺少剪映登录态：草稿导出用你自己的剪映账号渲染，必须提供 Cookie。");
+    console.log(draftUsageGuide());
+    process.exitCode = 2;
+    return;
+  }
+  if (cookie.indexOf("=") < 0) {
+    console.log("这看起来不是 Cookie：应形如 sessionid=...; ttwid=...（请求头里 Cookie 那一整段）。");
+    process.exitCode = 2;
+    return;
+  }
 
   const src = resolve(input);
   if (!existsSync(src)) { console.log(`找不到路径: ${src}`); process.exitCode = 2; return; }
@@ -672,14 +744,20 @@ async function cmdDraft(args) {
   }
 
   try {
-    log(`上传中: ${basename(zipPath)} (${(statSync(zipPath).size / 1048576).toFixed(1)} MB) …`);
-    const up = await uploadMultipart(zipPath, "/api/v2/edit/draft-export");
+    log(`上传到${localBase ? "本机实例 " + localBase : "站点服务端"}: ${basename(zipPath)} (${(statSync(zipPath).size / 1048576).toFixed(1)} MB) …`);
+    // jianyingCookie 是 form 字段（服务端签名 [FromForm]）。空串表示交给服务端账号池；
+    // 显式传空串而不是省略字段，是为了让 multipart 结构稳定（后端也是先 Trim 再判空）。
+    const up = await uploadMultipart(zipPath, "/api/v2/edit/draft-export", {
+      base,
+      fields: { jianyingCookie: cookie },
+    });
     const body = up.json || {};
     if (body.Ok === false || up.httpStatus >= 400) {
       const code = body.ErrCode || up.httpStatus;
       console.log(`提交失败（${code}）: ${body.ErrMsg || "未知错误"}`);
-      if (code === 402) console.log("额度用完，充值页: " + API_BASE + "/Home/Recharge");
-      process.exitCode = code === 402 ? 4 : 1;
+      // 410 = 服务端还停在「仅本地实例执行」的旧版本（2026-11-07 白天的中间态）。
+      if (code === 410) console.log("站点服务端仍处于下线状态（旧版本）：需要管理员部署恢复后的版本。");
+      process.exitCode = 1;
       return;
     }
     const taskId = body.TaskId || (body.Data && body.Data.taskId);
@@ -690,13 +768,19 @@ async function cmdDraft(args) {
 
     if (o["no-wait"] === true) {
       if (quiet) console.log(JSON.stringify({ taskId }));
-      else console.log(`\n不等待。之后可查: htw-skills call edit --status ${taskId}`);
+      else {
+        console.log("\n不等待。之后可查：");
+        console.log(`  curl -H "AuthKey: <key>" "${base}/api/v2/edit/draft-status/${taskId}"`);
+      }
       return;
     }
 
-    const r = await waitForTask(taskId, { quiet });
+    const r = await waitForTask(taskId, { quiet, statusPath: "/api/v2/edit/draft-status/", base });
     if (!r.ok) {
       console.log(`\n渲染失败: ${r.error}`);
+      if (/\b(401|403|login|session|not.?login)\b/i.test(String(r.error || ""))) {
+        console.log("看起来是剪映登录态失效了：重新登录剪映网页版，换一条新的 Cookie 再试。");
+      }
       if (r.data && r.data.downloadUrl) console.log("部分产物: " + r.data.downloadUrl);
       process.exitCode = 1;
       return;
@@ -710,7 +794,7 @@ async function cmdDraft(args) {
     const baseName = isDir ? basename(src) : basename(src, extname(src));
     const dest = join(outDir, `${baseName}-成片-${stamp()}.mp4`);
     log("下载成片 …");
-    const bytes = await downloadTo(url, dest);
+    const bytes = await downloadTo(url, dest, base);
     if (quiet) console.log(JSON.stringify({ taskId, file: dest, bytes }));
     else console.log(`\n完成: ${dest} (${(bytes / 1048576).toFixed(1)} MB)`);
   } finally {
