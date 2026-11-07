@@ -8,7 +8,7 @@ One backend covers "what to post today" through "did it go out". The desktop app
 
 <sub>Unofficial tool, not affiliated with ByteDance or CapCut/JianYing. Anything involving JianYing only touches **your own** drafts and login — the login is supplied by you and used for a single request; no other people's accounts, no third-party template downloads. See "Compliance boundaries" below.</sub>
 
-[![Version](https://img.shields.io/badge/version-v0.5.0-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
+[![Version](https://img.shields.io/badge/version-v0.5.1-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 [中文](README.md) ｜ [Issues](https://github.com/HTWMedia/HTWClient/issues) ｜ [Releases](https://github.com/HTWMedia/HTWClient/releases) ｜ [Web app](https://htwmedia.dpdns.org)

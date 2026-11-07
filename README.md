@@ -12,7 +12,7 @@
   <img src="docs/images/banner.png" width="720" alt="HTW Media">
 </p>
 
-[![Version](https://img.shields.io/badge/version-v0.5.0-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
+[![Version](https://img.shields.io/badge/version-v0.5.1-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
 [![Download](https://img.shields.io/badge/download-Windows%20exe-brightgreen.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://htwmedia.dpdns.org)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -74,8 +74,8 @@ node agent/cli/htw-skills.mjs draft "<草稿目录>" --cookie-file ./jy-cookie.t
 
 | 文件 | 说明 | 直接下载 |
 | --- | --- | --- |
-| `HTW.Media.Setup.0.5.0.exe` | 安装版，带开始菜单快捷方式 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/HTW.Media.Setup.0.5.0.exe) |
-| `HTW.Media.0.5.0.exe` | 便携版，双击即用，不写注册表 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.0/HTW.Media.0.5.0.exe) |
+| `HTW.Media.Setup.0.5.1.exe` | 安装版，带开始菜单快捷方式 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.1/HTW.Media.Setup.0.5.1.exe) |
+| `HTW.Media.0.5.1.exe` | 便携版，双击即用，不写注册表 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.1/HTW.Media.0.5.1.exe) |
 
 > Mac / Linux 直接用 Web 端 <https://htwmedia.dpdns.org>，与桌面端同一账号、同一配额、同一套接口。
 
@@ -119,6 +119,7 @@ node agent/cli/htw-skills.mjs draft "<草稿目录>" --cookie-file ./jy-cookie.t
 
 每个功能一集：功能介绍 + 真实操作 + 结果展示，中文配音与烧录字幕，云端渲染等待段已加速。
 也可以在 B 站合集里一口气看完：[HTW 工作台全流程教程](https://www.bilibili.com/video/BV1ddxm68Edo)。
+视频文件托管在 v0.5.0 的 release 资产里（内容与当前版本一致，功能没变所以没有重录）。
 
 | # | 视频 | 时长 | 看点 |
 |---|---|---|---|
@@ -164,15 +165,15 @@ npm start
 
 ---
 
-## 🆕 v0.5.0 更新
+## 🆕 v0.5.1 更新
 
 | 模块 | 内容 |
 | --- | --- |
-| ⏱️ **任务中心** | 所有面板的创作任务统一登记、按域聚合，展示真实进度与终态 |
-| 📡 **进度推送** | 长任务经 SSE 实时推送，断线自动恢复并重新挂接已有记录 |
-| 🧭 **会话与批量** | 同域任务复用同一会话；批量统一登记，不留「永远进行中」的僵尸记录 |
-| ✋ **审批等待** | 等待用户确认的任务不再空转轮询 |
-| 🔧 **修复** | 启动时服务端不可达不再停在「没有任务记录」；推送恢复后正确清除「状态未确认」标记 |
+| ✂️ **草稿导出** | 渲染回到**服务端**执行，但剪映登录态**必须自备**（面板新增 Cookie 输入框，空着直接拦下）——站方不做账号池代跑；仍按成片时长计费，额度不足回 402、并发超限回 429 |
+| 🔒 **安全修复** | 草稿任务按调用方账号隔离：此前任务没有归属，任何持有效 key 的人拿到 `taskId` 就能查别人的渲染状态，现在一律 404 |
+| 🎨 **创作面板** | 拆成口播 / 图文 / 文章三个页签，步骤条完整可勾选；每步产物按步骤留存可回看，图片铺成缩略图网格 |
+| 🧰 **工具面板** | 结果区统一展示：文本、音频、视频、图片、歌词、配音、字幕、识别、模板各有对应形态，带复制 / 下载 / 打开原文件 |
+| 📈 **洞察** | 新增搜索页签，按平台解析链接与关键词，结果统一成指标标签 |
 
 ---
 
