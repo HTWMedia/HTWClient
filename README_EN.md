@@ -9,7 +9,7 @@ Above that sits the full pipeline: topics → script → edit → publish. The d
 
 <sub>Unofficial tool, not affiliated with ByteDance or CapCut/JianYing. Anything involving JianYing only touches **your own** drafts and login — the login is supplied by you and used for a single request; no other people's accounts, no third-party template downloads. See "Compliance boundaries" below.</sub>
 
-[![Version](https://img.shields.io/badge/version-v0.5.1-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
+[![Version](https://img.shields.io/badge/version-v0.5.2-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 [中文](README.md) ｜ [Issues](https://github.com/HTWMedia/HTWClient/issues) ｜ [Releases](https://github.com/HTWMedia/HTWClient/releases) ｜ [Web app](https://htwmedia.dpdns.org)
@@ -32,7 +32,7 @@ Above that sits the full pipeline: topics → script → edit → publish. The d
 
 ---
 
-## 0. No AuthKey yet: check a draft first (Windows client, next release · no signup)
+## 0. No AuthKey yet: check a draft first (Windows client v0.5.2+ · no signup)
 
 The first item in the client is **Draft Check**. No network, no AuthKey, no quota:
 

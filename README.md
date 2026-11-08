@@ -13,7 +13,7 @@
   <img src="docs/images/banner.png" width="720" alt="HTW Media">
 </p>
 
-[![Version](https://img.shields.io/badge/version-v0.5.1-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
+[![Version](https://img.shields.io/badge/version-v0.5.2-blue.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
 [![Download](https://img.shields.io/badge/download-Windows%20exe-brightgreen.svg)](https://github.com/HTWMedia/HTWClient/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://htwmedia.dpdns.org)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -40,7 +40,7 @@
 
 ---
 
-## 零、还没有 AuthKey：先体检一条草稿（Windows 客户端，下一版起 · 无需注册）
+## 零、还没有 AuthKey：先体检一条草稿（Windows 客户端 v0.5.2 起 · 无需注册）
 
 客户端左侧第一项是「草稿体检」，**不联网、不校验 AuthKey、不消耗额度**：
 
@@ -116,8 +116,8 @@ node agent/cli/htw-skills.mjs call topics --daily
 
 | 文件 | 说明 | 直接下载 |
 | --- | --- | --- |
-| `HTW.Media.Setup.0.5.1.exe` | 安装版，带开始菜单快捷方式 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.1/HTW.Media.Setup.0.5.1.exe) |
-| `HTW.Media.0.5.1.exe` | 便携版，双击即用，不写注册表 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.1/HTW.Media.0.5.1.exe) |
+| `HTW.Media.Setup.0.5.2.exe` | 安装版，带开始菜单快捷方式 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.2/HTW.Media.Setup.0.5.2.exe) |
+| `HTW.Media.0.5.2.exe` | 便携版，双击即用，不写注册表 | [下载](https://github.com/HTWMedia/HTWClient/releases/download/v0.5.2/HTW.Media.0.5.2.exe) |
 
 > Mac / Linux 直接用 Web 端 <https://htwmedia.dpdns.org>，与桌面端同一账号、同一配额、同一套接口。
 
@@ -162,7 +162,8 @@ node agent/cli/htw-skills.mjs call topics --daily
 
 每个功能一集：功能介绍 + 真实操作 + 结果展示，中文配音与烧录字幕，云端渲染等待段已加速。
 也可以在 B 站合集里一口气看完：[HTW 工作台全流程教程](https://www.bilibili.com/video/BV1ddxm68Edo)。
-视频文件托管在 v0.5.0 的 release 资产里（内容与当前版本一致，功能没变所以没有重录）。
+视频文件托管在 v0.5.0 的 release 资产里。录于 0.5.0，之后创作 / 工具 / 洞察三个面板改过版式、0.5.2 又新增了「草稿体检」，
+所以**界面细节与现在不完全一致**——流程和操作路径没变，按集的顺序看仍然对得上。
 
 > 第 3 集「剪同款」已随该功能于 2026-11-06 下线，不再收录，所以下表编号跳过 03。
 
@@ -209,7 +210,19 @@ npm start
 
 ---
 
-## 🆕 v0.5.1 更新
+## 🆕 v0.5.2 更新
+
+| 模块 | 内容 |
+| --- | --- |
+| 🩺 **草稿体检（新）** | 客户端第一项。选一条剪映草稿目录即可在**本机**解密、统计轨道与时长、核对素材是否还在、导出明文 JSON。**不联网、不校验 AuthKey、不消耗额度**，原草稿一个字节都不改 |
+| ✨ **创作面板** | 三种产物接入任务中心（`domain=creation`），关掉面板也能继续跑；步骤产物按类型解析回看 |
+| 🧰 **工具面板** | 结果区按文本 / 音频 / 图片 / 视频四类渲染，统一带下载与复制；修掉「翻译 / 区分角色 / 对齐文本」勾选框与文字分成两行的排版问题 |
+| 📈 **洞察面板** | 热榜 / 搜索 / 文案分析分栏；结果统一口径（剥标签、按「万」显示、按域名判平台） |
+| ⏱️ **任务中心** | 视频生成补 `succeeded` 为终态（此前会一直转圈）；按域折算 snake_case 字段（`video_url` 等）；阶段词转人话并显示已用时 |
+| 🧩 **公共层** | 支持 `//host/path` 协议相对地址；新增 `stripHtml` / `plainText` / `formatCount`；下载文件名优先取 query 的 `fileName`，不再落成 `media-file.mp4` |
+
+<details>
+<summary>v0.5.1 更新</summary>
 
 | 模块 | 内容 |
 | --- | --- |
@@ -218,6 +231,8 @@ npm start
 | 🎨 **创作面板** | 拆成口播 / 图文 / 文章三个页签，步骤条完整可勾选；每步产物按步骤留存可回看，图片铺成缩略图网格 |
 | 🧰 **工具面板** | 结果区统一展示：文本、音频、视频、图片、歌词、配音、字幕、识别、模板各有对应形态，带复制 / 下载 / 打开原文件 |
 | 📈 **洞察** | 新增搜索页签，按平台解析链接与关键词，结果统一成指标标签 |
+
+</details>
 
 ---
 
@@ -324,7 +339,7 @@ node htw-skills.mjs call insight --hot --dry-run
 
 草稿导出现在固定走服务端，**不再需要本地实例**。会看到这句提示只有两种情况：
 
-- **客户端版本旧**：v0.5.0 及更早的版本曾把这条链路切到本机，升到 v0.5.1 即可。
+- **客户端版本旧**：v0.5.0 及更早的版本曾把这条链路切到本机，升到 v0.5.1 或更高版本即可。
 - **撞到了别的 410**：剪同款的遗留接口也会回 410——那个功能已于 2026-11-06 下线，不是故障。
 
 v0.5.1 起要准备的是**你自己的剪映登录态**（Cookie），不是本地实例：桌面端填在「剪辑 → 草稿导出」的输入框里，CLI 用 `--cookie-file`。空着会被直接拦下，不会白跑一趟。
