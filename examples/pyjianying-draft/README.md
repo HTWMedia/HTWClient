@@ -4,8 +4,9 @@
 不用打开剪映、不用守着电脑，批量跑也不占本机。
 
 ```
-build_draft.py   pyJianYingDraft 建草稿 + 改成「自包含」，产物是一个草稿目录
-render.py        草稿目录 → zip → POST /api/v2/edit/draft-export → 轮询 → 下载 mp4
+build_draft.py    单段最小示例：一段视频 + 标题 + 配乐/字幕
+build_complex.py  复杂示例：多段拼接 + 转场 + 蒙版 + 关键帧 + 标题动画 + 双音轨 + 字幕
+render.py         草稿目录 → zip → POST /api/v2/edit/draft-export → 轮询 → 下载 mp4
 ```
 
 ## 跑起来
@@ -15,6 +16,9 @@ pip install pyJianYingDraft
 
 # 1) 生成草稿：取素材前 15 秒，加标题和配乐
 python build_draft.py --video 素材.mp4 --audio bgm.mp3 --title "开场标题" --seconds 15 --out ./drafts
+
+# 1b) 复杂草稿：多段拼接 + 转场 + 蒙版 + 关键帧 + 双音轨 + 字幕
+python build_complex.py --clips a.mp4,b.mp4,c.mp4 --voice 旁白.mp3 --bgm bgm.m4a --srt 字幕.srt --out ./drafts
 
 # 2) 出片：AuthKey 从环境变量读，剪映 Cookie 从文件读
 export HTW_API_KEY="你的-key"          # PowerShell: $env:HTW_API_KEY="你的-key"
@@ -69,6 +73,39 @@ pyJianYingDraft 生成的 `draft_content.json` 里，素材写的是**你本机�
 6 秒 1080p 草稿出片参数与源草稿完全一致（见文末「验证到哪一步」）。
 第一次用仍建议先渲一条 5 秒的短片确认画面，再上批量。
 
+**4. `AudioMaterial` 不能吃带画面轨的 mp4。** 传视频会抛
+`ValueError: 音频素材不应包含视频轨道`。BGM 想用视频里的音轨，先 `ffmpeg -vn -c:a aac` 抽出来。
+
+**5. 同类型多条轨道必须起名。** 两条 audio 轨都用 `TrackSpec(TrackType.audio)` 会抛
+`NameError: 'TrackType.audio' 类型的轨道已存在`，要写成 `TrackSpec(TrackType.audio, name="BGM")`。
+
+## 复杂草稿实测（12 秒 / 3 段 / 双音轨）
+
+`build_complex.py` 把常见特效塞进同一条草稿：3 段不同素材拼接、第 2 段 1.5 倍速、
+两处转场（模糊 / 向左）、末段圆形蒙版 + 关键帧放大、标题入场动画、4 条 SRT 字幕、
+人声 + BGM 双音轨。用本机实例 + 真实剪映登录态渲染，逐项抽帧核对：
+
+| 特性 | 成片实测 |
+| --- | --- |
+| 三段拼接 / 1.5 倍速 | 通过。12.05s / 360 帧，段边界与时长都对 |
+| 转场 `模糊`、`向左` | 通过。抽帧可见模糊过渡与滑动，无黑场 |
+| 转场 `叠化` | **失败：整段纯黑**。黑场时长正好等于转场时长（0.8s、0.5s 各复现一次，亮度 0.0） |
+| 圆形蒙版 | 通过。圆形外纯黑、边缘羽化，蒙版随缩放一起变大 |
+| 关键帧缩放 1.0 → 1.12 | 通过。末段画面与蒙版同步放大，内容对得上源素材 |
+| 标题入场动画（向右擦除） | 通过。0.45s 处只出现前半句，1.2s 完整 |
+| SRT 字幕 4 条 | 通过。时间点、文本与 SRT 一致 |
+| 人声 + BGM 双音轨 | 通过。混音非静音（mean −17.6dB / max −1.8dB） |
+| 滤镜（冷蓝 / 清新 / 高清黑白） | **不生效**。4 段彩条对照，成片与无滤镜段落像素级一致（平均差 0.04） |
+
+两条限制的规避方式：
+
+- **转场只用 `模糊` / `向左` / `向右`。** `叠化` 会渲成黑场；它和 `模糊` 同属
+  `is_overlap=true`，所以不是「重叠型转场」本身的问题，更像是该转场的资源在云端缺失。
+  `build_complex.py --transitions` 只接受这三个，传别的会直接报错退出。
+- **滤镜目前不要依赖。** 服务端会把 `materials.effects` 里 `type=filter` 的条目拆到
+  `materials.filters` 并清空 `path`，但云端渲染不呈现（四种滤镜均无像素变化）。
+  需要滤镜就先把效果烧进素材再进草稿，或等后端补齐资源上传。
+
 ## 接口契约（自己写客户端时照这张表）
 
 ```
@@ -105,6 +142,7 @@ GET  /api/v2/edit/draft-status/{taskId}
 | `render.py` 打 zip / multipart 上传 / 轮询 / 错误提示（本机实例 127.0.0.1:5099） | 提交拿到 taskId；dummy Cookie 时正确显示 `初始化草稿失败（ret=1015）：check login error`；错 key 显示 401 并给出提示 |
 | **真实出片**（本机实例 + 真实剪映登录态） | **通过**。6 秒草稿（视频 6s + 标题文字 + 配乐）→ 成片 1920×1080 / 30fps / 180 帧 / 6.06s，h264 + aac 44.1k 立体声，音轨 mean -20.8dB（非静音）；抽帧确认画面是源视频内容、标题压在前 2.5 秒，与时间轴一致 |
 | 两条客户端路径一致性 | `render.py` 与 `node agent/cli/htw-skills.mjs draft` 产出的 mp4 字节数相同（1,165,201）、抽帧哈希相同 |
+| **复杂草稿真实出片**（12 秒 / 3 段 / 双音轨 / 蒙版 / 关键帧 / 字幕，见上节） | **通过**。12.05s / 360 帧，无黑段；同时确认 `叠化` 黑场、滤镜不生效两条限制 |
 
 实测数据（6.06 秒 1080p，云端耗时约 6 秒）：
 
@@ -122,5 +160,6 @@ size : 1.10 MiB  bit_rate 1.54 Mbps
 | 文件 | 作用 |
 | --- | --- |
 | `build_draft.py` | 建草稿 + 自包含改写；`--json` 输出一行摘要便于串联 |
+| `build_complex.py` | 复杂草稿：多段、转场、蒙版、关键帧、标题动画、双音轨、字幕 |
 | `render.py` | 纯标准库客户端：打包、上传、轮询、下载 |
 | `requirements.txt` | 只依赖 pyJianYingDraft |
