@@ -81,6 +81,10 @@ node agent/cli/htw-skills.mjs draft "<草稿目录>" --cookie-file ./jy-cookie.t
 传**目录**会自动打包（含素材、保留子目录），也可以直接传已打好的 `.zip`；成片回写到同目录。
 草稿路径不用猜：剪映里右键草稿 →「打开草稿文件夹」，就是它。
 
+草稿也能用代码生成：用 [pyJianYingDraft](https://github.com/GuanYixuan/pyJianYingDraft) 写时间轴、由本平台出片，
+现成的对接示例在 [`examples/pyjianying-draft/`](examples/pyjianying-draft/)——`build_draft.py` 建草稿并把素材
+改成自包含，`render.py` 提交、轮询、下载成片。
+
 和「用脚本控制剪映点导出」那类做法不同：本机不用装剪映、不用开着客户端、不会抢占鼠标和窗口、不占你的 CPU。
 夜里丢上去，早上收成片。
 

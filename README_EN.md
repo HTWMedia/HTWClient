@@ -73,6 +73,10 @@ node agent/cli/htw-skills.mjs draft "/path/to/your/draft-folder" --cookie-file .
 Pass a **folder** (it gets zipped, assets and subfolders included) or an already-packed `.zip`; the video is written back next to your draft.
 Find the folder in JianYing: right-click a draft → "Open draft folder".
 
+Drafts can also be generated in code: build the timeline with [pyJianYingDraft](https://github.com/GuanYixuan/pyJianYingDraft)
+and let the platform render it — see the ready-to-run example in [`examples/pyjianying-draft/`](examples/pyjianying-draft/)
+(`build_draft.py` writes a self-contained draft, `render.py` submits, polls and downloads the mp4).
+
 Unlike scripted "click export inside JianYing" tools: nothing to install, no client window to keep open, no stolen mouse or focus, no local CPU burn.
 Queue it overnight, collect the videos in the morning.
 

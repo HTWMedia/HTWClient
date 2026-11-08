@@ -1,0 +1,9 @@
+# 生成的草稿、成片、打包产物都不进 git
+drafts/
+out/
+*.zip
+__pycache__/
+
+# 剪映登录态：绝不提交
+jy-cookie.txt
+cookie*.txt
