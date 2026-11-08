@@ -54,6 +54,12 @@
       function field(labelText, input) {
         return UI.el("div", { class: "field" }, [UI.el("label", { text: labelText }), input]);
       }
+      // 勾选项不能走 field()：.field 是纵向 flex（标签在上、控件在下），
+      // 套在 checkbox 上会变成「一行文字 + 下面一个孤零零的方框」。
+      // 用 .stepchk 内联（与创作面板的「可选步骤」同一套样式）。
+      function checkField(text, input) {
+        return UI.el("label", { class: "stepchk" }, [input, UI.el("span", { text: text })]);
+      }
       function section(title, bodyNodes, actionNodes, region, icon) {
         const head = icon ? UI.el("h3", {}, [UI.el("i", { class: "fa-solid " + icon }), " " + title]) : UI.el("h3", { text: title });
         const kids = [head].concat(bodyNodes);
@@ -341,7 +347,15 @@
       const transcribeBtn = UI.el("button", { class: "btn", text: "转写" });
       const transcribeCard = section("语音转写 Transcribe", [
         transFile,
-        field("转写格式", transFmt), field("语言", transLang), field("翻译", transTranslate), field("区分角色", transRoleChk), field("对齐文本", transAlignChk), transAlignField,
+        field("转写格式", transFmt), field("语言", transLang),
+        UI.el("div", { class: "field" }, [
+          UI.el("div", { class: "steprow" }, [
+            checkField("翻译", transTranslate),
+            checkField("区分角色", transRoleChk),
+            checkField("对齐文本", transAlignChk),
+          ]),
+        ]),
+        transAlignField,
       ], transcribeBtn, transcribeRegion, "fa-language");
 
       const translateFile = UI.fileInput({ label: "选择音频/视频", accept: "audio/*,video/*" });

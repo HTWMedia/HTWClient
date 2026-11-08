@@ -315,3 +315,27 @@ test("视频生成：提交失败时把服务端 error 显示出来", async () =
 
   assert.match(allText(panel), /Prompt is required/);
 });
+
+/*
+ * 勾选项的排版契约。
+ *
+ * `.field` 是纵向 flex（标签在上、控件在下），把 checkbox 直接塞进 field 会渲染成
+ * 「一行文字 + 下面一个孤零零的方框」。2026-11-08 真机截图里就是这样，肉眼看着像
+ * 三个没标签的空框。正确写法是 .stepchk 内联（与创作面板的「可选步骤」同一套）。
+ */
+test("语音转写：勾选项走内联样式，不与文字分成两行", () => {
+  const { panel } = mountPanel(() => ({ ok: true, data: {} }));
+  const card = querySelectorAll(panel, "div").find((c) =>
+    String(c.className || "").split(/\s+/).indexOf("card") >= 0 && allText(c).indexOf("语音转写") >= 0);
+  assert.ok(card, "应能找到「语音转写」卡片");
+
+  const boxes = querySelectorAll(card, "input").filter((n) => n.type === "checkbox");
+  assert.strictEqual(boxes.length, 3, "转写卡片应有 3 个勾选项：翻译 / 区分角色 / 对齐文本");
+
+  boxes.forEach((box) => {
+    const parent = box.parentNode;
+    assert.ok(parent && parent.classList.contains("stepchk"),
+      "勾选框必须包在 .stepchk 内联标签里；直接挂在 .field 下会把文字和方框拆成两行");
+    assert.ok(allText(parent).trim().length > 0, "勾选框要有文字标签，不能是个空方框");
+  });
+});
