@@ -123,6 +123,10 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .result-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .result-item { display: flex; flex-direction: column; gap: 4px; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
 .rank-badge { display: inline-block; min-width: 22px; height: 22px; line-height: 22px; text-align: center; background: var(--accent); color: #fff; border-radius: 6px; font-size: 12px; font-weight: 600; margin-bottom: 2px; }
+/* .result-item 是纵向 flex，徽标不设 align-self 会被拉成整行宽的蓝条 */
+.result-item > .rank-badge { align-self: flex-start; }
+.show-more-row { margin-top: 4px; }
+.show-more-row .btn { font-size: 12px; padding: 4px 12px; }
 .item-title { font-size: 14px; color: var(--text); font-weight: 600; }
 .item-meta { display: flex; gap: 10px; flex-wrap: wrap; }
 .meta-score { font-size: 12px; color: var(--ok); }
@@ -180,6 +184,13 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; align-items: start; }
 .card-grid .card { margin-bottom: 0; }
 
+/* 工具模块：tab 分组 + 可读的结果区 */
+.tools-tabs .tab i { margin-right: 6px; }
+.tool-result-head { display: flex; align-items: center; gap: 8px; margin: 10px 0 8px; flex-wrap: wrap; }
+.tool-result-text { white-space: pre-wrap; word-break: break-word; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; max-height: 340px; overflow: auto; font-size: 13px; line-height: 1.6; }
+.tool-result-meta { color: var(--muted); font-size: 12px; }
+.tool-result-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
 /* 发布模块：标签页 + 集成表单（参照 web 端） */
 .tabbar { display: flex; gap: 8px; margin: 8px 0 16px; flex-wrap: wrap; }
 .tab { padding: 8px 18px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); color: var(--muted); cursor: pointer; font-size: 14px; }
@@ -223,6 +234,27 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .scriptbox { margin: 10px 0; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--panel-2); }
 .scriptbox pre { white-space: pre-wrap; word-break: break-word; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; margin: 0; }
 .detail-actions { display: flex; gap: 10px; margin-top: 12px; }
+/* 右侧纵向布局：详情在上，素材上传在下；上传区独立于详情，轮询重渲染不会清掉上传进度 */
+.creation-right { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.creation-upload { border: 1px solid var(--border); border-radius: 12px; padding: 16px; background: var(--panel); }
+.creation-upload[hidden] { display: none; }
+.creation-upload .field-label { margin-bottom: 8px; }
+.creation-upload .file-input { margin-bottom: 0; }
+.creation-upload .progresslog { margin: 10px 0 0; }
+#cstatus.bad { color: var(--danger); }
+.step-hint { margin-top: 6px; }
+.ideacard.sel { border-color: var(--accent); background: var(--panel); }
+/* 等待确认时的行内动作输入区（替代同步 prompt 弹窗） */
+.composer { margin-top: 10px; }
+.composer[hidden] { display: none; }
+.composer-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.act-error { color: var(--danger); }
+.step-error { color: var(--danger); font-size: 12px; flex-basis: 100%; }
+/* 产物里的大块 JSON（分镜 / 合成数据）折叠展示，避免几千字糊满详情区 */
+.artifact-details { margin: 8px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); }
+.artifact-details > summary { cursor: pointer; padding: 8px 12px; font-size: 13px; color: var(--text); }
+.artifact-pre { max-height: 320px; overflow: auto; margin: 0; padding: 10px 12px; border-top: 1px solid var(--border); white-space: pre-wrap; word-break: break-word; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+.art-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 
 /* 发布模块：平台行内「配置 Cookie」小按钮 */
 .linkbtn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0 4px; text-decoration: underline; }
@@ -342,6 +374,28 @@ button.btn.btn-ghost:disabled { opacity: 0.6; }
 .detail-progress { font-size: 12px; color: var(--muted); margin-top: 4px; }
 .uprow .progresslog { margin-top: 8px; margin-bottom: 0; }
 
+/* 创作步骤条（图片/文章）：明确现在在哪一步、下一步是什么 */
+.csteps { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.cstep { font-size: 12px; padding: 3px 10px; border-radius: 10px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+.cstep.done { color: #3ecf8e; border-color: #1f4a3a; }
+.cstep.current { color: #6ba0ff; border-color: #2c4a7a; background: #16263f; }
+.cstep.failed { color: #ff5c5c; border-color: #5a2626; background: #3a1d1d; }
+.cstep.pending { opacity: .7; }
+.cstep.skipped { opacity: .5; text-decoration: line-through; }
+/* 图片产物：缩略图网格 + 原图入口 */
+.cimg-box { margin: 6px 0 4px; }
+.cimg { cursor: pointer; }
+.img-open { font-size: 12px; color: var(--accent); text-decoration: none; }
+.img-open:hover { color: var(--accent-hover); }
+.cimg-cap { font-size: 12px; margin-top: 6px; }
+.cstep-hint { margin: 6px 0 0; }
+/* 已完成步骤的回看区 */
+.hist-box { margin: 14px 0 4px; border-top: 1px solid var(--border); padding-top: 10px; }
+.hist-title { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.hist-item { margin: 6px 0; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--panel-2); }
+.hist-item summary { cursor: pointer; font-size: 13px; color: var(--text); }
+.cdone { border-color: #1f4a3a; color: #3ecf8e; }
+
 /* 选题面板：垂类画像的平台勾选、数据源健康 chip */
 .tp-plat { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text); cursor: pointer; }
 .tp-plat input { margin: 0; }
@@ -369,14 +423,17 @@ button.btn.btn-ghost:disabled { opacity: 0.6; }
 /* 下划线式页签：顶层面板页签（batch/workflow 的 wf-*、topics 的 tp-*）与
    卡内类型切换（wf-kind）同一语言。🔴 用 .btn.xxxx 提升优先级压过 button.btn
    的蓝底（0,2,0 > 0,1,1），否则非激活态仍是蓝按钮。 */
-.wf-tabs, .tp-tabs { display: flex; gap: 2px; margin-bottom: 0; border-bottom: 1px solid var(--border); }
-.btn.wf-tab, .btn.tp-tab {
+.wf-tabs, .tp-tabs, .insight-tabs { display: flex; gap: 2px; margin-bottom: 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.btn.wf-tab, .btn.tp-tab, .btn.insight-tab {
   background: transparent; color: var(--muted);
   border: 0; border-bottom: 2px solid transparent; border-radius: 0;
   padding: 8px 16px; margin-bottom: -1px;
 }
-.btn.wf-tab:hover, .btn.tp-tab:hover { background: transparent; color: var(--text); }
-.btn.wf-tab.active, .btn.tp-tab.active { background: transparent; color: var(--accent); border-color: transparent; border-bottom-color: var(--accent); }
+.btn.wf-tab:hover, .btn.tp-tab:hover, .btn.insight-tab:hover { background: transparent; color: var(--text); }
+.btn.wf-tab.active, .btn.tp-tab.active, .btn.insight-tab.active { background: transparent; color: var(--accent); border-color: transparent; border-bottom-color: var(--accent); }
+.insight-tab i { margin-right: 6px; }
+.insight-body { background: var(--panel); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); padding: 16px 20px; }
+.insight-pane > .hint { font-size: 13px; line-height: 1.6; margin-bottom: 12px; }
 .btn.wf-kind, .btn.wf-type {
   background: transparent; color: var(--muted);
   border: 0; border-bottom: 2px solid transparent; border-radius: 0;

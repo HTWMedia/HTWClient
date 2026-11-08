@@ -100,6 +100,9 @@
   function resolveUrl(url) {
     if (typeof url !== "string") return url;
     if (/^https?:\/\//i.test(url)) return url;
+    // 协议相对地址（//i2.hdslb.com/...）在 file:// 页面里会被解析成本地路径，
+    // 必须显式补 https: —— B站搜索结果的封面就是这种形态。
+    if (/^\/\//.test(url)) return "https:" + url;
     var base = (window.HTWApi && window.HTWApi.base) || "";
     if (!base) return url;
     try {
@@ -117,14 +120,27 @@
   // 真正可加载的地址不会带空白或中文。
   function looksLikeMediaPath(s) { return !/[\s\u4e00-\u9fff]/.test(s); }
 
+  // 平台内容页（视频页 / 搜索结果页 / 账号页 / 笔记页）不是图片。
+  // 主机名里带平台名 ≠ 图片 CDN：B站封面在 i0.hdslb.com，抖音图床在 douyinpic.com。
+  function isPlatformPageUrl(s) {
+    try {
+      var host = new URL(s, "https://placeholder.invalid").hostname.toLowerCase();
+      return /(^|\.)(bilibili\.com|douyin\.com|iesdouyin\.com|xiaohongshu\.com|xhslink\.com|toutiao\.com|weibo\.com|weibo\.cn)$/.test(host);
+    } catch (e) { return false; }
+  }
+
   function isImageUrl(key, val) {
     var s = String(val || "");
     if (looksLikeMediaPath(s) && /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|$)/i.test(s)) return true;
-    if (!/^https?:\/\//i.test(s)) return false;
+    if (!/^(https?:)?\/\//i.test(s)) return false;
+    if (isPlatformPageUrl(s)) return false;
     if (/image|cover|thumbnail|poster|pic/i.test(String(key || ""))) return true;
     try {
-      var host = new URL(s).hostname.toLowerCase();
-      if (/(img|image|cover|pic|thumbnail|poster|byteimg|bili|douyin|sns|cdn)/.test(host) && !/\.(mp4|webm|mov|m4v|avi)(\?|$)/i.test(s)) return true;
+      var host = new URL(s, "https://placeholder.invalid").hostname.toLowerCase();
+      // 图片/图床主机名（i0.hdslb.com、p3-sign.douyinpic.com、sns-img-qc.xhscdn.com…），
+      // 不包含 bilibili / douyin / toutiao 这类平台主站名。
+      if (/(^|[.-])(img|image|cover|thumbnail|poster|pic|byteimg|hdslb|douyinpic|toutiaoimg|xhscdn|sinaimg|cdn|sns)([.-]|$)/.test(host) &&
+          !/\.(mp4|webm|mov|m4v|avi)(\?|$)/i.test(s)) return true;
     } catch (e) {}
     return false;
   }
@@ -181,6 +197,40 @@
     return el("span", { class: cls, text: String(val) });
   }
 
+  // 搜索结果标题常带 <em class="keyword"> 高亮标签（B站），直接塞进 textContent 会露出标签；
+  // 先剥标签再解实体，只留给人看的文字。
+  var HTML_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+  function decodeEntities(s) {
+    return String(s).replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, function (m, body) {
+      var plain = HTML_ENTITIES[body.toLowerCase()];
+      if (plain != null) return plain;
+      if (body.charAt(0) === "#") {
+        var code = body.charAt(1).toLowerCase() === "x" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+        if (isFinite(code)) {
+          try { return String.fromCodePoint(code); } catch (e) { return m; }
+        }
+      }
+      return m;
+    });
+  }
+  function stripHtml(s) {
+    return decodeEntities(String(s == null ? "" : s).replace(/<[^>]*>/g, ""));
+  }
+  function plainText(s) {
+    return stripHtml(s).replace(/\s+/g, " ").trim();
+  }
+
+  // 播放量 / 热度这类计数按「万」显示；后端有时已经给了 "2549.1万" 字符串，原样保留。
+  function formatCount(v) {
+    if (v == null || v === "") return "";
+    var s = String(v).trim();
+    if (/[^\d.]/.test(s)) return s;
+    var n = Number(s);
+    if (!isFinite(n)) return s;
+    if (n < 10000) return s;
+    return (n / 10000).toFixed(1).replace(/\.0$/, "") + "万";
+  }
+
   function buildValue(key, val) {
     if (val && typeof val === "object") return buildNode(val, 1);
     var s = String(val == null ? "" : val);
@@ -223,22 +273,46 @@
     if (mediaKey) card.appendChild(audioNode(o[mediaKey]));
     const rank = o.rank != null ? o.rank : index;
     if (rank != null) card.appendChild(el("span", { class: "rank-badge", text: String(rank) }));
-    const title = o.title != null ? o.title : o.name != null ? o.name : o.text != null ? o.text : null;
-    if (title != null) {
-      card.appendChild(o.url ? linkNode(title, o.url) : el("div", { class: "item-title", text: String(title) }));
+    const rawTitle = o.title != null ? o.title : o.name != null ? o.name : o.text != null ? o.text : null;
+    const title = rawTitle == null ? null : plainText(rawTitle);
+    if (title) {
+      card.appendChild(o.url ? linkNode(title, o.url) : el("div", { class: "item-title", text: title }));
     }
     const meta = [];
-    if (o.score != null) meta.push(el("span", { class: "meta-score", text: "热度 " + o.score }));
+    if (o.score != null) {
+      meta.push(el("span", { class: "meta-score", text: (o.scoreLabel || "热度") + " " + formatCount(o.score) }));
+    }
     if (o.tag != null) meta.push(el("span", { class: "meta-tag", text: String(o.tag) }));
     if (meta.length) card.appendChild(el("div", { class: "item-meta" }, meta));
-    const desc = o.desc != null ? o.desc : o.summary != null ? o.summary : o.content != null ? o.content : o.description != null ? o.description : null;
-    if (desc != null && String(desc) !== String(title)) {
-      card.appendChild(el("div", { class: "item-desc", text: String(desc) }));
+    const rawDesc = o.desc != null ? o.desc : o.summary != null ? o.summary : o.content != null ? o.content : o.description != null ? o.description : null;
+    const desc = rawDesc == null ? null : stripHtml(rawDesc).trim();
+    if (desc && desc !== title) {
+      card.appendChild(el("div", { class: "item-desc", text: desc }));
     }
-    const shown = new Set(["rank", "title", "name", "text", "url", "score", "tag", "desc", "summary", "content", "description", "image", "cover", "coverImage", "thumbnail", "thumb", "pic", "poster", "imageUrl", "audio", "audioUrl", "voice", "mediaUrl", "videoUrl", "video"]);
+    const shown = new Set(["rank", "title", "name", "text", "url", "score", "scoreLabel", "tag", "desc", "summary", "content", "description", "image", "cover", "coverImage", "thumbnail", "thumb", "pic", "poster", "imageUrl", "audio", "audioUrl", "voice", "mediaUrl", "videoUrl", "video"]);
     const rest = Object.keys(o).filter((k) => !shown.has(k) && o[k] != null);
     if (rest.length) card.appendChild(el("div", { class: "item-rest" }, rest.map((k) => buildKv(k, o[k]))));
     return card;
+  }
+
+  // 热榜动辄 5×50 条，一次铺满整页既难找重点也拖慢渲染。
+  // 长列表先显示前 LIST_PREVIEW 条，其余点「展开」再追加。
+  const LIST_PREVIEW = 8;
+
+  function buildList(value) {
+    const list = el("div", { class: "result-list" });
+    value.slice(0, LIST_PREVIEW).forEach((it, i) => list.appendChild(buildItem(it, i + 1)));
+    if (value.length > LIST_PREVIEW) {
+      const moreRow = el("div", { class: "show-more-row" });
+      const more = el("button", { class: "btn secondary", text: "展开其余 " + (value.length - LIST_PREVIEW) + " 条" });
+      more.addEventListener("click", function () {
+        for (let i = LIST_PREVIEW; i < value.length; i++) list.appendChild(buildItem(value[i], i + 1));
+        list.removeChild(moreRow);
+      });
+      moreRow.appendChild(more);
+      list.appendChild(moreRow);
+    }
+    return list;
   }
 
   function buildNode(value, depth) {
@@ -253,7 +327,7 @@
           el("div", { class: "result-item" }, [ /^https?:\/\//.test(u) ? linkNode(u, u) : el("span", { class: "kv-val", text: u }) ])
         ));
       }
-      return el("div", { class: "result-list" }, value.map((it, i) => buildItem(it, i + 1)));
+      return buildList(value);
     }
     if (value && typeof value === "object") {
       const keys = Object.keys(value);
@@ -453,7 +527,9 @@
     // 文本比窗口短时 idx > length - 40 恒成立，不加这个判断会把整条短回复清空。
     var idx = out.toUpperCase().lastIndexOf("FINISHED");
     if (idx > 0 && idx > out.length - 40) out = out.slice(0, idx);
-    return out.replace(INTERNAL_MARKER, "").trim();
+    // 模型偶尔把开头的搜索标记写成不带 # 的 SEARCH，还紧跟在 FINISHED 后面；
+    // FINISHED 被删掉后 SEARCH 就留在正文开头了。只清行首，避免误伤正文英文词。
+    return out.replace(INTERNAL_MARKER, "").replace(/^\s*(?:FINISHED|SEARCH#?)+(?![A-Za-z])/, "").trim();
   }
   function cleanDeep(v) {
     if (typeof v === "string") return cleanText(v);

@@ -51,3 +51,13 @@ guide-videos/assets/
 # 成片 mp4 走 GitHub Release 附件分发，不进 git（索引见 out/README.md）
 guide-videos/out/*.mp4
 guide-videos/out/preview/
+
+# 从仓库根目录跑 guide-videos 录制脚本时落下来的产物（成片、中间树、探针截图、
+# 阶段元数据、临时讲稿副本、云端压测素材）。真源在 guide-videos/ 下，这里一律不进库。
+/out/
+/work/
+/cloudtest/
+/pkg-verify/
+/scripts/
+/meta_*.json
+/*.png

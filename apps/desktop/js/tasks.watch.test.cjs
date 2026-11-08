@@ -700,3 +700,79 @@ test("恢复：记录一载入就广播，不必等逐条状态复查走完", as
   await done;
   assert.strictEqual(store.list().length, 2, "复查放行后记录一条都不该少");
 });
+
+/* ------------------------------------------------------------------
+ * videogen（豆包文生视频异步任务）
+ *
+ * 这个域有两点与 v2 各域不同，都踩过：
+ *   1. 端点没有 v2 前缀，状态词是 succeeded / failed / queued / running；
+ *   2. 回包是手写 snake_case（video_url），而 api.js 的 camelize 只动 PascalCase，
+ *      原样交给 applyPayload 就取不到成片地址 —— 任务成功、产物行却是空的。
+ * ------------------------------------------------------------------ */
+
+test("videogen：轮询异步任务端点，succeeded 落成完成并带出成片地址", async () => {
+  const d = fakeDeps();
+  const seen = [];
+  d.api.call = async (method, path) => {
+    seen.push(method + " " + path);
+    return {
+      ok: true,
+      data: {
+        job_id: "j1", status: "succeeded", stage: "done",
+        video_url: "https://cdn.example.com/a.mp4", model: "seedance_v2", elapsed_seconds: 96,
+      },
+    };
+  };
+  const store = I.createStore(d);
+  const t = store.register({ domain: "videogen", taskId: "j1", panel: "tools", title: "视频生成" });
+  await settle();
+
+  assert.deepStrictEqual(seen, ["GET /api/doubao/generate-video/jobs/j1"], "必须问异步任务的轮询端点");
+  const cur = store.get(t.id);
+  assert.strictEqual(cur.status, "done", "succeeded 是终态；漏了它这条记录会永远显示进行中");
+  assert.strictEqual(cur.result && cur.result.downloadUrl, "https://cdn.example.com/a.mp4",
+    "video_url 必须归一成 applyPayload 认得的产物地址");
+});
+
+test("videogen：queued 仍在跑，阶段词翻成人话并带上已等待时长", async () => {
+  const d = fakeDeps();
+  let payload = { job_id: "j2", status: "queued", stage: "queued", elapsed_seconds: 0 };
+  d.api.call = async () => ({ ok: true, data: payload });
+  const store = I.createStore(d);
+  const t = store.register({ domain: "videogen", taskId: "j2", title: "视频生成" });
+  await settle();
+  assert.strictEqual(store.get(t.id).status, "running", "queued 不是终态");
+
+  payload = { job_id: "j2", status: "running", stage: "polling", elapsed_seconds: 42 };
+  // 直接喂一帧给落库逻辑，等价于下一次轮询回来（fakeDeps 的定时器不自动触发）
+  I.applyPayload(store.get(t.id), I.normalizeVideoGenPayload(payload));
+  const cur = store.get(t.id);
+  assert.match(cur.step, /正在生成画面/, "不能把 polling 这种内部词直接铺给用户");
+  assert.match(cur.step, /00:42/, "已等待时长是唯一能看出「它还在动」的信号");
+});
+
+test("videogen：failed 显示服务端 error 原文", async () => {
+  const d = fakeDeps();
+  d.api.call = async () => ({
+    ok: true,
+    data: { job_id: "j3", status: "failed", stage: "failed", error: "访问频繁，请稍后再试" },
+  });
+  const store = I.createStore(d);
+  const t = store.register({ domain: "videogen", taskId: "j3", title: "视频生成" });
+  await settle();
+  const cur = store.get(t.id);
+  assert.strictEqual(cur.status, "failed");
+  assert.strictEqual(cur.error, "访问频繁，请稍后再试");
+});
+
+test("videogen：404 落成中断，文案说的是保留期过期而不是服务重启", async () => {
+  const d = fakeDeps();
+  d.api.call = async () => ({ ok: false, code: 404, message: "Not Found" });
+  const store = I.createStore(d);
+  const t = store.register({ domain: "videogen", taskId: "j4", title: "视频生成" });
+  await settle();
+  const cur = store.get(t.id);
+  assert.strictEqual(cur.status, "interrupted");
+  assert.match(cur.error, /180 分钟/, "豆包视频任务 404 的真实成因是过了保留期");
+  assert.doesNotMatch(cur.error, /重启/, "别把用户指向 Web 服务重启");
+});

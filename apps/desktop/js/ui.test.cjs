@@ -11,6 +11,7 @@ function makeNode(tag) {
     parentNode: null,
     style: {},
     textContent: "",
+    _listeners: {},
     appendChild(child) {
       if (child == null) return child;
       child.parentNode = this;
@@ -23,7 +24,12 @@ function makeNode(tag) {
       return child;
     },
     get firstChild() { return this.children.length ? this.children[0] : null; },
-    addEventListener() {},
+    addEventListener(type, fn) {
+      (this._listeners[type] = this._listeners[type] || []).push(fn);
+    },
+    dispatch(type, ev) {
+      (this._listeners[type] || []).forEach((fn) => fn(Object.assign({ preventDefault() {}, target: this }, ev)));
+    },
     setAttribute(k, v) { this["_attr_" + k] = v; },
     getAttribute(k) { return this["_attr_" + k]; },
     closest() { return null; },
@@ -248,4 +254,80 @@ test("ui.fileInput: refresh 回显已选文件名，超过 3 个折叠为「等�
     w.refresh();
     assert.strictEqual(findByClass(w, "file-drop-files").textContent, "", "清空选择后回显行应为空");
   } finally { global.document = prev; }
+});
+
+// ---- 结果渲染：平台内容页不当图片 / 协议相对封面 / 标题去 HTML / 长列表折叠 ----
+
+function renderInto(data) {
+  const prev = global.document;
+  global.document = doc;
+  const region = makeNode("div");
+  UI.renderResult(region, data);
+  return { region, restore: () => { global.document = prev; } };
+}
+
+// 热搜/搜索结果里的 url 是内容页地址，主机名含平台名但不是图片；
+// 以前会把整条结果渲染成裂图 +「打开图片」。
+test("ui.renderResult: 平台内容页 url 不渲染成 IMG，退化为标题链接", () => {
+  const { region, restore } = renderInto([
+    { rank: 1, title: "露营装备清单", url: "https://www.bilibili.com/video/BV1xx411c7mD" },
+  ]);
+  try {
+    assert.strictEqual(findByTag(region, "IMG"), null, "内容页地址不应产生 IMG");
+    const a = findByTag(region, "A");
+    assert.ok(a, "应保留可点击的标题链接");
+    assert.strictEqual(a.getAttribute("href"), "https://www.bilibili.com/video/BV1xx411c7mD");
+  } finally { restore(); }
+});
+
+// B站封面常是协议相对地址（//i2.hdslb.com/...），file:// 页面会解析成本地路径 → 裂图。
+test("ui.renderResult: 协议相对封面补 https: 后渲染为 IMG", () => {
+  const { region, restore } = renderInto([
+    { rank: 1, title: "露营装备清单", cover: "//i2.hdslb.com/bfs/archive/abc.jpg" },
+  ]);
+  try {
+    const img = findByTag(region, "IMG");
+    assert.ok(img, "封面应渲染成 IMG");
+    assert.strictEqual(img.getAttribute("src"), "https://i2.hdslb.com/bfs/archive/abc.jpg");
+  } finally { restore(); }
+});
+
+// B站搜索标题带 <em class="keyword"> 高亮标签；直接当文本会露出标签源码。
+test("ui.renderResult: 标题里的 <em> 标签被剥掉（保留文字、解实体）", () => {
+  const { region, restore } = renderInto([
+    { rank: 1, title: '露营<em class="keyword">装备</em>清单 &amp; 推荐', url: "https://www.bilibili.com/video/BV1" },
+  ]);
+  try {
+    const a = findByTag(region, "A");
+    assert.ok(a, "应有标题链接节点");
+    assert.strictEqual(a.textContent, "露营装备清单 & 推荐", "实际标题：" + a.textContent);
+  } finally { restore(); }
+});
+
+// 热榜 5 平台 × 50 条一次铺满既难找重点也拖慢渲染：先显示 8 条，剩余可展开。
+test("ui.renderResult: 长列表先显示 8 条，点「展开其余」追加剩余", () => {
+  const items = [];
+  for (let i = 0; i < 12; i++) items.push({ rank: i + 1, title: "话题 " + (i + 1) });
+  const { region, restore } = renderInto(items);
+  try {
+    const list = findByClass(region, "result-list");
+    assert.ok(list, "应有 .result-list");
+    assert.strictEqual(list.children.length, 9, "应是 8 条数据 + 1 行展开按钮，实际 " + list.children.length);
+    const moreRow = findByClass(list, "show-more-row");
+    assert.ok(moreRow, "应有展开行");
+    const btn = findByTag(moreRow, "BUTTON");
+    assert.ok(btn && btn.textContent.includes("展开其余 4 条"), "按钮文案：" + (btn && btn.textContent));
+    btn.dispatch("click");
+    assert.strictEqual(list.children.length, 12, "展开后应显示全部 12 条，实际 " + list.children.length);
+    assert.strictEqual(findByClass(list, "show-more-row"), null, "展开后按钮行应移除");
+  } finally { restore(); }
+});
+
+// 模型输出会把内部标记粘在正文前（FINISHEDSEARCH 抱歉…），只删 FINISHED 会漏出 SEARCH。
+test("ui.cleanText: 行首模型标记（FINISHED / SEARCH）不泄漏进正文", () => {
+  assert.strictEqual(UI.cleanText("FINISHEDSEARCH抱歉，视频链接返回了 403"), "抱歉，视频链接返回了 403");
+  assert.strictEqual(UI.cleanText("SEARCH 抱歉，无法解析"), "抱歉，无法解析");
+  assert.strictEqual(UI.cleanText("\n  SEARCH抱歉"), "抱歉", "行首空白后也要清");
+  assert.strictEqual(UI.cleanText("SEARCHING 是什么"), "SEARCHING 是什么", "普通英文词不能被截断");
+  assert.strictEqual(UI.cleanText("这篇 Research 讲什么"), "这篇 Research 讲什么", "小写正文不受影响");
 });

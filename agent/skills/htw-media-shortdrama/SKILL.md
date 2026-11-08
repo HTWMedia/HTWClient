@@ -49,6 +49,11 @@ The HTW desktop client also ships a dedicated **短剧创作 ShortDrama** panel
 - Responses use the v1 envelope `{ success, data, error }` (not the v2 `{ ok, data }`).
 - The 短剧 skill is rate-limited server-side; a
   `success:false` with a 频繁 / 额度 message means retry later.
-- `POST /api/studio/video` is a standalone clip generator; on some
-  accounts the storyboard web skill is unavailable, so prefer driving storyboards
-  through the 短剧 skill conversation above.
+- Standalone clip generation is asynchronous: `POST /api/doubao/generate-video`
+  returns `202` + `job_id`, then poll
+  `GET /api/doubao/generate-video/jobs/{job_id}` until `status` is
+  `succeeded` or `failed` (see `references/api.md`). The legacy synchronous
+  `POST /api/studio/video` still works but hangs the connection for the whole
+  render and is what the desktop client moved away from.
+- On some accounts the storyboard web skill is unavailable, so prefer driving
+  storyboards through the 短剧 skill conversation above.

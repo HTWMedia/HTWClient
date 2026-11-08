@@ -19,6 +19,10 @@
     success: 1, completed: 1, done: 1, failed: 1, canceled: 1, cancelled: 1,
     error: 1, notfound: 1, partial_failed: 1, expired: 1,
     draft_saved: 1, awaiting_manual: 1, unconfirmed: 1,
+    // succeeded 是豆包视频任务（/api/doubao/generate-video/jobs/{id}）的成功词，
+    // 只有 videogen 域会给出它。漏了它 normalizeStatus 会按「非终态」落成 running，
+    // 于是一条已经出片的记录在任务中心永远显示「进行中」，还每 3 秒白问一次服务端。
+    succeeded: 1,
   };
 
   // 内部状态词表（记录里 status 字段的取值）里的终态。
@@ -214,6 +218,65 @@
     return null;
   }
 
+  /* ------------------------------------------------------------------
+   * 载荷字段归一。
+   *
+   * 绝大多数域走 Newtonsoft 的 PascalCase，再经 api.js 的 camelize 落成
+   * camelCase —— applyPayload 那一套字段名就是照这个形状写的。
+   * 但 /api/doubao/* 是手写 snake_case（job_id / video_url / elapsed_seconds），
+   * 而 api.js 的 camelize **只把 PascalCase 首字母调小写，snake_case 原样保留**，
+   * 所以 video_url 喂进 applyPayload 是没人认的：任务成功了、产物行却是空的。
+   * 这里按域折成 camelCase，applyPayload 保持与域无关。
+   * ------------------------------------------------------------------ */
+
+  // 生成链路内部阶段词 → 任务中心详情行上的人话。
+  // 与 tools.js 的 VD_STAGE_TEXT 同源：两边是同一批服务端 stage，
+  // 词表各存一份是因为 tasks.js 与 skills/tools.js 互不依赖（后者可能未加载）。
+  const VIDEOGEN_STAGE_TEXT = {
+    queued: "已排队",
+    uploading: "正在上传参考图",
+    submitting: "已提交生成服务，等待受理",
+    polling: "正在生成画面",
+    confirming: "正在确认画面细节",
+    finalizing: "正在取回成片",
+    done: "已完成",
+    failed: "已失败",
+  };
+
+  function fmtClock(sec) {
+    const n = Math.max(0, Math.floor(Number(sec) || 0));
+    const m = Math.floor(n / 60);
+    const s = n % 60;
+    return (m < 10 ? "0" + m : String(m)) + ":" + (s < 10 ? "0" + s : String(s));
+  }
+
+  function normalizeVideoGenPayload(p) {
+    if (!p || typeof p !== "object") return p;
+    const pick = (snake, camel) => (p[snake] !== undefined && p[snake] !== null ? p[snake] : p[camel]);
+    const out = Object.assign({}, p);
+    if (!out.videoUrl) {
+      const url = pick("video_url", "videoUrl");
+      if (url) out.videoUrl = String(url);
+    }
+    if (!out.jobId) {
+      const id = pick("job_id", "jobId");
+      if (id) out.jobId = String(id);
+    }
+    // 视频任务没有 progress 字段，用户唯一能判断「它还在动」的就是已等待时长。
+    // 拼进 step 而不是造一个假百分比：生成耗时不均，任何比例都是编的。
+    const sec = Number(pick("elapsed_seconds", "elapsedSeconds"));
+    const stage = String(p.stage || p.Stage || "");
+    const text = VIDEOGEN_STAGE_TEXT[stage];
+    if (text) {
+      out.stage = sec > 0 ? text + "（已等待 " + fmtClock(sec) + "）" : text;
+    }
+    return out;
+  }
+
+  const DOMAIN_NORMALIZERS = {
+    videogen: normalizeVideoGenPayload,
+  };
+
   const DOMAINS = {
     agent: { sse: true, cancel: false,
       status: (t) => "/api/v2/agent/status?taskId=" + encodeURIComponent(t.taskId) },
@@ -239,6 +302,14 @@
       status: (t) => "/api/v2/edit/status/" + encodeURIComponent(t.taskId) },
     image: { sse: false, cancel: false,
       status: (t) => "/api/v2/image/status?taskId=" + encodeURIComponent(t.taskId) },
+    // 豆包文生视频的服务端任务（工具面板「视频生成」）。任务在服务端独立跑，
+    // 关掉面板/切走都不影响；轮询端点没有 v2 前缀，且返回手写 snake_case
+    // （见 DOMAIN_NORMALIZERS）。
+    videogen: { sse: false, cancel: false,
+      // 404 在这里不是「服务重启过」：服务端只保留 180 分钟的任务记录，
+      // 过期后查就是 404。给一句准确的话，别把人指向重启。
+      goneError: "任务记录已过期（服务端只保留 180 分钟），成片请到豆包网页会话查看",
+      status: (t) => "/api/doubao/generate-video/jobs/" + encodeURIComponent(t.taskId) },
   };
 
   /* ------------------------------------------------------------------
@@ -380,9 +451,11 @@
       }, SAVE_DEBOUNCE_MS);
     }
 
-    // 载荷落地：先按域折算出 status（没有的话），再走 applyPayload 的通用映射。
+    // 载荷落地：先按域折字段名，再按域折算出 status（没有的话），最后走 applyPayload 的通用映射。
     function applyFor(task, payload) {
       if (!payload || typeof payload !== "object") return task;
+      const norm = DOMAIN_NORMALIZERS[task.domain];
+      if (norm) payload = norm(payload);
       if (payload.status === null || payload.status === undefined) {
         const s = deriveStatus(task.domain, payload);
         if (s) return applyPayload(task, Object.assign({}, payload, { status: s }));
@@ -455,7 +528,9 @@
           // HTTP 状态落在 code 上（WorkflowController 的 FailApi(404, ..., 404) 会同时给出
           // HTTP 404 与 ErrCode=404，两条路都覆盖到），status 只有直接调用的调用方才会有。
           task.status = "interrupted";
-          task.error = "服务端已无此任务（Web 服务可能已重启）";
+          // 各域「记录没了」的成因不同：v2 域多半是 Web 服务重启过，
+          // 豆包视频任务则是过了 180 分钟保留期。能说准就别说错。
+          task.error = cfg.goneError || "服务端已无此任务（Web 服务可能已重启）";
           task.endedAt = d.now();
         } else {
           // 其它失败（网络抖动 / 401）**不判死**：只是这次没查到。
@@ -641,6 +716,7 @@
       TERMINAL_STATUSES, PAUSED_STATUSES, RESUME_CHECK_MS, DOMAINS,
       isTerminal, normalizeStatus, applyPayload, evict, canCancel, cancelBody, newTask, createStore,
       deriveStatus, deriveWorkflowStatus, deriveBatchStatus, isPausedStatus,
+      DOMAIN_NORMALIZERS, normalizeVideoGenPayload, VIDEOGEN_STAGE_TEXT,
     },
   };
 });

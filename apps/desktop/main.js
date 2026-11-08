@@ -437,6 +437,14 @@ function createWindow() {
   win.webContents.session.on("will-download", (_event, item) => {
     try {
       let name = item.getFilename() || "download";
+      // media-file 这类端点路径固定、真实文件名在 query 里，Chromium 只会按路径段
+      // 取名（media-file.mp4）。命中自家 media-file 端点时改用 query 里的文件名。
+      try {
+        const u = new URL(item.getURL());
+        const hint = u.searchParams.get("fileName");
+        if (hint && /(^|\/)(media-file|MediaFile)$/i.test(u.pathname)) name = path.basename(hint);
+      } catch (e) { /* 非标准 URL 就保持原样 */ }
+      name = String(name).replace(/[\\/:*?"<>|]/g, "_") || "download";
       // <a download="xxx.mp4"> 时 getFilename 已是建议名，这里只需补目录。
       item.setSavePath(path.join(app.getPath("downloads"), name));
     } catch (e) { /* 保存路径设置失败就让下载走默认行为 */ }
