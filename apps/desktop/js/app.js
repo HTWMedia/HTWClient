@@ -2,11 +2,13 @@
   // 面板白名单：showPanel 只给名单里的面板切active。
   // 🔴 新增面板**必须**同时改这里——只加 index.html 的 section 与 nav 按钮的话，
   //    点导航会"点了没反应"（面板永远不激活），而且不报任何错。
-  const SKILLS = ["insight", "topics", "edit", "tools", "publish", "assistant", "create", "marketing", "batch", "shortdrama", "workflow", "tasks"];
+  // draftcheck 排第一：它不依赖 AuthKey，是没配 Key 时唯一能用的面板（见 refreshKeyUI 的豁免）。
+  const SKILLS = ["draftcheck", "insight", "topics", "edit", "tools", "publish", "assistant", "create", "marketing", "batch", "shortdrama", "workflow", "tasks"];
 
   // 每个功能点的一句话说明：切到该面板时显示在标题下（.panel-desc）。
   // 🔴 新增面板必须在这里补一条——app.panels.test.mjs 有守卫核对（漏了会红）。
   const SKILL_DESCRIPTIONS = {
+    draftcheck: "不用 AuthKey：选一条剪映草稿，本机解密并核对轨道与素材，出片前就知道会不会缺素材、会不会被云渲染拒。",
     tools: "语音、视频、图片小工具集：转写 / 翻译 / 总结 / 配音、视频生成、字幕提取、模板搜索、图像生成与识别，按 tab 分类即开即用。",
     insight: "看清内容和账号的表现：视频 / 账号 / 文案分析、各平台热榜与全网搜索，帮你决定下一步做什么。",
     topics: "配置对标账号、关键词与目标受众，系统据此每天给你出选题建议。",
@@ -272,8 +274,11 @@
       const active = document.querySelector(".panel.active");
       const isSettings = document.getElementById("panel-settings") && document.getElementById("panel-settings").classList.contains("active");
     const isAssistant = document.getElementById("panel-assistant") && document.getElementById("panel-assistant").classList.contains("active");
+      // 草稿体检全程在本机跑（js/skills/draftcheck.js 里一次 API.call 都没有），
+      // 没有 Key 也完全可用 —— 在这个面板上弹"以下功能将无法使用"是错的。
+      const isDraftCheck = document.getElementById("panel-draftcheck") && document.getElementById("panel-draftcheck").classList.contains("active");
       const has = window.HTWApi && window.HTWApi.hasKey && window.HTWApi.hasKey();
-      if (!has && !isSettings && !isAssistant) {
+      if (!has && !isSettings && !isAssistant && !isDraftCheck) {
         warn.hidden = false;
         warn.textContent = "尚未设置 AuthKey，以下功能将无法使用。请到「设置」填写，或点击「前往 web 端获取 AuthKey」。";
       } else {

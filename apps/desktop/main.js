@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
@@ -6,6 +6,8 @@ const https = require("https");
 const { URL } = require("url");
 const { parseSseChunk } = require("./js/sse-parser.js");
 const { createSupervisor } = require("./js/local-supervisor.js");
+// 剪映草稿的本地解析/解密（纯函数，无网络）。桌面端的免 AuthKey 钩子就建在它上面。
+const draftLocal = require("./js/draft-local.js");
 
 Menu.setApplicationMenu(null);
 
@@ -147,6 +149,48 @@ ipcMain.handle("htw:saveJson", (_e, name, data) => {
 });
 ipcMain.handle("htw:openExternal", (_e, url) => {
   try { if (url) shell.openExternal(String(url)); return true; } catch (e) { return false; }
+});
+
+// ---- 本地草稿体检（免 AuthKey 的钩子）----
+//
+// 定位：新用户装完客户端、还没有 AuthKey 时，唯一能立刻产生价值的功能。
+// 因此这三条通道**不碰网络、不读配置、不校验凭据**，只做本机文件操作。
+//
+// 安全边界（渲染层不是完全可信的：任何一个 XSS 都能 invoke 这些通道）：
+//   1. 只接受"目录"，且只读目录里固定文件名（draft_content.json / draft_info.json），
+//      不会把任意路径的内容吐回去；
+//   2. 返回体是**摘要**，不是解密后的全文 —— 想拿明文只能落盘成本地文件，
+//      而落盘位置固定在草稿目录内，且绝不覆盖原文件；
+//   3. 目录由用户在系统弹窗里亲手选（或手动输入），不存在"远端下发路径"的入口。
+// 结论：即使渲染层被完全控制，能拿到的也只是"用户自己草稿的统计信息"。
+ipcMain.handle("htw:draftPickFolder", async (e) => {
+  try {
+    const opts = {
+      title: "选择剪映草稿文件夹",
+      buttonLabel: "体检这条草稿",
+      properties: ["openDirectory"],
+    };
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+    if (!r || r.canceled || !r.filePaths || !r.filePaths.length) return "";
+    return String(r.filePaths[0] || "");
+  } catch (err) {
+    return "";
+  }
+});
+ipcMain.handle("htw:draftInspect", (_e, folder) => {
+  try {
+    return draftLocal.inspectDraftFolder(String(folder || ""));
+  } catch (err) {
+    return { ok: false, error: (err && err.message) || String(err) };
+  }
+});
+ipcMain.handle("htw:draftExport", (_e, folder) => {
+  try {
+    return draftLocal.exportDecryptedDraft(String(folder || ""));
+  } catch (err) {
+    return { ok: false, error: (err && err.message) || String(err) };
+  }
 });
 
 // ---- 本地实例（用户自备的本地可执行文件）----

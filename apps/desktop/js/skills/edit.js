@@ -329,6 +329,15 @@
       const decRegion = UI.el("div");
       const decBtn = UI.el("button", { class: "btn", text: "解密" });
       const decCard = section("解密 Decrypt", [decFile], decBtn, decRegion, "fa-lock-open");
+      // 同一条能力有免费的本机路径（「草稿体检」），却把用户留在收费上传这条路上，
+      // 一旦被发现就是信任问题。这里给一个明确的出口，而不是只字不提。
+      const decLocalBtn = UI.el("button", { class: "btn btn-ghost", type: "button", id: "edit-dec-local", text: "去本地免费解密" });
+      decLocalBtn.addEventListener("click", function () {
+        const nav = document.querySelector('.nav-item[data-skill="draftcheck"]');
+        if (nav) nav.click();
+      });
+      decCard.appendChild(hint("这条解密走云端、会计入额度。只是想拿到明文 JSON 的话，「草稿体检」在本机免费解密并导出，草稿不出这台机器。"));
+      decCard.appendChild(UI.el("div", { class: "row" }, [decLocalBtn]));
 
       UI.mount(panel, UI.el("div", {}, [
         UI.el("h2", { text: "剪辑 Edit" }),

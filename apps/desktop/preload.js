@@ -118,6 +118,23 @@ contextBridge.exposeInMainWorld("htw", {
   saveConfig: saveConfig,
   saveJson: saveJson,
   loadJson: loadJson,
+  // ---- 本地草稿体检（免 AuthKey 的钩子）----
+  // 这三条不传 base、不传 apiKey：请求压根不出这个进程。
+  // 与 localStart 同一套兜底口径（ok:false + error），调用方按 ok 判成功，
+  // 不要按"有返回值"当成功 —— 主进程通道断掉时这里也会 resolve 出一个对象。
+  draftPickFolder: () => ipcRenderer
+    .invoke("htw:draftPickFolder")
+    .catch(function () { return ""; }),
+  draftInspect: (folder) => ipcRenderer
+    .invoke("htw:draftInspect", String(folder || ""))
+    .catch(function (e) {
+      return { ok: false, error: "本地体检通道不可用：" + String((e && e.message) || e) };
+    }),
+  draftExport: (folder) => ipcRenderer
+    .invoke("htw:draftExport", String(folder || ""))
+    .catch(function (e) {
+      return { ok: false, error: "本地导出通道不可用：" + String((e && e.message) || e) };
+    }),
   // 在系统默认浏览器中打开外部链接（结果里的 URL 点击时用）。
   openExternal: (url) => {
     if (!url) return;

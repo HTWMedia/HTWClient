@@ -469,3 +469,42 @@ button.btn.btn-ghost:disabled { opacity: 0.6; }
 .badge.interrupted { background: #2f2a12; color: #d6c07a; }
 .badge.canceled { background: #26262a; color: var(--muted); }
 .badge.done { background: #14342a; color: #3ecf8e; }
+
+/* 草稿体检（本地 · 免 AuthKey）
+   结论色只有三档：能出片（绿）/ 能出但有问题（琥珀）/ 出了也是废片（红）。
+   颜色不是装饰：用户扫一眼标题色就知道该不该继续往下读。 */
+.dc-result { margin-top: 12px; }
+.dc-verdict {
+  display: flex; gap: 8px; align-items: flex-start;
+  padding: 10px 12px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--panel-2);
+  font-size: 13px; line-height: 1.55;
+}
+.dc-verdict.dc-ok { border-color: rgba(62, 207, 142, .45); background: rgba(62, 207, 142, .08); color: var(--ok); }
+.dc-verdict.dc-warn { border-color: rgba(224, 163, 58, .45); background: rgba(224, 163, 58, .08); color: #e0a33a; }
+.dc-verdict.dc-error { border-color: rgba(255, 92, 92, .45); background: rgba(255, 92, 92, .08); color: var(--danger); }
+.dc-section-title { margin: 16px 0 6px; font-size: 12px; color: var(--muted); letter-spacing: .04em; }
+.dc-row {
+  display: grid; grid-template-columns: 96px 1fr; gap: 10px;
+  padding: 5px 0; border-bottom: 1px dashed var(--border); font-size: 13px;
+}
+.dc-row:last-child { border-bottom: none; }
+.dc-k { color: var(--muted); font-size: 12px; }
+.dc-v { color: var(--text); word-break: break-all; }
+.dc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.dc-good { color: var(--ok); }
+.dc-bad { color: var(--danger); }
+.dc-missing {
+  margin-top: 6px; padding: 8px 10px; border-radius: 6px;
+  background: rgba(255, 92, 92, .07); border: 1px solid rgba(255, 92, 92, .28);
+  font-size: 12px; color: var(--muted);
+}
+.dc-missing-item { padding: 2px 0; word-break: break-all; }
+.dc-checks { display: flex; flex-direction: column; gap: 6px; }
+.dc-check { display: flex; gap: 6px; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
+.dc-check i { margin-top: 3px; }
+.dc-check.dc-ok { color: var(--ok); }
+.dc-check.dc-warn { color: #e0a33a; }
+.dc-check.dc-error { color: var(--danger); }
+.dc-check.dc-info { color: var(--muted); }
+.dc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }

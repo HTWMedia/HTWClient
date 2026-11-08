@@ -10,6 +10,9 @@
   <div id="app">
     <aside class="sidebar">
       <h1>HTW 工作台</h1>
+      <!-- 草稿体检排第一：它是**不需要 AuthKey** 的入口，新用户装完就能点开看结果，
+           不该被埋在一堆需要账号的面板后面。 -->
+      <button class="nav-item" data-skill="draftcheck"><i class="fa-solid fa-stethoscope"></i>草稿体检 Draft Check</button>
       <button class="nav-item" data-skill="tools"><i class="fa-solid fa-toolbox"></i>工具 Tools</button>
       <button class="nav-item" data-skill="insight"><i class="fa-solid fa-chart-line"></i>洞察 Analysis</button>
       <button class="nav-item active" data-skill="topics"><i class="fa-solid fa-lightbulb"></i>选题 Topics</button>
@@ -29,6 +32,7 @@
       <!-- 402 = 免费额度用尽（账号级状态，不是某个面板的错）。后端会带 redirectUrl，
            以前前端完全没用，用户只看到「402」不知道该去哪充值。 -->
       <div id="quota-banner" class="quota-banner" hidden></div>
+      <section class="panel" id="panel-draftcheck"></section>
       <section class="panel" id="panel-insight"></section>
       <section class="panel" id="panel-edit"></section>
       <section class="panel active" id="panel-topics"></section>
@@ -110,6 +114,7 @@
   <script src="js/local-capabilities.js"></script>
   <script src="js/tasks.js"></script>
   <script src="js/ui.js"></script>
+  <script src="js/skills/draftcheck.js"></script>
   <script src="js/skills/insight.js"></script>
   <script src="js/skills/topics.js"></script>
   <script src="js/skills/edit.js"></script>
