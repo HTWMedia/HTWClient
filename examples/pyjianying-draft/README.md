@@ -4,10 +4,16 @@
 不用打开剪映、不用守着电脑，批量跑也不占本机。
 
 ```
-build_draft.py    单段最小示例：一段视频 + 标题 + 配乐/字幕
-build_complex.py  复杂示例：多段拼接 + 转场 + 蒙版 + 关键帧 + 标题动画 + 双音轨 + 字幕
-render.py         草稿目录 → zip → POST /api/v2/edit/draft-export → 轮询 → 下载 mp4
+build_draft.py      单段最小示例：一段视频 + 标题 + 配乐/字幕
+build_complex.py    复杂示例：多段拼接 + 转场 + 滤镜 + 蒙版 + 关键帧 + 标题动画 + 双音轨 + 字幕
+effects_catalog.py  特效应资源目录：按标题挑非 VIP 的 19 位资源 id（--list-fx 看清单）
+apply_effects.py    把转场/滤镜改写成云端能认的形态（build_complex 在 save 之后自动调）
+render.py           草稿目录 → zip → POST /api/v2/edit/draft-export → 轮询 → 下载 mp4
 ```
+
+> 转场和滤镜**不能直接用 pyJianYingDraft 自带的元数据**：那是过期快照，`resource_id`
+> 云端可能已无对应资源，而且失败是静默的（转场变整段黑、滤镜干脆不参与计算）。
+> 详见「复杂草稿实测」一节。
 
 ## 跑起来
 
@@ -19,6 +25,10 @@ python build_draft.py --video 素材.mp4 --audio bgm.mp3 --title "开场标题" 
 
 # 1b) 复杂草稿：多段拼接 + 转场 + 蒙版 + 关键帧 + 双音轨 + 字幕
 python build_complex.py --clips a.mp4,b.mp4,c.mp4 --voice 旁白.mp3 --bgm bgm.m4a --srt 字幕.srt --out ./drafts
+
+# 1c) 想换转场/看有哪些非 VIP 资源
+python build_complex.py --list-fx
+python build_complex.py --clips a.mp4,b.mp4 --transitions 中心旋转,复古放映 --out ./drafts
 
 # 2) 出片：AuthKey 从环境变量读，剪映 Cookie 从文件读
 export HTW_API_KEY="你的-key"          # PowerShell: $env:HTW_API_KEY="你的-key"
@@ -82,29 +92,83 @@ pyJianYingDraft 生成的 `draft_content.json` 里，素材写的是**你本机�
 ## 复杂草稿实测（12 秒 / 3 段 / 双音轨）
 
 `build_complex.py` 把常见特效塞进同一条草稿：3 段不同素材拼接、第 2 段 1.5 倍速、
-两处转场（模糊 / 向左）、末段圆形蒙版 + 关键帧放大、标题入场动画、4 条 SRT 字幕、
+两处转场、末段圆形蒙版 + 关键帧放大、标题入场动画、4 条 SRT 字幕、
 人声 + BGM 双音轨。用本机实例 + 真实剪映登录态渲染，逐项抽帧核对：
 
 | 特性 | 成片实测 |
 | --- | --- |
 | 三段拼接 / 1.5 倍速 | 通过。12.05s / 360 帧，段边界与时长都对 |
-| 转场 `模糊`、`向左` | 通过。抽帧可见模糊过渡与滑动，无黑场 |
-| 转场 `叠化` | **失败：整段纯黑**。黑场时长正好等于转场时长（0.8s、0.5s 各复现一次，亮度 0.0） |
+| 转场（目录现采 id，如 `中心旋转` / `复古放映`） | **通过**。资源自带动效可见：旋转扫屏的紫色几何面、放映机圆形光圈收拢；无异常黑段（`复古放映` 中途 0.13s 闪黑是该资源自带的换片效果） |
 | 圆形蒙版 | 通过。圆形外纯黑、边缘羽化，蒙版随缩放一起变大 |
 | 关键帧缩放 1.0 → 1.12 | 通过。末段画面与蒙版同步放大，内容对得上源素材 |
 | 标题入场动画（向右擦除） | 通过。0.45s 处只出现前半句，1.2s 完整 |
 | SRT 字幕 4 条 | 通过。时间点、文本与 SRT 一致 |
 | 人声 + BGM 双音轨 | 通过。混音非静音（mean −17.6dB / max −1.8dB） |
-| 滤镜（冷蓝 / 清新 / 高清黑白） | **不生效**。4 段彩条对照，成片与无滤镜段落像素级一致（平均差 0.04） |
+| 滤镜 | **不呈现**。资源型（含 VIP 与 artist 活 id）/ 参数型 × 两种字段名，渲出的帧与无滤镜基线**逐像素相同**；根因是滤镜资源包（3D LUT）没进 `package_assets` |
 
-两条限制的规避方式：
+### 转场：黑场的真因是资源 id，不是「不支持叠化」
 
-- **转场只用 `模糊` / `向左` / `向右`。** `叠化` 会渲成黑场；它和 `模糊` 同属
-  `is_overlap=true`，所以不是「重叠型转场」本身的问题，更像是该转场的资源在云端缺失。
-  `build_complex.py --transitions` 只接受这三个，传别的会直接报错退出。
-- **滤镜目前不要依赖。** 服务端会把 `materials.effects` 里 `type=filter` 的条目拆到
-  `materials.filters` 并清空 `path`，但云端渲染不呈现（四种滤镜均无像素变化）。
-  需要滤镜就先把效果烧进素材再进草稿，或等后端补齐资源上传。
+`pyJianYingDraft` 的 `TransitionType.叠化` 写的是 `resource_id=6724845717472416269`——
+这是一份过期快照，云端已无此资源；取不到资源时它**不报错**，直接把转场区域渲成黑色，
+黑场时长正好等于转场时长，看起来很像「后端不支持叠化」。
+
+换成 `Services/Editing/TransitionCatalog.json` 里现采的 id 就正常了。三点补充：
+
+- **叠化类目前 52 条全部 VIP**，非 VIP 取不到。所以「要叠化效果」这件事在免费资源里
+  没有解，同属 `is_overlap=true` 的非 VIP 样本只有 `复古放映`。
+- 转场时长取目录的 `defaultDurationUs`，别沿用 `TransitionType` 的默认值——
+  实际节奏由资源本身的 `sdk_extra.transition.defaultDura` 决定。
+- **VIP 资源在云端不呈现，且失败方式不统一**（2026-11-09 实测）：`偏移叠化`
+  `7667876831474830617`（VIP，2s）渲成整段黑场，时长正好 2.00 秒；`径向模糊`
+  `7683443266288766260`（VIP，2s）不黑但画面完全清晰、没有放射拖影，等于被忽略成硬切。
+  同类别里唯一非 VIP 的 `模糊` 正常出画。凡是 VIP，不要指望它出效果。
+
+`build_complex.py --transitions` 收的是**目录里的标题或分类**（`--list-fx` 看清单），
+选型阶段就把「VIP / 不存在」拦掉，不会渲完一条黑片才发现。
+
+### 滤镜：形态对了，但云端拿不到 LUT
+
+素材形态按 `docs/2026-10-11-style-filter-protocol.md` 摆好（进 `materials.filters`、
+`path` 置空、`enable_adjust=true`、挂主轨每段 `extra_material_refs`）之后，
+**成片与无滤镜基线逐像素相同**：同一帧 PNG 的 md5 完全一致，差值 0.000。
+
+2026-11-09 二次复测把「id 无效」和「VIP 授权」两个猜测都排掉了。做法是同一画面切
+4 段、四段共用同一个 `source_timerange`，段 1 当基线：
+
+| 段 | 滤镜 | id 来源 | 与段 1 的 mean abs diff |
+| --- | --- | --- | --- |
+| 1 | 无（基线） | — | 0 |
+| 2 | 冷蓝（非 VIP） | artist 接口可查、能下到 md5 与 CDN 地址 | 0.54 |
+| 3 | 清晰（VIP） | 同上，`requirements=["blit"]` | 0.59 |
+| 4 | 净白（VIP） | 同上 | 0.59 |
+
+三条滤镜都换成了 **artist 平台活 id**（`7127618237117877518` / `7447719105563610404` /
+`7127667352782572807`），不是 `FilterCatalog.json` 里那批查不到的死 id，结果依然不动，
+0.5~0.6 就是同一条成片内不同位置的编码噪声。**VIP 与非 VIP 表现完全一致。**
+
+根因看资源包结构就清楚了：滤镜本体是一张 3D LUT（冷蓝包 3.4MB，内含
+`AmazingFeature/texture/filter_bg.3dl.vf`，64³×RGB×float32；清晰包 214KB，内含
+`filter.cube.vf`，33³）。草稿里的 `resource_id` 只是索引，LUT 文件得由渲染方自己取到——
+当前链路只上传音视频和贴纸，滤镜资源包从来没进过 `package_assets`，所以云端不调色、
+也不报错。VIP 的实际限制在下载授权，而实测连这一步都没拦：三条资源的 `item_urls`
+都正常返回、都下载成功（`is_vip` 只出现在返回的 `business_info` 里）。
+
+判定方法（别只看「渲染成功」）：
+
+```bash
+# 1) 同一条草稿渲两次，量出编码噪声基线 —— 实测 mean abs diff ≈ 3.1（median 2）
+# 2) 滤镜版 vs 基线，同一帧号比对 —— mean abs diff = 0.000
+ffmpeg -i A.mp4 -i B.mp4 -lavfi "[0:v][1:v]psnr=stats_file=psnr.log" -f null -
+```
+
+⚠️ 用 `-ss <秒>` 抽帧对比会骗人：带转场的草稿渲出来可能是 29.77fps 而不是 30fps，
+两片同一秒不是同一帧，PSNR 会显示 23dB 的假差异。要按帧号抽
+（`-vf "select=eq(n\,30)"`）再比。
+
+需要真实调色就把效果烧进素材再进草稿（`ffmpeg -vf eq=contrast=1.14 ...`）。
+要打通「草稿里带滤镜」，得让服务端先下载资源包、上传云空间，并在 `package_assets`
+里登记 `{md5, source_path, size}`（`Models/Utils.cs` 的
+`QueryEffectResourceFileAsync` 已能查 md5 与 CDN 地址，但没有调用者）。
 
 ## 接口契约（自己写客户端时照这张表）
 
@@ -142,7 +206,10 @@ GET  /api/v2/edit/draft-status/{taskId}
 | `render.py` 打 zip / multipart 上传 / 轮询 / 错误提示（本机实例 127.0.0.1:5099） | 提交拿到 taskId；dummy Cookie 时正确显示 `初始化草稿失败（ret=1015）：check login error`；错 key 显示 401 并给出提示 |
 | **真实出片**（本机实例 + 真实剪映登录态） | **通过**。6 秒草稿（视频 6s + 标题文字 + 配乐）→ 成片 1920×1080 / 30fps / 180 帧 / 6.06s，h264 + aac 44.1k 立体声，音轨 mean -20.8dB（非静音）；抽帧确认画面是源视频内容、标题压在前 2.5 秒，与时间轴一致 |
 | 两条客户端路径一致性 | `render.py` 与 `node agent/cli/htw-skills.mjs draft` 产出的 mp4 字节数相同（1,165,201）、抽帧哈希相同 |
-| **复杂草稿真实出片**（12 秒 / 3 段 / 双音轨 / 蒙版 / 关键帧 / 字幕，见上节） | **通过**。12.05s / 360 帧，无黑段；同时确认 `叠化` 黑场、滤镜不生效两条限制 |
+| **复杂草稿真实出片**（12 秒 / 3 段 / 双音轨 / 蒙版 / 关键帧 / 字幕，见上节） | **通过**。12.05s / 360 帧，无黑段 |
+| **资源型转场**（`中心旋转` / `复古放映`，2026-11-09 复测） | **通过**。转场区域出现资源自带几何动效，无异常黑段；`叠化` 旧 id 的整段黑场不再复现 |
+| **VIP 转场**（`偏移叠化` / `径向模糊`，2026-11-09 补测） | **不呈现**。前者黑场 2.00 秒（= 转场时长），后者无黑场但画面完全清晰、转场被忽略；同类别唯一非 VIP 的 `模糊` 正常 |
+| **滤镜**（资源型 / 参数型 / VIP / artist 活 id，2026-11-09 两轮复测） | **不呈现**。同画面四段对照：三条滤镜与基线 mean abs diff 0.54 / 0.59 / 0.59，落在编码噪声内；根因是资源包（3D LUT）没上传，不是 id 或 VIP 限制 |
 
 实测数据（6.06 秒 1080p，云端耗时约 6 秒）：
 
@@ -160,6 +227,8 @@ size : 1.10 MiB  bit_rate 1.54 Mbps
 | 文件 | 作用 |
 | --- | --- |
 | `build_draft.py` | 建草稿 + 自包含改写；`--json` 输出一行摘要便于串联 |
-| `build_complex.py` | 复杂草稿：多段、转场、蒙版、关键帧、标题动画、双音轨、字幕 |
+| `build_complex.py` | 复杂草稿：多段、转场、滤镜、蒙版、关键帧、标题动画、双音轨、字幕 |
+| `effects_catalog.py` | 特效应资源目录：按标题挑非 VIP 的 19 位资源 id（`--list-fx`） |
+| `apply_effects.py` | 把草稿里的转场/滤镜改写成云端能认的形态（save 之后跑） |
 | `render.py` | 纯标准库客户端：打包、上传、轮询、下载 |
 | `requirements.txt` | 只依赖 pyJianYingDraft |

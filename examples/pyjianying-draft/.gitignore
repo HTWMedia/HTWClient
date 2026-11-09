@@ -1,8 +1,12 @@
 # 生成的草稿、成片、打包产物都不进 git
 drafts/
+drafts-*/
 out/
 *.zip
 __pycache__/
+
+# 临时凭据/实验目录
+.tmp/
 
 # 剪映登录态：绝不提交
 jy-cookie.txt

@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""用 pyJianYingDraft 生成一条「复杂的自包含草稿」：多段拼接 + 转场 + 蒙版 +
-关键帧 + 标题动画 + 字幕轨 + 双音轨，可直接交给 HTW 云端渲成 mp4。
+"""用 pyJianYingDraft 生成一条「复杂的自包含草稿」：多段拼接 + 转场 + 滤镜 +
+蒙版 + 关键帧 + 标题动画 + 字幕轨 + 双音轨，可直接交给 HTW 云端渲成 mp4。
 
 和 build_draft.py 的区别：那个是单段最小示例，这个是「一条草稿里塞满常见特效」，
-用来验证链路对复杂草稿的支持。实测结论见 README 的「复杂草稿实测」一节，
-其中两条务必注意：
+用来验证链路对复杂草稿的支持。
 
-* ``叠化`` 转场会渲成整段黑场（时长正好等于转场时长）；``模糊``/``向左`` 正常。
-* 滤镜（``add_filter``）在成片里不生效，像素级无变化；需要滤镜请先烧进素材。
+## 转场 / 滤镜必须过一层目录
+
+pyJianYingDraft 自带的两套元数据都有坑，而且**都不报错**，只表现为「效果没了」：
+
+* **转场**：``TransitionType.叠化`` 的 resource_id（6724845717472416269）云端已无资源
+  → 转场区域整段渲成黑色，黑场时长正好等于转场时长。换用现采目录里的 id 才出画。
+* **滤镜**：0.3.1 的 ``materials`` 桶里没有 ``filters`` 键，``FilterSegment`` 只留下一条
+  空轨道 —— 素材本体从未写进草稿，所以「滤镜不生效」不是云端不认。
+
+两者都交给 ``apply_effects.apply_catalog_effects()`` 在 ``script.save()`` 之后改写，
+形态与 HTWCore.Web 剪同款管线一致（见 ``docs/2026-10-11-*`` 两份协议文档）。
+``--list-fx`` 可以看目录里当前有哪些非 VIP 资源可选。
 
 用法：
     python build_complex.py --clips a.mp4,b.mp4,c.mp4 --out ./drafts
-    python build_complex.py --clips a.mp4,b.mp4 --voice 旁白.mp3 --bgm 音乐.m4a --srt 字幕.srt
+    python build_complex.py --clips a.mp4,b.mp4 --filter 冷蓝 --out ./drafts
+    python build_complex.py --clips a.mp4,b.mp4 --transitions 中心旋转,复古放映 --list-fx
 """
 
 import argparse
@@ -25,19 +35,13 @@ try:
 except ImportError:  # pragma: no cover
     sys.exit("缺少依赖：pip install pyJianYingDraft")
 
+import effects_catalog as fx
+from apply_effects import apply_catalog_effects
 from build_draft import make_portable, trange
 
-# 转场白名单：只留实测能出画的。叠化（is_overlap=True）会黑场，见 README。
-SAFE_TRANSITIONS = ("模糊", "向左", "向右")
-
-
-def pick_transition(name):
-    if name not in SAFE_TRANSITIONS:
-        sys.exit(
-            "转场 %s 未验证；实测可用的是 %s（叠化 会渲成黑场）"
-            % (name, "/".join(SAFE_TRANSITIONS))
-        )
-    return getattr(jy.TransitionType, name)
+# 骨架转场：只用来让 pyJianYingDraft 建出 transition 素材与段上引用，
+# 真正的 resource_id / name / duration 会被 apply_catalog_effects 全量覆盖。
+SKELETON_TRANSITION = jy.TransitionType.模糊
 
 
 def build(args):
@@ -54,7 +58,12 @@ def build(args):
     )
     video_track = script.append_track(jy.TrackSpec(jy.TrackType.video))
 
-    transitions = [pick_transition(t.strip()) for t in args.transitions.split(",") if t.strip()]
+    # 转场：参数是目录里的标题（或分类），选型这一步就把「VIP / 不存在」拦下来，
+    # 而不是等渲染出一条黑片才发现。
+    transition_names = [t.strip() for t in args.transitions.split(",") if t.strip()]
+    transition_picks = [fx.pick_transition(n, args.fx_dir) for n in transition_names] or None
+    filter_pick = fx.pick_filter(args.filter, args.fx_dir) if args.filter else None
+
     cursor = 0.0
     total = 0.0
     for index, path in enumerate(clips):
@@ -73,8 +82,8 @@ def build(args):
         )
 
         is_last = index == len(clips) - 1
-        if not is_last:
-            segment.add_transition(transitions[index % len(transitions)], duration=args.transition_seconds)
+        if not is_last and transition_picks:
+            segment.add_transition(SKELETON_TRANSITION, duration=args.transition_seconds)
 
         if is_last and args.mask == "circle":
             segment.add_mask(jy.MaskType.圆形, center_x=0.0, center_y=0.0, size=0.75, feather=0.15)
@@ -89,6 +98,16 @@ def build(args):
         script.add_segment(segment, video_track)
         cursor += take
         total = cursor
+
+    if filter_pick:
+        # 骨架滤镜轨：pyJianYingDraft 0.3.1 不会把滤镜素材写进 materials，
+        # 这里只保证段上有一个 material_id 可替换。真正的素材由
+        # apply_catalog_effects 补建并改挂到主轨每个视频段的 extra_material_refs。
+        filter_track = script.append_track(jy.TrackSpec(jy.TrackType.filter))
+        script.add_segment(
+            jy.FilterSegment(jy.FilterType.冷蓝, trange(0, total), intensity=1.0),
+            filter_track,
+        )
 
     if args.title:
         title_track = script.append_track(jy.TrackSpec(jy.TrackType.text))
@@ -132,6 +151,11 @@ def build(args):
     script.save()
 
     draft_dir = os.path.join(args.out, args.name)
+    # 🔴 必须在 save() 之后：这一段改的是已落盘的 draft_content.json
+    fx_notes = apply_catalog_effects(
+        draft_dir, transition_picks=transition_picks, filter_pick=filter_pick
+    )
+
     if args.no_portable:
         copied, missing, rewritten = [], [], 0
         print("已跳过自包含改写（--no-portable）：这份草稿只能在**本机剪映**里打开。")
@@ -147,7 +171,9 @@ def build(args):
         "draft_dir": os.path.abspath(draft_dir),
         "clips": len(clips),
         "duration_sec": round(total, 3),
-        "transitions": [t.name for t in transitions[: len(clips) - 1]],
+        "transitions": [p.get("title") for p in (transition_picks or [])][: len(clips) - 1],
+        "filter": filter_pick.get("title") if filter_pick else "",
+        "fx_notes": fx_notes,
         "canvas": "{}x{}@{}".format(args.width, args.height, args.fps),
         "materials_copied": copied,
         "paths_rewritten": rewritten,
@@ -159,7 +185,11 @@ def build(args):
         print("草稿已生成: {}".format(summary["draft_dir"]))
         print("  {} 段 / {}s / {}，转场 {}".format(
             summary["clips"], summary["duration_sec"], summary["canvas"],
-            ",".join(summary["transitions"])))
+            ",".join(summary["transitions"]) or "无"))
+        if summary["filter"]:
+            print("  滤镜 {}".format(summary["filter"]))
+        for note in fx_notes:
+            print("  · " + note)
         print("  拷入素材 {} 个，改写路径 {} 条".format(len(copied), rewritten))
         print("")
         print("下一步（草稿 → 成片）:")
@@ -169,12 +199,16 @@ def build(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="生成复杂的自包含剪映草稿（多段/转场/蒙版/双音轨/字幕）")
-    parser.add_argument("--clips", required=True, help="逗号分隔的视频素材，按顺序拼接")
+    parser = argparse.ArgumentParser(description="生成复杂的自包含剪映草稿（多段/转场/滤镜/蒙版/双音轨/字幕）")
+    parser.add_argument("--clips", help="逗号分隔的视频素材，按顺序拼接")
     parser.add_argument("--clip-seconds", type=float, default=4.0, help="每段取多长（默认 4 秒）")
     parser.add_argument("--speed-second", type=float, default=1.5, help="第 2 段的倍速（默认 1.5，1 = 不变速）")
-    parser.add_argument("--transitions", default="模糊", help="逗号分隔的转场名，循环使用；可选 模糊/向左/向右")
-    parser.add_argument("--transition-seconds", default="0.8s", help="转场时长（默认 0.8s）")
+    parser.add_argument("--transitions", default="中心旋转",
+                        help="逗号分隔的转场标题（或分类），循环使用；--list-fx 看可选清单")
+    parser.add_argument("--filter", default="", help="滤镜标题（--list-fx 看可选）。⚠️ 实测云端不呈现，仅用于观察形态")
+    parser.add_argument("--fx-dir", help="Services/Editing 目录（默认探测 D:\\HTWCore.Web\\Services\\Editing）")
+    parser.add_argument("--list-fx", action="store_true", help="只打印目录里可用的转场/滤镜然后退出")
+    parser.add_argument("--transition-seconds", default="0.8s", help="转场时长（仅骨架用，最终取目录 defaultDurationUs）")
     parser.add_argument("--mask", choices=("circle", "none"), default="circle", help="末段蒙版，默认圆形")
     parser.add_argument("--zoom", type=float, default=1.12, help="末段结束时的缩放倍数，0 = 关闭")
     parser.add_argument("--title", default="复杂草稿：多段 · 转场 · 字幕", help="标题，传空串则不生成")
@@ -191,7 +225,13 @@ def main(argv=None):
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--json", action="store_true", help="只输出一行 JSON 摘要")
     parser.add_argument("--no-portable", action="store_true", help="不改写成自包含（只能本机剪映打开）")
-    build(parser.parse_args(argv))
+    args = parser.parse_args(argv)
+    if args.list_fx:
+        print(fx.describe(args.fx_dir))
+        return
+    if not args.clips:
+        parser.error("--clips 是必填项（--list-fx 除外）")
+    build(args)
 
 
 if __name__ == "__main__":
