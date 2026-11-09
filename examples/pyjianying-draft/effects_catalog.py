@@ -29,6 +29,13 @@ pyJianYingDraft 自带的 `FilterType` / `TransitionType` 元数据是**某个�
 import io
 import json
 import os
+import sys
+
+# 2026-11-09 定案：云端只认 7 位短 effectId。26 段同源云渲染逐条 A/B 里，
+# 25 条精选（短 id）25/25 生效，最小 meanDiff 4.0015；19 位 effectId 即使
+# 配齐官方形态也被静默忽略（meanDiff 0.056，等于编码噪声）。
+# 见 HTWCore.Web/docs/2026-10-11-style-filter-protocol.md 第七、十节。
+MAX_EFFECT_ID_LEN = 8
 
 # 现采目录的默认探测位置（跨仓库，找不到不算错）
 DEFAULT_CATALOG_DIRS = (
@@ -122,6 +129,19 @@ def _match(entries, title, allow_vip=False):
     return None, "目录里没有「%s」" % title
 
 
+def is_usable_filter(entry, allow_vip=False):
+    """这条滤镜在 Web 云渲染下是否真能出效果。
+
+    两个必要条件：非 VIP，且有 <=8 位的短 effectId。19 位 id 不是「取不到资源」
+    也不是「VIP 授权」，是形态本身被云端静默跳过——不报错、不调色，
+    渲完抽帧才发现。选型阶段就该拦住，别把锅留到成片。
+    """
+    if not allow_vip and entry.get("isVip") is True:
+        return False
+    eid = str(entry.get("effectId") or "")
+    return 0 < len(eid) <= MAX_EFFECT_ID_LEN
+
+
 def pick_transition(title, catalog_dir=None, allow_vip=False):
     """按名字挑一条转场。返回 dict，字段与目录条目同构。"""
     trans, _filt, _dir = load_catalogs(catalog_dir)
@@ -135,28 +155,40 @@ def pick_transition(title, catalog_dir=None, allow_vip=False):
 def pick_filter(title, catalog_dir=None, allow_vip=False):
     """按名字挑一条滤镜。
 
-    ⚠️ 历史遗留的匹配顺序：先查 `PARAM_FILTERS`（参数型），没有再查资源型目录。
-    参数型已于 2026-11-09 用像素 A/B 证伪（云端不调色），**新脚本不要用**；
-    这里保留只为不破坏既有命令。要出效果请传资源型标题（如「冷蓝」）。
+    历史遗留的匹配顺序：先查 `PARAM_FILTERS`（参数型），没有再查资源型目录。
+    参数型已于 2026-11-09 用像素 A/B 证伪（云端不调色），保留只为不破坏既有命令，
+    但会在 stderr 明确告警。要出效果请传资源型标题（如「冷蓝」「净透」）。
     返回的 dict 里：
       * 参数型：`{"title", "adjustments": {key: value}}` —— 云端无效
       * 资源型：`{"title", "resourceId", "effectId", ...}` —— 经服务端改写后有效
 
-    ⚠️ 资源型 id 取自 `FilterCatalog.json`，这批精选通道 id 在 artist 接口
-    （`mget_artist_item`）里查不到。2026-11-09 定案：滤镜**是能出效果的**，
+    资源型 id 取自 `FilterCatalog.json`。2026-11-09 定案：滤镜是能出效果的，
     之前不出效果是草稿形态问题（位置、`effect_id` 位数、`path`、挂接方式），
-    与这批 id 无关，也与资源包无关。走服务端导出时会自动改写为官方形态；
-    直连剪映云渲染需自己按官方形态写，见 README「滤镜」一节。
+    与资源包无关。走服务端导出时会自动改写为官方形态；直连剪映云渲染需自己
+    按官方形态写，见 README「滤镜」一节。
+
+    2026-11-09 补：只放行有短 effectId 的条目。目录里 215 条 artist 滤镜的
+    effectId 是 19 位，配齐官方形态也无效；其中 4 条还标着非 VIP，以前会被
+    `--list-fx` 当成「可选」列出来，选了就静默出一张没调色的成片。
     """
     if title in PARAM_FILTERS:
+        sys.stderr.write(
+            "注意：「%s」是参数型滤镜，2026-11-09 像素 A/B 已证伪（云端不调色），"
+            "仅供草稿形状实验。要出效果请传资源型标题，如「冷蓝」「净透」。\n" % title)
         return {"title": title, "adjustments": dict(PARAM_FILTERS[title])}
 
     _trans, filt, _dir = load_catalogs(catalog_dir)
     hit, reason = _match(filt, title, allow_vip)
     if hit is None:
-        names = list(PARAM_FILTERS.keys()) + [
-            e.get("title") for e in filt if e.get("isVip") is not True][:10]
+        names = [e.get("title") for e in filt if is_usable_filter(e, allow_vip)][:10]
         raise SystemExit("滤镜选型失败：%s。可选：%s" % (reason, " / ".join(str(n) for n in names)))
+    if not is_usable_filter(hit, allow_vip):
+        eid = str(hit.get("effectId") or "")
+        raise SystemExit(
+            "滤镜「%s」不可用：effectId=%s（%d 位）。Web 云渲染只认 7 位短 id；"
+            "19 位 id 会被云端静默跳过（成片与无滤镜基线逐像素相同），VIP 同理。"
+            "请用 --list-fx 的「可用滤镜」清单。见协议文档第七、十节。"
+            % (hit.get("title"), eid, len(eid)))
     return hit
 
 
@@ -165,17 +197,25 @@ def describe(catalog_dir=None):
     trans, filt, found = load_catalogs(catalog_dir)
     lines = ["目录来源：%s" % (found or "内置 FALLBACK（未找到 Services/Editing）")]
     ok_t = [e for e in trans if e.get("isVip") is not True]
-    ok_f = [e for e in filt if e.get("isVip") is not True]
+    ok_f = [e for e in filt if is_usable_filter(e)]
+    bad_f = [e for e in filt if not is_usable_filter(e)]
+    nonvip_long = [e for e in bad_f if e.get("isVip") is not True]
     lines.append("转场 %d 条可选（总 %d）：" % (len(ok_t), len(trans)))
     for e in ok_t[:40]:
         lines.append("  %-8s %s  overlap=%s  dur=%sms  [%s]" % (
             e.get("category") or "", e.get("title"), e.get("isOverlap"),
             int((e.get("defaultDurationUs") or 0) // 1000), e.get("resourceId")))
-    lines.append("滤镜 %d 条资源型可选（总 %d）：" % (len(ok_f), len(filt)))
-    for e in ok_f[:40]:
+    lines.append("滤镜 %d 条可用（7 位短 effectId，2026-11-09 逐条云端 A/B 生效；总 %d）："
+                 % (len(ok_f), len(filt)))
+    for e in ok_f:
         lines.append("  %-8s %s  %s / %s" % (
             e.get("category") or "", e.get("title"), e.get("resourceId"), e.get("effectId")))
-    lines.append("参数型滤镜（历史遗留，2026-11-09 像素 A/B 证伪：云端不调色，仅供形状实验）：")
+    lines.append("另有 %d 条不可用，不列入可选清单：19 位 effectId 会被云端静默忽略，VIP 同理。"
+                 % len(bad_f))
+    if nonvip_long:
+        lines.append("  其中 %d 条虽标非 VIP 但仍是长 id，最容易被误选：%s"
+                     % (len(nonvip_long), " / ".join(str(e.get("title")) for e in nonvip_long)))
+    lines.append("参数型滤镜（历史遗留，2026-11-09 像素 A/B 证伪：云端不调色，仅供形状实验；选了会告警）：")
     for name, adj in PARAM_FILTERS.items():
         lines.append("  %-6s %s" % (name, ", ".join("%s=%s" % kv for kv in adj.items())))
     return "\n".join(lines)

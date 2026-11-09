@@ -6,7 +6,7 @@
 ```
 build_draft.py      单段最小示例：一段视频 + 标题 + 配乐/字幕
 build_complex.py    复杂示例：多段拼接 + 转场 + 滤镜 + 蒙版 + 关键帧 + 标题动画 + 双音轨 + 字幕
-effects_catalog.py  特效应资源目录：按标题挑非 VIP 的 19 位资源 id（--list-fx 看清单）
+effects_catalog.py  资源目录：转场挑非 VIP id；滤镜只放行已验证的 7 位短 id（--list-fx 看清单）
 apply_effects.py    把转场/滤镜改写成云端能认的形态（build_complex 在 save 之后自动调）
 render.py           草稿目录 → zip → POST /api/v2/edit/draft-export → 轮询 → 下载 mp4
 ```
@@ -210,6 +210,19 @@ ffmpeg -i A.mp4 -i B.mp4 -lavfi "[0:v][1:v]psnr=stats_file=psnr.log" -f null -
 `Marketing=高饱和`（不变）。改任一条都要先按帧号抽帧重跑云端 A/B，
 别拿「渲染没报错」当通过。详见 `D:/HTWCore.Web/docs/2026-10-11-style-filter-protocol.md` 第十节。
 
+### 选型闸门：只放行那 25 条
+
+服务端定案后，示例层也把约束钉死（`effects_catalog.py`）：
+
+- `--list-fx` 只列 **25 条有 7 位短 `effectId` 的可用滤镜**；另外 215 条（19 位 id）
+  明确标为不可用、不列入可选清单。其中 4 条标着「非 VIP」却是长 id
+  （日落飞车 / 空灵 / 去黄增质 / 高清冬日），以前最容易被误选。
+- `pick_filter` 遇到长 id 或 VIP 直接报错退出，不再静默返回一张渲不出调色的草稿；
+  参数型配方仍可返回（兼容旧命令），但会在 stderr 点名「已证伪」。
+- `apply_effects.py` 输出的仍是本仓内部旧形态，靠服务端 `UpgradeFiltersToWebShape`
+  改写：**把 `HTW_FILTER_WEB_SHAPE` 设为 `0`，或直连剪映云渲染不过服务端，滤镜就会失效**。
+  这是有意的设计取舍，不是遗漏 —— 自己直连时按上表三处写成官方形态即可。
+
 ## 接口契约（自己写客户端时照这张表）
 
 ```
@@ -251,6 +264,7 @@ GET  /api/v2/edit/draft-status/{taskId}
 | **VIP 转场**（`偏移叠化` / `径向模糊`，2026-11-09 补测） | **不呈现**。前者黑场 2.00 秒（= 转场时长），后者无黑场但画面完全清晰、转场被忽略；同类别唯一非 VIP 的 `模糊` 正常 |
 | **资源型滤镜**（2026-11-09 定案） | **通过**（经服务端改写）。真因是草稿形态：位置该在 `materials.effects`、`effect_id` 该 7 位短 id、`path` 该 `/editor/effect/filter/<rid>`、该挂独立 `filter` 轨。改写后四段对照 meanDiff 10.639 / 10.640，基线噪声 0.056；R−B 由 −5.21 → −9.69 |
 | **参数型滤镜**（纯 `adjustments`，2026-11-09 补测） | **不呈现**。两种素材桶 × 两种挂法，成片与基线 meanDiff 全在 0.054~0.058（编码噪声）；官方 Web 草稿的 `materials` 桶里既没有 `filters` 也没有 `adjusts` |
+| **示例层选型闸门**（2026-11-09 补） | **通过**。`--list-fx` 只列 25 条短 id 可用滤镜，215 条长 id 明确排除；长 id / VIP 被 `pick_filter` 拒绝，参数型告警；7 项标准库单元测试通过 |
 
 实测数据（6.06 秒 1080p，云端耗时约 6 秒）：
 
@@ -269,7 +283,14 @@ size : 1.10 MiB  bit_rate 1.54 Mbps
 | --- | --- |
 | `build_draft.py` | 建草稿 + 自包含改写；`--json` 输出一行摘要便于串联 |
 | `build_complex.py` | 复杂草稿：多段、转场、滤镜、蒙版、关键帧、标题动画、双音轨、字幕 |
-| `effects_catalog.py` | 特效应资源目录：按标题挑非 VIP 的 19 位资源 id（`--list-fx`） |
-| `apply_effects.py` | 把草稿里的转场/滤镜改写成云端能认的形态（save 之后跑） |
+| `effects_catalog.py` | 资源目录：转场挑非 VIP id，滤镜只放行有 7 位短 `effectId` 的 25 条（`--list-fx`） |
+| `apply_effects.py` | 把草稿里的转场/滤镜改写成服务端能识别的形态（save 之后跑） |
 | `render.py` | 纯标准库客户端：打包、上传、轮询、下载 |
+| `test_effects_catalog.py` | 选型层回归：锁短 id / 拒绝长 id 与 VIP / 参数型告警 |
 | `requirements.txt` | 只依赖 pyJianYingDraft |
+
+选型层回归不需要 pyJianYingDraft、不联网、不依赖 HTWCore.Web 仓库：
+
+```bash
+python -m unittest -v test_effects_catalog.py
+```
