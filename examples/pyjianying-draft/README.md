@@ -104,7 +104,7 @@ pyJianYingDraft 生成的 `draft_content.json` 里，素材写的是**你本机�
 | 标题入场动画（向右擦除） | 通过。0.45s 处只出现前半句，1.2s 完整 |
 | SRT 字幕 4 条 | 通过。时间点、文本与 SRT 一致 |
 | 人声 + BGM 双音轨 | 通过。混音非静音（mean −17.6dB / max −1.8dB） |
-| 滤镜 | **不呈现**。资源型（含 VIP 与 artist 活 id）/ 参数型 × 两种字段名，渲出的帧与无滤镜基线**逐像素相同**；根因是滤镜资源包（3D LUT）没进 `package_assets` |
+| 滤镜 | **通过**（2026-11-09 定案）。真因不是资源包，是草稿形态三处不符：位置该在 `materials.effects` 而非 `filters`、`effect_id` 该用 7 位短 id 而非 19 位 `resource_id`、`path` 该写 `/editor/effect/filter/<rid>`；且要挂独立 `type=filter` 轨。服务端 `Utils.UpgradeFiltersToWebShape` 已自动改写，实测 R−B 由 −5.21 走到 −9.69 |
 
 ### 转场：黑场的真因是资源 id，不是「不支持叠化」
 
@@ -126,14 +126,16 @@ pyJianYingDraft 生成的 `draft_content.json` 里，素材写的是**你本机�
 `build_complex.py --transitions` 收的是**目录里的标题或分类**（`--list-fx` 看清单），
 选型阶段就把「VIP / 不存在」拦掉，不会渲完一条黑片才发现。
 
-### 滤镜：形态对了，但云端拿不到 LUT
+### 滤镜：根因是草稿形态，不是资源包（2026-11-09 定案）
 
-素材形态按 `docs/2026-10-11-style-filter-protocol.md` 摆好（进 `materials.filters`、
-`path` 置空、`enable_adjust=true`、挂主轨每段 `extra_material_refs`）之后，
-**成片与无滤镜基线逐像素相同**：同一帧 PNG 的 md5 完全一致，差值 0.000。
+> 本节原先写「形态对了，但云端拿不到 LUT」，**那个结论是错的**。当时的依据是
+> 「过滤器本体是 3D LUT，没进 `package_assets` 云端就取不到」。但 `docs/2026-10-11-effects-animation-sfx-protocol.md`
+> 已经记过：官方渲染视频特效时 `package_assets` 只有源视频一条，特效包从不上传；
+> 而且历史上有两组实验试过「上传特效包 + 写 `source_path`」，都是保存即拒
+> `ERR_DRAFT_NOT_COMPLETE`。下面保留排查过程，结论看最后一段。
 
-2026-11-09 二次复测把「id 无效」和「VIP 授权」两个猜测都排掉了。做法是同一画面切
-4 段、四段共用同一个 `source_timerange`，段 1 当基线：
+前两轮复测（2026-11-09）把「id 无效」和「VIP 授权」都排掉了：同一画面切 4 段、
+共用同一个 `source_timerange`、段 1 当基线，
 
 | 段 | 滤镜 | id 来源 | 与段 1 的 mean abs diff |
 | --- | --- | --- | --- |
@@ -142,22 +144,38 @@ pyJianYingDraft 生成的 `draft_content.json` 里，素材写的是**你本机�
 | 3 | 清晰（VIP） | 同上，`requirements=["blit"]` | 0.59 |
 | 4 | 净白（VIP） | 同上 | 0.59 |
 
-三条滤镜都换成了 **artist 平台活 id**（`7127618237117877518` / `7447719105563610404` /
-`7127667352782572807`），不是 `FilterCatalog.json` 里那批查不到的死 id，结果依然不动，
-0.5~0.6 就是同一条成片内不同位置的编码噪声。**VIP 与非 VIP 表现完全一致。**
+0.5~0.6 是同一条成片内不同位置的编码噪声，**VIP 与非 VIP 表现完全一致**。
+但注意：这四段**都没改 `effect_id` 的位数**——这正是它们全体不生效的原因。
 
-根因看资源包结构就清楚了：滤镜本体是一张 3D LUT（冷蓝包 3.4MB，内含
-`AmazingFeature/texture/filter_bg.3dl.vf`，64³×RGB×float32；清晰包 214KB，内含
-`filter.cube.vf`，33³）。草稿里的 `resource_id` 只是索引，LUT 文件得由渲染方自己取到——
-当前链路只上传音视频和贴纸，滤镜资源包从来没进过 `package_assets`，所以云端不调色、
-也不报错。VIP 的实际限制在下载授权，而实测连这一步都没拦：三条资源的 `item_urls`
-都正常返回、都下载成功（`is_vip` 只出现在返回的 `business_info` 里）。
+真正的取证是反过来做**正例**：直接用真实剪映网页版给同一段彩条素材加「彩果」并导出，
+成片饱和度 192 → 135.5（−29%）、亮度 122 → 92。滤镜**确实**会被云渲染；官方
+`render_task/create` 里的 `app_version=11.5.1` / `sdk_version=15.7.0` 与我们一致，
+云端能力相同，只差草稿形态。
+
+官方 `video_draft/save` 抓包里，滤镜与本仓原实现有三处相反：
+
+| # | 维度 | 官方 | 本仓原实现 |
+| --- | --- | --- | --- |
+| 1 | 位置 | 留在 `materials.effects`，草稿里**没有** `filters` 键 | 搬到 `materials.filters` |
+| 2 | `effect_id` | **7 位短 id**（彩果 `7507484`） | 19 位 `resource_id` |
+| 3 | `path` | `/editor/effect/filter/<rid>` | 空串（或误用视频特效的 `effects2`） |
+
+挂接也不一样：官方建**独立 `type=filter` 轨**，段用 `material_id` 直指素材、
+`extra_material_refs=[]`、`render_index=1`；**视频段的 refs 里不含滤镜 id**。
+
+第 2 条和视频特效是同一条教训 —— 特效也是必须 7 位短 id，`path` 反而不是必需条件。
+改完实测：段 2/4 的 R−B 从 −5.21 走到 **−9.69**、meanDiff **10.64**（噪声基线 0.056），
+肉眼即右帧偏紫。
+
+`pyJianYingDraft` 这边**不需要改**：它写 `materials.filters` 也行，服务端上报云渲染前会
+统一搬进 `effects` 并改写（开关 `HTW_FILTER_WEB_SHAPE`，默认开；设 `0` 回退到旧行为）。
+自己直连剪映云渲染、不过服务端的话，就得自己按上表三处摆对。
 
 判定方法（别只看「渲染成功」）：
 
 ```bash
 # 1) 同一条草稿渲两次，量出编码噪声基线 —— 实测 mean abs diff ≈ 3.1（median 2）
-# 2) 滤镜版 vs 基线，同一帧号比对 —— mean abs diff = 0.000
+# 2) 滤镜版 vs 基线，同一帧号比对 —— 生效时 mean abs diff ≈ 10
 ffmpeg -i A.mp4 -i B.mp4 -lavfi "[0:v][1:v]psnr=stats_file=psnr.log" -f null -
 ```
 
@@ -165,10 +183,9 @@ ffmpeg -i A.mp4 -i B.mp4 -lavfi "[0:v][1:v]psnr=stats_file=psnr.log" -f null -
 两片同一秒不是同一帧，PSNR 会显示 23dB 的假差异。要按帧号抽
 （`-vf "select=eq(n\,30)"`）再比。
 
-需要真实调色就把效果烧进素材再进草稿（`ffmpeg -vf eq=contrast=1.14 ...`）。
-要打通「草稿里带滤镜」，得让服务端先下载资源包、上传云空间，并在 `package_assets`
-里登记 `{md5, source_path, size}`（`Models/Utils.cs` 的
-`QueryEffectResourceFileAsync` 已能查 md5 与 CDN 地址，但没有调用者）。
+> 另有一处历史遗留：`FilterCatalog.json` 里精选 25 条的 `effectId` **从 2026-10-11 起
+> 就已经是短 id**，但 `BuildFilterMaterial` 一直填 `resource_id`。不是「查不到」，
+> 是取字段时选错了 —— 新增素材类型时照抄官方抓包，别照抄同仓旧实现。
 
 ## 接口契约（自己写客户端时照这张表）
 
@@ -209,7 +226,7 @@ GET  /api/v2/edit/draft-status/{taskId}
 | **复杂草稿真实出片**（12 秒 / 3 段 / 双音轨 / 蒙版 / 关键帧 / 字幕，见上节） | **通过**。12.05s / 360 帧，无黑段 |
 | **资源型转场**（`中心旋转` / `复古放映`，2026-11-09 复测） | **通过**。转场区域出现资源自带几何动效，无异常黑段；`叠化` 旧 id 的整段黑场不再复现 |
 | **VIP 转场**（`偏移叠化` / `径向模糊`，2026-11-09 补测） | **不呈现**。前者黑场 2.00 秒（= 转场时长），后者无黑场但画面完全清晰、转场被忽略；同类别唯一非 VIP 的 `模糊` 正常 |
-| **滤镜**（资源型 / 参数型 / VIP / artist 活 id，2026-11-09 两轮复测） | **不呈现**。同画面四段对照：三条滤镜与基线 mean abs diff 0.54 / 0.59 / 0.59，落在编码噪声内；根因是资源包（3D LUT）没上传，不是 id 或 VIP 限制 |
+| **滤镜**（2026-11-09 定案） | **通过**（经服务端改写）。真因是草稿形态：位置该在 `materials.effects`、`effect_id` 该 7 位短 id、`path` 该 `/editor/effect/filter/<rid>`、该挂独立 `filter` 轨。改写后四段对照 meanDiff 10.639 / 10.640，基线噪声 0.056；R−B 由 −5.21 → −9.69 |
 
 实测数据（6.06 秒 1080p，云端耗时约 6 秒）：
 

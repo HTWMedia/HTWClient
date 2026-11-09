@@ -19,12 +19,21 @@ pyJianYingDraft 0.3.1 的 `materials` 桶里**没有 `filters` 键**，
 `FilterSegment` 只留了一条空的 filter 轨和一个悬空的 material_id——
 素材本体从未序列化。所以「滤镜不生效」不是云端不认，而是**草稿里压根没有滤镜**。
 
-修法：补建 `materials.filters[]`（管线已验证形态：`path` 置空、
-`enable_adjust=true`、`source_platform=0`、`value=1.0`），再把滤镜挂到
-主轨每个视频段的 `extra_material_refs` 上（官方应用模式），删掉空 filter 轨。
+修法：补建 `materials.filters[]`（`path` 置空、`enable_adjust=true`、
+`source_platform=0`、`value=1.0`），再把滤镜挂到主轨每个视频段的
+`extra_material_refs` 上，删掉空 filter 轨。
 
-⚠️ 补建形态之后**仍然不呈现**（2026-11-09 二次复测）：换成 artist 平台活 id、
-VIP 资源都一样。根因是滤镜资源包（3D LUT）没上传到云空间，详见 README。
+⚠️ **这个形态本身不会出效果**（2026-11-09 定案）。真正的官方形态是：
+素材留在 `materials.effects`、`effect_id` 用 7 位短 id（彩果 = `7507484`）、
+`path` 写 `/editor/effect/filter/<resource_id>`、并挂一条独立的 `type=filter` 轨
+（段用 `material_id` 直指素材，`extra_material_refs=[]`，`render_index=1`），
+视频段的 refs 里**不含**滤镜 id。
+
+本脚本仍按旧形态输出——因为走 `/api/v2/edit/draft-export` 时，服务端
+`Utils.UpgradeFiltersToWebShape` 会在上报云渲染前统一改写（开关
+`HTW_FILTER_WEB_SHAPE`，默认开）。**如果你直连剪映云渲染、不过服务端，
+就得自己按上面四条摆对**，否则云端静默跳过、不报错也不调色。
+详见 README「滤镜」一节。
 
 ## 形态依据
 
@@ -160,14 +169,14 @@ def apply_catalog_effects(draft_dir, transition_picks=None, filter_pick=None):
         kind = ("资源型 %s" % entry["resource_id"]) if entry.get("resource_id") else \
                ("参数型 %s" % ",".join("%s=%s" % (a["adjust_id"], a["value"]) for a in adjustments))
         notes.append("滤镜 %s（%s）：挂到 %d 个视频段" % (entry["name"], kind, mounted))
-        # 实测事实（2026-11-09 两轮）：
-        # ① 四种组合（资源型/参数型 × adjustments/adjust_params）与基线逐像素相同；
-        # ② 换成 artist 平台活 id（能查到 md5 + CDN）后仍然不动，VIP（清晰/净白）
-        #    与非 VIP（冷蓝）表现一致 —— 所以不是 id 体系、也不是 VIP 授权的问题。
-        # 根因：滤镜本体是一张 3D LUT（资源包里 texture/filter*.3dl.vf 或
-        # filter.cube.vf），草稿里的 resource_id 只是索引；当前链路只上传音视频和
-        # 贴纸，资源包从没进 package_assets，云端取不到 LUT 就不调色、也不报错。
-        notes.append("⚠️ 滤镜当前云端渲染不呈现（资源包/LUT 未上传）；需要真实调色请先烧进素材")
+        # 形态事实（2026-11-09 定案）：
+        # ① 旧形态（filters 桶 + 主轨 refs + 空 path + 19 位 effect_id）云端**静默跳过**，
+        #    逐像素与基线相同 —— 原因不是资源包，是 effect_id 位数；
+        # ② 官方形态 = effects 桶 + 7 位短 id + /editor/effect/filter/<rid> + 独立 filter 轨，
+        #    实测 R−B 由 −5.21 走到 −9.69、meanDiff 10.64（噪声基线 0.056）。
+        # 这里输出旧形态，交给服务端 UpgradeFiltersToWebShape 改写（HTW_FILTER_WEB_SHAPE，
+        # 默认开）；直连剪映云渲染不经服务端时，需自行写成官方形态。
+        notes.append("滤镜 %s：旧形态已落盘，服务端上报前会改写为官方 Web 形态" % entry["name"])
 
     _save(path, data)
     return notes

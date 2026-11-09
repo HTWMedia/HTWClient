@@ -136,9 +136,10 @@ def pick_filter(title, catalog_dir=None, allow_vip=False):
       * 资源型：`{"title", "resourceId", "effectId", ...}`
 
     ⚠️ 资源型 id 取自 `FilterCatalog.json`，这批精选通道 id 在 artist 接口
-    （`mget_artist_item`）里查不到，且实测**渲不成**——换 artist 活 id 也一样。
-    根因是滤镜资源包（3D LUT）没有上传，见 README「滤镜」一节。选资源型时
-    只把它当作「写进草稿的配置」，不要期待成片有色偏。
+    （`mget_artist_item`）里查不到。2026-11-09 定案：滤镜**是能出效果的**，
+    之前不出效果是草稿形态问题（位置、`effect_id` 位数、`path`、挂接方式），
+    与这批 id 无关，也与资源包无关。走服务端导出时会自动改写为官方形态；
+    直连剪映云渲染需自己按官方形态写，见 README「滤镜」一节。
     """
     if title in PARAM_FILTERS:
         return {"title": title, "adjustments": dict(PARAM_FILTERS[title])}
