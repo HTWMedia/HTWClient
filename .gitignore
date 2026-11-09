@@ -61,3 +61,6 @@ guide-videos/out/preview/
 /scripts/
 /meta_*.json
 /*.png
+
+# 本机工具状态（gh CLI 等在此工作区落下的 device-id，与本项目无关）
+.local/
