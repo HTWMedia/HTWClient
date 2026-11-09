@@ -167,7 +167,8 @@ def apply_catalog_effects(draft_dir, transition_picks=None, filter_pick=None):
 
         data["tracks"] = kept_tracks
         kind = ("资源型 %s" % entry["resource_id"]) if entry.get("resource_id") else \
-               ("参数型 %s" % ",".join("%s=%s" % (a["adjust_id"], a["value"]) for a in adjustments))
+               ("参数型（云端不调色，仅供形状实验）%s" %
+                ",".join("%s=%s" % (a["adjust_id"], a["value"]) for a in adjustments))
         notes.append("滤镜 %s（%s）：挂到 %d 个视频段" % (entry["name"], kind, mounted))
         # 形态事实（2026-11-09 定案）：
         # ① 旧形态（filters 桶 + 主轨 refs + 空 path + 19 位 effect_id）云端**静默跳过**，

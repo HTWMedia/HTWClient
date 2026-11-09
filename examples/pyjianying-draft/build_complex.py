@@ -205,7 +205,7 @@ def main(argv=None):
     parser.add_argument("--speed-second", type=float, default=1.5, help="第 2 段的倍速（默认 1.5，1 = 不变速）")
     parser.add_argument("--transitions", default="中心旋转",
                         help="逗号分隔的转场标题（或分类），循环使用；--list-fx 看可选清单")
-    parser.add_argument("--filter", default="", help="滤镜标题（--list-fx 看可选）。⚠️ 实测云端不呈现，仅用于观察形态")
+    parser.add_argument("--filter", default="", help="滤镜标题（--list-fx 看可选）。资源型经服务端改写后有效；参数型已证伪（云端不调色）")
     parser.add_argument("--fx-dir", help="Services/Editing 目录（默认探测 D:\\HTWCore.Web\\Services\\Editing）")
     parser.add_argument("--list-fx", action="store_true", help="只打印目录里可用的转场/滤镜然后退出")
     parser.add_argument("--transition-seconds", default="0.8s", help="转场时长（仅骨架用，最终取目录 defaultDurationUs）")

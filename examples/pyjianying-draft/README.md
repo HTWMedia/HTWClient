@@ -104,7 +104,7 @@ pyJianYingDraft 生成的 `draft_content.json` 里，素材写的是**你本机�
 | 标题入场动画（向右擦除） | 通过。0.45s 处只出现前半句，1.2s 完整 |
 | SRT 字幕 4 条 | 通过。时间点、文本与 SRT 一致 |
 | 人声 + BGM 双音轨 | 通过。混音非静音（mean −17.6dB / max −1.8dB） |
-| 滤镜 | **通过**（2026-11-09 定案）。真因不是资源包，是草稿形态三处不符：位置该在 `materials.effects` 而非 `filters`、`effect_id` 该用 7 位短 id 而非 19 位 `resource_id`、`path` 该写 `/editor/effect/filter/<rid>`；且要挂独立 `type=filter` 轨。服务端 `Utils.UpgradeFiltersToWebShape` 已自动改写，实测 R−B 由 −5.21 走到 −9.69 |
+| 资源型滤镜 | **通过**（2026-11-09 定案）。真因不是资源包，是草稿形态三处不符：位置该在 `materials.effects` 而非 `filters`、`effect_id` 该用 7 位短 id 而非 19 位 `resource_id`、`path` 该写 `/editor/effect/filter/<rid>`；且要挂独立 `type=filter` 轨。服务端 `Utils.UpgradeFiltersToWebShape` 已自动改写，实测 R−B 由 −5.21 走到 −9.69 |
 
 ### 转场：黑场的真因是资源 id，不是「不支持叠化」
 
@@ -187,6 +187,19 @@ ffmpeg -i A.mp4 -i B.mp4 -lavfi "[0:v][1:v]psnr=stats_file=psnr.log" -f null -
 > 就已经是短 id**，但 `BuildFilterMaterial` 一直填 `resource_id`。不是「查不到」，
 > 是取字段时选错了 —— 新增素材类型时照抄官方抓包，别照抄同仓旧实现。
 
+### ⚠️ 参数型滤镜（纯 `adjustments`）已证伪
+
+上面说的「通过」**只针对资源型**（有 `resourceId` 且目录里带 7 位短 `effectId`）。
+`effects_catalog.py` 里的 `PARAM_FILTERS`（冷调 / 暖调 / 高对比 / 淡雅）是纯参数配方：
+2026-11-09 的像素 A/B 里，不论放 `materials.filters` 还是 `effects`、挂主轨 refs
+还是独立 `filter` 轨，成片与无滤镜基线 meanDiff 都只有 0.054（编码噪声）。
+官方 Web 草稿的 `materials` 桶里既没有 `filters` 也没有 `adjusts`，
+参数化调色应另走 `hsl` / `material_colors` / `color_curves` 那一族（尚未验证）。
+
+服务端 `EditingPlaybookLoader` 现在会**拒绝加载**被 `enabled=true` 启用的纯参数滤镜节
+并点名告警；本示例保留这类配方仅供观察草稿形状，`--list-fx` 与运行日志均已标注无效，
+别把它当调色功能用。
+
 ## 接口契约（自己写客户端时照这张表）
 
 ```
@@ -226,7 +239,8 @@ GET  /api/v2/edit/draft-status/{taskId}
 | **复杂草稿真实出片**（12 秒 / 3 段 / 双音轨 / 蒙版 / 关键帧 / 字幕，见上节） | **通过**。12.05s / 360 帧，无黑段 |
 | **资源型转场**（`中心旋转` / `复古放映`，2026-11-09 复测） | **通过**。转场区域出现资源自带几何动效，无异常黑段；`叠化` 旧 id 的整段黑场不再复现 |
 | **VIP 转场**（`偏移叠化` / `径向模糊`，2026-11-09 补测） | **不呈现**。前者黑场 2.00 秒（= 转场时长），后者无黑场但画面完全清晰、转场被忽略；同类别唯一非 VIP 的 `模糊` 正常 |
-| **滤镜**（2026-11-09 定案） | **通过**（经服务端改写）。真因是草稿形态：位置该在 `materials.effects`、`effect_id` 该 7 位短 id、`path` 该 `/editor/effect/filter/<rid>`、该挂独立 `filter` 轨。改写后四段对照 meanDiff 10.639 / 10.640，基线噪声 0.056；R−B 由 −5.21 → −9.69 |
+| **资源型滤镜**（2026-11-09 定案） | **通过**（经服务端改写）。真因是草稿形态：位置该在 `materials.effects`、`effect_id` 该 7 位短 id、`path` 该 `/editor/effect/filter/<rid>`、该挂独立 `filter` 轨。改写后四段对照 meanDiff 10.639 / 10.640，基线噪声 0.056；R−B 由 −5.21 → −9.69 |
+| **参数型滤镜**（纯 `adjustments`，2026-11-09 补测） | **不呈现**。两种素材桶 × 两种挂法，成片与基线 meanDiff 全在 0.054~0.058（编码噪声）；官方 Web 草稿的 `materials` 桶里既没有 `filters` 也没有 `adjusts` |
 
 实测数据（6.06 秒 1080p，云端耗时约 6 秒）：
 

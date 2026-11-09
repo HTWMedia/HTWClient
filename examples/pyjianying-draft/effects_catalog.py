@@ -54,13 +54,18 @@ FALLBACK_FILTERS = [
     {"title": "净白", "resourceId": "7078652411866255886", "effectId": "2938814", "category": "selected"},
 ]
 
-# 参数型滤镜配方（无 resource_id，全靠 adjustments）。
+# 参数型滤镜配方（无 resource_id，全靠 adjustments）。值域 -1..1。
 #
-# 🔴 为什么它是**默认**：资源型滤镜（19 位 resource_id）在剪同款管线里只有
-# 「单个滤镜可渲染成功」的口头记录，从没做过 A/B 对照；实际拿现采 id 跑，
-# 成片与无滤镜基线**逐像素相同**（同一帧 md5 一致）。参数型则被 Probe A
-# 实机验证过（`docs/2026-10-11-style-filter-protocol.md` 二·参数型）。
-# 值域都是 -1..1。
+# 🔴 已证伪（2026-11-09 像素 A/B）：这一类**云端不会调色**。
+#    不论放 materials.filters 还是 effects、挂主轨 refs 还是独立 filter 轨，
+#    成片与无滤镜基线 meanDiff 都只有 0.054（编码噪声）；官方 Web 草稿的
+#    materials 桶里既没有 filters 也没有 adjusts。
+#    见 `docs/2026-10-11-style-filter-protocol.md` 第七节；服务端
+#    `EditingPlaybookLoader` 已拒绝加载被启用的纯参数滤镜节。
+#
+# 保留原因：仅供「草稿形状」实验与历史兼容。pick_filter 目前仍会优先匹配
+# 这里的名字（历史行为，本次未改动）；要出效果请传资源型标题
+# （如「冷蓝」「彩果」，目录里带 7 位短 effectId）。
 PARAM_FILTERS = {
     "冷调": {"brightness": -0.02, "contrast": 0.05, "saturation": -0.10},
     "暖调": {"brightness": 0.03, "contrast": 0.03, "warmth": 0.12},
@@ -130,10 +135,12 @@ def pick_transition(title, catalog_dir=None, allow_vip=False):
 def pick_filter(title, catalog_dir=None, allow_vip=False):
     """按名字挑一条滤镜。
 
-    先查参数型配方（`PARAM_FILTERS`，零资源依赖、实机验证过），
-    没有再查资源型目录。返回的 dict 里：
-      * 参数型：`{"title", "adjustments": {key: value}}`
-      * 资源型：`{"title", "resourceId", "effectId", ...}`
+    ⚠️ 历史遗留的匹配顺序：先查 `PARAM_FILTERS`（参数型），没有再查资源型目录。
+    参数型已于 2026-11-09 用像素 A/B 证伪（云端不调色），**新脚本不要用**；
+    这里保留只为不破坏既有命令。要出效果请传资源型标题（如「冷蓝」）。
+    返回的 dict 里：
+      * 参数型：`{"title", "adjustments": {key: value}}` —— 云端无效
+      * 资源型：`{"title", "resourceId", "effectId", ...}` —— 经服务端改写后有效
 
     ⚠️ 资源型 id 取自 `FilterCatalog.json`，这批精选通道 id 在 artist 接口
     （`mget_artist_item`）里查不到。2026-11-09 定案：滤镜**是能出效果的**，
@@ -168,7 +175,7 @@ def describe(catalog_dir=None):
     for e in ok_f[:40]:
         lines.append("  %-8s %s  %s / %s" % (
             e.get("category") or "", e.get("title"), e.get("resourceId"), e.get("effectId")))
-    lines.append("参数型滤镜（推荐，实机验证过）：")
+    lines.append("参数型滤镜（历史遗留，2026-11-09 像素 A/B 证伪：云端不调色，仅供形状实验）：")
     for name, adj in PARAM_FILTERS.items():
         lines.append("  %-6s %s" % (name, ", ".join("%s=%s" % kv for kv in adj.items())))
     return "\n".join(lines)
