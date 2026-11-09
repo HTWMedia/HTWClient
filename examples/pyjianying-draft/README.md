@@ -48,6 +48,141 @@ python render.py --draft ./drafts/pjy-demo --cookie-file ./jy-cookie.txt --out .
 node agent/cli/htw-skills.mjs draft ./drafts/pjy-demo --cookie-file ./jy-cookie.txt --out ./out
 ```
 
+> 每条命令的实际输出、生成的草稿结构、资源清单与选型结果见下一节「示例展示」。
+
+## 示例展示
+
+下面都是脚本的实际输出。示例素材是一段 3 秒测试视频、一份两条字幕的字幕文件、两段从同一视频抽出的音频；换成自己的素材即可。**造草稿这一步不联网、不需要凭据**，只有第 4 步出片需要 AuthKey 与剪映登录态。为便于阅读，输出里的临时绝对路径统一简写成 `./drafts/...`，其余数字与资源标识均为实测值。
+
+### 1）最小草稿：一段视频 + 标题
+
+```bash
+python build_draft.py --video clip.mp4 --title "开场标题" --seconds 3 --out ./drafts
+```
+
+```
+草稿已生成: ./drafts/pjy-demo
+  画布 1920x1080@30  时长 3.0s
+  拷入素材 1 个，改写路径 1 条
+    materials/clip.mp4
+
+下一步（草稿 → 成片）:
+  python render.py --draft "./drafts/pjy-demo" --cookie-file ./jy-cookie.txt --out ./out
+```
+
+加 `--json` 只输出一行摘要，便于脚本串联：
+
+```json
+{"draft_dir": "./drafts/pjy-demo", "duration_sec": 3.0, "canvas": "1920x1080@30", "materials_copied": ["clip.mp4"], "paths_rewritten": 1, "missing": []}
+```
+
+草稿目录是自包含的，素材就在目录里，不依赖本机绝对路径：
+
+```
+drafts/pjy-demo/
+├── draft_content.json
+├── draft_meta_info.json
+└── materials/clip.mp4
+```
+
+`draft_content.json` 里原本的 `D:\...\clip.mp4` 已被换成剪映占位符；前缀里的草稿 id 每次生成都不同，服务端只取 `##/` 之后的部分：
+
+```
+videos[0].path = ##_draftpath_placeholder_91E08AC5-..._##/materials/clip.mp4
+tracks         = [video×1, text×1]
+```
+
+### 2）复杂草稿：多段 + 转场 + 滤镜 + 蒙版 + 关键帧 + 字幕 + 双音轨
+
+```bash
+python build_complex.py --clips clip.mp4,clip2.mp4 --clip-seconds 2 \
+  --transitions 中心旋转 --filter 净透 --srt demo.srt \
+  --voice voice.mp3 --bgm bgm.mp3 --out ./drafts --name pjy-complex
+```
+
+```
+草稿已生成: ./drafts/pjy-complex
+  2 段 / 4.0s / 1920x1080@30，转场 中心旋转
+  滤镜 净透
+  · 转场 #0 中心旋转：6911569618171597320 → 6858191434294497805（500ms，overlap=False，挂 1 段）
+  · 滤镜 净透（资源型 7085360406423671303）：挂到 2 个视频段
+  · 滤镜 净透：旧形态已落盘，服务端上报前会改写为官方 Web 形态
+  拷入素材 4 个，改写路径 4 条
+```
+
+第一行改写日志左边是 pyJianYingDraft 内置 `TransitionType.模糊` 的旧资源标识，右边是目录现采的「中心旋转」——这就是「转场黑场」那条坑的修法落点。`build_complex.py` 同样支持 `--json`，会把这些改写日志放进 `fx_notes` 数组。
+
+落盘后的草稿结构：
+
+```
+tracks     = [video×2, text×1, text(字幕)×2, audio(人声)×1, audio(BGM)×1]
+非空素材桶 = videos 2 / audios 2 / audio_fades 2 / common_mask 1 / masks 1 /
+             material_animations 1 / speeds 4 / texts 3 / transitions 1 / filters 1
+filters[0] = {type: filter, name: 净透, resource_id: 7085360406423671303,
+              effect_id: 7085360406423671303, path: ""}
+```
+
+注意 `filters[0]` 仍是**本仓内部旧形态**：`effect_id` 是 19 位、`path` 为空、滤镜挂在主视频段的 `extra_material_refs` 上。走 `/api/v2/edit/draft-export` 时，服务端 `Utils.UpgradeFiltersToWebShape` 会在上报云渲染前改成官方形态（7 位短 id `2938816`、独立 filter 轨）；自己直连云端则要按「滤镜」一节自行摆对。
+
+### 3）资源清单与选型闸门
+
+```bash
+python build_complex.py --list-fx
+```
+
+```
+目录来源：D:\HTWCore.Web\Services\Editing
+转场 39 条可选（总 503）：
+  MG动画     中心旋转  overlap=False  dur=500ms  [6858191434294497805]
+  ...（其余转场略）
+滤镜 25 条可用（7 位短 effectId，2026-11-09 逐条云端 A/B 生效；总 240）：
+  selected 净透  7085360406423671303 / 2938816
+  selected 彩果  7175127220808061477 / 7507484
+  ...（其余 23 条略）
+另有 215 条不可用，不列入可选清单：19 位 effectId 会被云端静默忽略，VIP 同理。
+  其中 4 条虽标非 VIP 但仍是长 id，最容易被误选：日落飞车 / 空灵 / 去黄增质 / 高清冬日
+参数型滤镜（历史遗留，2026-11-09 像素 A/B 证伪：云端不调色，仅供形状实验；选了会告警）：
+  冷调     brightness=-0.02, contrast=0.05, saturation=-0.1
+```
+
+选型层的三种结果，可直接在 Python 里试：
+
+```bash
+python -c "import effects_catalog as fx; print(fx.pick_filter('净透'))"
+# {'title': '净透', 'resourceId': '7085360406423671303', 'effectId': '2938816', ...}
+
+python -c "import effects_catalog as fx; fx.pick_filter('日落飞车')"
+# 报错退出：滤镜「日落飞车」不可用：effectId=7505662247407013135（19 位）…19 位 id 会被云端静默跳过…
+
+python -c "import effects_catalog as fx; fx.pick_filter('冷调')"
+# stderr：注意：「冷调」是参数型滤镜，2026-11-09 像素 A/B 已证伪（云端不调色），仅供草稿形状实验…
+```
+
+### 4）出片
+
+```bash
+export HTW_API_KEY="你的-key"
+python render.py --draft ./drafts/pjy-demo --cookie-file ./jy-cookie.txt --out ./out
+```
+
+`render.py` 依次打印已打包体积、提交地址、任务编号、轮询进度，最后输出「完成: <路径> (x.x MB)」。缺凭据时直接给可操作的提示，例如：
+
+```
+缺少 AuthKey：设 HTW_API_KEY 或传 --key（https://htwmedia.dpdns.org 邮箱申领）
+缺少剪映 Cookie：草稿渲染用你自己的剪映账号，--cookie 或 --cookie-file 必填。
+  取法：浏览器登录剪映网页版 → F12 → Network → 任意请求 → 复制 Request Headers 里 Cookie 整段
+```
+
+真实出片的成片参数（6.06 秒 1080p、h264 + aac、1.10 MiB）以及「`render.py` 与 Node 命令行产出字节一致」的核对，见文末「这份示例验证到了哪一步」。
+
+### 5）选型层回归
+
+```bash
+python -m unittest -v test_effects_catalog.py
+# Ran 7 tests in 0.012s
+# OK
+```
+
 ## 为什么要有 `build_draft.py` 这一步
 
 pyJianYingDraft 生成的 `draft_content.json` 里，素材写的是**你本机的绝对路径**

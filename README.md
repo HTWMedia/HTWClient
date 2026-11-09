@@ -83,7 +83,16 @@ node agent/cli/htw-skills.mjs draft "<草稿目录>" --cookie-file ./jy-cookie.t
 
 草稿也能用代码生成：用 [pyJianYingDraft](https://github.com/GuanYixuan/pyJianYingDraft) 写时间轴、由本平台出片，
 现成的对接示例在 [`examples/pyjianying-draft/`](examples/pyjianying-draft/)——`build_draft.py` 建草稿并把素材
-改成自包含，`render.py` 提交、轮询、下载成片。
+改成自包含，`render.py` 提交、轮询、下载成片。最小跑法：
+
+```bash
+cd examples/pyjianying-draft
+python build_draft.py --video 素材.mp4 --title "开场标题" --seconds 15 --out ./drafts
+python render.py --draft ./drafts/pjy-demo --cookie-file ./jy-cookie.txt --out ./out
+```
+
+复杂草稿（多段、转场、滤镜、蒙版、双音轨）、资源清单、滤镜选型闸门，以及每条命令的实际输出与生成物结构，
+见[示例 README 的「示例展示」一节](examples/pyjianying-draft/README.md#示例展示)。
 
 和「用脚本控制剪映点导出」那类做法不同：本机不用装剪映、不用开着客户端、不会抢占鼠标和窗口、不占你的 CPU。
 夜里丢上去，早上收成片。
