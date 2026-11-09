@@ -193,12 +193,22 @@ ffmpeg -i A.mp4 -i B.mp4 -lavfi "[0:v][1:v]psnr=stats_file=psnr.log" -f null -
 `effects_catalog.py` 里的 `PARAM_FILTERS`（冷调 / 暖调 / 高对比 / 淡雅）是纯参数配方：
 2026-11-09 的像素 A/B 里，不论放 `materials.filters` 还是 `effects`、挂主轨 refs
 还是独立 `filter` 轨，成片与无滤镜基线 meanDiff 都只有 0.054（编码噪声）。
-官方 Web 草稿的 `materials` 桶里既没有 `filters` 也没有 `adjusts`，
-参数化调色应另走 `hsl` / `material_colors` / `color_curves` 那一族（尚未验证）。
+官方 Web 草稿的 `materials` 桶里既没有 `filters` 也没有 `adjusts`。
+参数化调色那一族（`hsl` / `material_colors` / `color_curves` / `primary_color_wheels` /
+`log_color_wheels`）2026-11-09 晚已静态取证**否定**：官方抓包、模板草稿、本机 1257 份
+草稿里这些桶恒为空，也没有对应面板接口（`adjust` / `color` 等一律 `200501`），
+**Web 链路没有可照抄的参数化调色形态**。
 
 服务端 `EditingPlaybookLoader` 现在会**拒绝加载**被 `enabled=true` 启用的纯参数滤镜节
 并点名告警；本示例保留这类配方仅供观察草稿形状，`--list-fx` 与运行日志均已标注无效，
 别把它当调色功能用。
+
+✅ 同日晚些时候，服务端把 25 条精选资源型滤镜用 26 段同源云渲染**逐条**做了像素 A/B
+（25/25 生效，最小 meanDiff 4.0015；无滤镜对照段间噪声 0.0179~0.0189），并据此给
+7 个创作风格各配了一条：`Default=净透`、`HistoricalDocumentary=暮色`、
+`TechExplainer=冷蓝`、`AnimeGhibli=彩果`、`Cinematic=橙蓝`、`Educational=清晰`、
+`Marketing=高饱和`（不变）。改任一条都要先按帧号抽帧重跑云端 A/B，
+别拿「渲染没报错」当通过。详见 `D:/HTWCore.Web/docs/2026-10-11-style-filter-protocol.md` 第十节。
 
 ## 接口契约（自己写客户端时照这张表）
 
