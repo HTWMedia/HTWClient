@@ -42,6 +42,7 @@ function originOf(u) {
     return x.protocol + "//" + x.host;
   } catch (e) { return ""; }
 }
+// TODO(换域名): 与 preload.js 的 API_BASE 保持同步(含换域名的说明,见那边注释)。
 allowedOrigins.add(originOf(process.env.HTW_API_BASE || "https://htwmedia.dpdns.org"));
 // 默认直连源站 IP，必须与 preload.js 的 API_DIRECT 默认值一致。
 allowedOrigins.add(originOf(process.env.HTW_API_DIRECT || "http://123.57.217.155"));

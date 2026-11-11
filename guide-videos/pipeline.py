@@ -35,7 +35,10 @@ def tts_baidu(text, out_mp3, spd=4):
     return audio_len(out_mp3)
 
 
-TTS_API = "https://htwmedia.dpdns.org"
+# 接口基地址:HTW_BASE 环境变量优先。免费二级域名后缀(dpdns.org)被运营商出口
+# 按 TLS SNI 关键词阻断后,被拦链路上可设 HTW_BASE=http://123.57.217.155 直连源站过渡。
+# TODO(换域名): 新域名上线后替换各工具的 fallback 常量 —— 全局搜 "TODO(换域名)"。
+TTS_API = os.environ.get("HTW_BASE", "https://htwmedia.dpdns.org")
 TTS_SPEAKER = "zh_female_aoyunliuyuxi"
 TTS_CONFIG = os.path.expandvars(r"%APPDATA%\htwsuite-desktop\htw-config.json")
 

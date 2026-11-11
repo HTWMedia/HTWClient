@@ -6,6 +6,8 @@
   let _key = "";
   let _base =
     (typeof window !== "undefined" && window.htw && window.htw.apiBase) ||
+    // TODO(换域名): 与 preload.js 的 API_BASE 保持同步(此 fallback 仅在非 preload
+    // 环境(纯浏览器直开)生效)。换域名说明见 preload.js。
     "https://htwmedia.dpdns.org";
   // 可选的大文件直连通道：默认空串（走 _base）。自建部署需要让分片上传绕过
   // 反向代理时，可用 setDirectBase 或环境变量 HTW_API_DIRECT 指定。

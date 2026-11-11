@@ -257,7 +257,7 @@
   }
 
   function openGetKey() {
-    const base = (getBaseInput().value.trim() || (window.htw && window.htw.apiBase) || "https://htwmedia.dpdns.org").replace(/\/+$/, "");
+    const base = (getBaseInput().value.trim() || (window.htw && window.htw.apiBase) || "https://htwmedia.dpdns.org" /* TODO(换域名): 同 preload.js */).replace(/\/+$/, "");
     const url = base + "/Home/GetApiKey";
     if (window.htw && window.htw.openExternal) window.htw.openExternal(url);
   }
@@ -323,7 +323,7 @@
     btn.className = "quota-btn";
     btn.textContent = "去充值";
     btn.addEventListener("click", function () {
-      const base = (getBaseInput().value.trim() || (window.htw && window.htw.apiBase) || "https://htwmedia.dpdns.org").replace(/\/+$/, "");
+      const base = (getBaseInput().value.trim() || (window.htw && window.htw.apiBase) || "https://htwmedia.dpdns.org" /* TODO(换域名): 同 preload.js */).replace(/\/+$/, "");
       const url = /^https?:/i.test(info.redirectUrl || "") ? info.redirectUrl : base + (info.redirectUrl || "/Home/Recharge");
       if (window.htw && window.htw.openExternal) window.htw.openExternal(url);
     });

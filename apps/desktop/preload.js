@@ -12,6 +12,9 @@ const { buildCallHeaders } = require("./js/call-headers.js");
 // 本地更新包的下载校验与解压（真实实现在 js/local-package.js，可被测试直测）。
 const { downloadPackage, extractPackage, ensureNewDir } = require("./js/local-package.js");
 
+// TODO(换域名): dpdns.org 免费域名后缀正被运营商出口按 SNI 关键词阻断(移动链路
+// 100% RST,电信暂未波及)。新域名上线后替换这里的 fallback,并全局搜 "TODO(换域名)"
+// 同步其余各处;被拦链路的过渡自救 = 设 HTW_API_BASE=http://123.57.217.155(明文直连)。
 const API_BASE = process.env.HTW_API_BASE || "https://htwmedia.dpdns.org";
 // 大文件直连通道：默认指向源站 IP，绕过 Cloudflare 的 100MB body 上限与 100s 524 超时。
 // 自部署 / 联调可用环境变量 HTW_API_DIRECT 覆盖（填成 API_BASE 即可强制回到 Cloudflare 链路）。
