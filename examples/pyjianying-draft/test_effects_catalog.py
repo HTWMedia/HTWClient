@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """选型层回归：只放行「云端真的会出效果」的滤镜。
 
-自包含，不依赖 HTWCore.Web 仓库，也不需要 pyJianYingDraft：
+自包含，不依赖服务端仓库，也不需要 pyJianYingDraft：
 
     python -m unittest -v test_effects_catalog.py
 

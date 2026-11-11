@@ -18,7 +18,7 @@ pyJianYingDraft 自带的 `FilterType` / `TransitionType` 元数据是**某个�
 
 ## 数据来源
 
-优先读 HTWCore.Web 仓库里 2026-10-11 现采的目录：
+优先读服务端 2026-10-11 现采的目录（Services/Editing）：
 
     Services/Editing/TransitionCatalog.json   503 条
     Services/Editing/FilterCatalog.json       240 条
@@ -34,13 +34,12 @@ import sys
 # 2026-11-09 定案：云端只认 7 位短 effectId。26 段同源云渲染逐条 A/B 里，
 # 25 条精选（短 id）25/25 生效，最小 meanDiff 4.0015；19 位 effectId 即使
 # 配齐官方形态也被静默忽略（meanDiff 0.056，等于编码噪声）。
-# 见 HTWCore.Web/docs/2026-10-11-style-filter-protocol.md 第七、十节。
+# 见服务端 style-filter-protocol 协议文档第七、十节。
 MAX_EFFECT_ID_LEN = 8
 
 # 现采目录的默认探测位置（跨仓库，找不到不算错）
 DEFAULT_CATALOG_DIRS = (
     os.environ.get("HTW_EDITING_DIR", ""),
-    r"D:\HTWCore.Web\Services\Editing",
 )
 
 # 兜底小表。⚠️ 每条都必须能追到出处，别凭猜加 id。

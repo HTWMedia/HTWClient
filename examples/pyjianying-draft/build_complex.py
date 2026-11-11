@@ -16,7 +16,7 @@ pyJianYingDraft 自带的两套元数据都有坑，而且**都不报错**，只
   空轨道 —— 素材本体从未写进草稿，所以「滤镜不生效」不是云端不认。
 
 两者都交给 ``apply_effects.apply_catalog_effects()`` 在 ``script.save()`` 之后改写，
-形态与 HTWCore.Web 剪同款管线一致（见 ``docs/2026-10-11-*`` 两份协议文档）。
+形态与服务端剪同款管线一致（见 ``docs/2026-10-11-*`` 两份协议文档）。
 ``--list-fx`` 可以看目录里当前有哪些非 VIP 资源可选。
 
 用法：
@@ -206,7 +206,7 @@ def main(argv=None):
     parser.add_argument("--transitions", default="中心旋转",
                         help="逗号分隔的转场标题（或分类），循环使用；--list-fx 看可选清单")
     parser.add_argument("--filter", default="", help="滤镜标题（--list-fx 看可选）。资源型经服务端改写后有效；参数型已证伪（云端不调色）")
-    parser.add_argument("--fx-dir", help="Services/Editing 目录（默认探测 D:\\HTWCore.Web\\Services\\Editing）")
+    parser.add_argument("--fx-dir", help="Services/Editing 目录（默认探测 HTW_EDITING_DIR 环境变量）")
     parser.add_argument("--list-fx", action="store_true", help="只打印目录里可用的转场/滤镜然后退出")
     parser.add_argument("--transition-seconds", default="0.8s", help="转场时长（仅骨架用，最终取目录 defaultDurationUs）")
     parser.add_argument("--mask", choices=("circle", "none"), default="circle", help="末段蒙版，默认圆形")

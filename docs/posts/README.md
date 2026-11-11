@@ -11,7 +11,7 @@
 | --- | --- |
 | 技术内容这条路对我们有效 | `HTWMedia/JyDraft`（HDraft）92 star / 10 个 release，2026-11-07 仍在发 v1.8.0；对比本仓 2 star / 0 issue / 0 订阅 |
 | 群入口只有一张会过期的二维码 | JyDraft 4 个 issue 里，3 个早有回复（2026-02-10 贴纸渲染已修、2026-08-03 二维码已更新）却一直没关闭；只有 #7 里 2026-03-13 的一条追问没回。README「交流」段只有二维码图片，没有不会过期的落点 |
-| 内容其实不缺 | `docs/articles/` 已有 8 篇成稿，`examples/pyjianying-draft/README.md` 有实跑输出，`HTWCore.Web/docs/2026-10-11-style-filter-protocol.md` 有十节协议取证 |
+| 内容其实不缺 | `docs/articles/` 已有 8 篇成稿，`examples/pyjianying-draft/README.md` 有实跑输出，服务端 style-filter-protocol 协议文档有十节取证 |
 
 顺序按依赖排，两步均已完成。投放本身没有前置依赖，准入判定见本节末尾的「准入门槛复核」。
 

@@ -37,9 +37,9 @@ pyJianYingDraft 0.3.1 的 `materials` 桶里**没有 `filters` 键**，
 
 ## 形态依据
 
-- `HTWCore.Web/docs/2026-10-11-transition-resource-protocol.md`（Probe A 实机渲染通过）
-- `HTWCore.Web/docs/2026-10-11-style-filter-protocol.md`
-- `HTWCore.Web/Services/Timeline/JianyingDraftAdapter.cs` 的 `BuildFilterMaterial`
+- 服务端协议文档 transition-resource-protocol（Probe A 实机渲染通过）
+- 服务端协议文档 style-filter-protocol
+- 服务端 JianyingDraftAdapter 的 `BuildFilterMaterial`
 """
 
 import json

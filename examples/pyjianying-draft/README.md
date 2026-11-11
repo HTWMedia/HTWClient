@@ -131,7 +131,7 @@ python build_complex.py --list-fx
 ```
 
 ```
-目录来源：D:\HTWCore.Web\Services\Editing
+目录来源：服务端 Services/Editing 现采目录
 转场 39 条可选（总 503）：
   MG动画     中心旋转  overlap=False  dur=500ms  [6858191434294497805]
   ...（其余转场略）
@@ -196,7 +196,7 @@ pyJianYingDraft 生成的 `draft_content.json` 里，素材写的是**你本机�
    `##_draftpath_placeholder_<草稿id>_##/materials/a.mp4`
    （`video_algorithm` / `audio_algorithm` 里那份 path 一起改）。
 
-服务端的解析规则在 `HTWCore.Web/Common/MediaHelper.cs:53`，按顺序试三条：
+服务端的解析规则在 `Common/MediaHelper.cs`，按顺序试三条：
 带 `placeh` 的取 `##/` 之后的部分拼到草稿目录；绝对路径存在就用它；
 最后按文件名在草稿目录里递归找。所以占位符前缀里的 id 是什么都无所谓，
 真正起作用的是「文件确实在草稿目录里」。`render.py` 打的 zip 就是这个目录。
@@ -343,7 +343,7 @@ ffmpeg -i A.mp4 -i B.mp4 -lavfi "[0:v][1:v]psnr=stats_file=psnr.log" -f null -
 7 个创作风格各配了一条：`Default=净透`、`HistoricalDocumentary=暮色`、
 `TechExplainer=冷蓝`、`AnimeGhibli=彩果`、`Cinematic=橙蓝`、`Educational=清晰`、
 `Marketing=高饱和`（不变）。改任一条都要先按帧号抽帧重跑云端 A/B，
-别拿「渲染没报错」当通过。详见 `D:/HTWCore.Web/docs/2026-10-11-style-filter-protocol.md` 第十节。
+别拿「渲染没报错」当通过。详见服务端协议文档 style-filter-protocol 第十节。
 
 ### 选型闸门：只放行那 25 条
 
@@ -424,7 +424,7 @@ size : 1.10 MiB  bit_rate 1.54 Mbps
 | `test_effects_catalog.py` | 选型层回归：锁短 id / 拒绝长 id 与 VIP / 参数型告警 |
 | `requirements.txt` | 只依赖 pyJianYingDraft |
 
-选型层回归不需要 pyJianYingDraft、不联网、不依赖 HTWCore.Web 仓库：
+选型层回归不需要 pyJianYingDraft、不联网、不依赖服务端仓库：
 
 ```bash
 python -m unittest -v test_effects_catalog.py
